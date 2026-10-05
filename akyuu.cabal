@@ -14,3 +14,14 @@ executable akyuu
     main-is:          Main.hs
     hs-source-dirs:   app
     build-depends:    base >=4 && <5
+
+library
+    hs-source-dirs: src/
+    build-depends: base >= 4 && <5
+                 , cryptohash-sha256
+                 , base16-bytestring
+                 , bytestring
+                 , sqlite-simple
+                 , text
+                 , containers
+                 , directory, filepath, time
