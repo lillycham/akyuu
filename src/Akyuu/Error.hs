@@ -1,0 +1,1 @@
+module Akyuu.Error (ParseError) where
