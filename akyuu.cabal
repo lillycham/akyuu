@@ -28,3 +28,17 @@ library
                  , directory, filepath, time
 
     exposed-modules: Akyuu.Id
+
+test-suite akyuu-test
+    import:           shared
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    hs-source-dirs:   test
+    build-depends:    base >=4 && <5
+                    , akyuu
+                    , base16-bytestring
+                    , bytestring
+                    , tasty
+                    , tasty-hunit
+                    , tasty-quickcheck
+                    , text
