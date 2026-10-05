@@ -1,0 +1,16 @@
+cabal-version:      3.0
+name:               akyuu
+version:            0.1.0.0
+synopsis:           akyuu
+license:            NONE
+build-type:         Simple
+
+common shared
+    default-language: GHC2021
+    ghc-options:      -Wall
+
+executable akyuu
+    import:           shared
+    main-is:          Main.hs
+    hs-source-dirs:   app
+    build-depends:    base >=4 && <5
