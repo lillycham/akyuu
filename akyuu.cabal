@@ -30,6 +30,7 @@ library
 
     exposed-modules: Akyuu.Id
                    , Akyuu.Graph
+                   , Akyuu.Memory
 
     default-extensions: ImportQualifiedPost
 
@@ -39,6 +40,7 @@ test-suite akyuu-test
     main-is:          Main.hs
     hs-source-dirs:   test
     other-modules:    GraphTests
+                    , MemoryTests
     build-depends:    base >=4 && <5
                     , akyuu
                     , base16-bytestring
@@ -49,3 +51,4 @@ test-suite akyuu-test
                     , tasty-hunit
                     , tasty-quickcheck
                     , text
+                    , time
