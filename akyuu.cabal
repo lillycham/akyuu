@@ -44,6 +44,7 @@ test-suite akyuu-test
     other-modules:    GraphTests
                     , MemoryTests
                     , StoreTests
+                    , Support
     build-depends:    base >=4 && <5
                     , akyuu
                     , base16-bytestring

@@ -2,32 +2,26 @@
 
 module StoreTests (storeTests) where
 
-import Akyuu.Id (Id, fromDigest, hashBytes)
+import Akyuu.Id (Id, hashBytes)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory
 import Akyuu.Store
-import Control.Exception (bracket)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.List (sort)
-import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import MemoryTests (genMemory, shrinkMemory)
+import Support (nid, right, withTempDir)
 import System.Directory
-  ( createDirectory
-  , createDirectoryIfMissing
+  ( createDirectoryIfMissing
   , doesDirectoryExist
   , doesFileExist
-  , getTemporaryDirectory
   , listDirectory
-  , removeDirectoryRecursive
-  , removeFile
   )
 import System.FilePath (takeDirectory, takeFileName, (</>))
-import System.IO (hClose, openTempFile)
 import Test.Tasty
 import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
@@ -50,18 +44,6 @@ storeTests =
 
 -- Test helpers ---------------------------------------------------------
 
--- A fresh directory for one test. It is removed when the test ends.
-withTempDir :: (FilePath -> IO a) -> IO a
-withTempDir = bracket make removeDirectoryRecursive
-  where
-    make = do
-      tmp <- getTemporaryDirectory
-      (path, h) <- openTempFile tmp "akyuu-store"
-      hClose h
-      removeFile path
-      createDirectory path
-      pure path
-
 -- A fresh, open store. The test gets the store and the directory above it.
 withStore :: (Store -> FilePath -> IO a) -> IO a
 withStore act = withTempDir $ \dir -> do
@@ -69,10 +51,6 @@ withStore act = withTempDir $ \dir -> do
   case opened of
     Left e -> assertFailure ("openStore failed: " ++ show e)
     Right s -> act s dir
-
--- Take the 'Right' of a result, or fail the test with the error.
-right :: (Show e) => Either e a -> IO a
-right = either (\e -> assertFailure ("unexpected Left: " ++ show e)) pure
 
 -- Put bytes in the file of an 'Id', without the store's own functions.
 -- The tests use it to make objects that are damaged or in the wrong place.
@@ -91,9 +69,6 @@ isBadMemory i (BadMemory j _) = i == j
 isBadMemory _ _ = False
 
 -- Test data ------------------------------------------------------------
-
-nid :: Int -> Id
-nid n = fromMaybe (error "nid: not 32 bytes") (fromDigest (BS.replicate 32 (fromIntegral n)))
 
 -- A small memory. Only the body changes between memories.
 mem :: Text -> Memory
