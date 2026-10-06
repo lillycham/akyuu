@@ -3,7 +3,7 @@
 Build order, from the bottom up. Each module depends only on the ones above it.
 
 ```
-Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs → Cache → GC → Query → CLI → MCP
+Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs (scaffolded) → Cache → GC → Query → CLI → MCP
 ```
 
 ## Modules
@@ -20,12 +20,25 @@ Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs → Cache → GC → 
 
 ### `Akyuu.Refs` (next)
 
-The only mutable layer: `Name -> Id`.
+The only mutable layer: `Name -> Id`. The scaffold, the doc comments and the tests are on `feat/refs`.
+The functions still call `error`.
 
-- [ ] Atomic update (temp file and rename).
-- [ ] `supersede`: add a new memory with a `supersedes` edge, then move the ref.
-- [ ] Keep a short history of each ref (generations), for GC retention.
-- [ ] Pins, and temp roots for live agent sessions, so GC cannot race a session.
+Decided:
+
+- A ref file holds one `Id` per line, newest first. The first line is the current value.
+- A name has parts: `agent/topic`. Parts use `a-z 0-9 - _ .` only. A name cannot be the start of another name.
+- Compare and set under a lock: `setRef … (Unchecked | MustBeAbsent | MustBe id)`.
+- Pins and temp roots are not here. GC owns them.
+
+To do, in this order:
+
+- [ ] `Akyuu.Fs.atomicWrite`: lift it out of `Store.add`, then make `add` call it.
+- [ ] Pure part: `mkName`, `advance`, `retained`, `renderRef`, `parseRef`.
+- [ ] `openRefs`, `refPath`, `getRef`, `listRefs`.
+- [ ] `setRef` with the lock (`refs/.lock`, made with `createDirectory`) and the `Expected` check.
+- [ ] `supersede :: Store -> Refs -> Name -> Memory -> IO (Either AkyuuError Id)`. It lives above `Store` and `Refs`.
+      Order: read the ref, add the `Supersedes` edge, `Store.add`, then `setRef (MustBe old)`.
+      Do it with `AkyuuError` in the CLI step.
 
 ### `Akyuu.Cache`
 
@@ -70,7 +83,9 @@ SQLite index. It is never the source of truth, so it can be deleted and rebuilt.
 - [ ] **Order of headers.** `parseMemory` accepts any order, so a hand-edited file can have a different `Id` from the memory it holds.
       Decide whether to accept only the canonical form.
 - [ ] **Forks.** Two memories that supersede the same one are both `heads`. Choose a policy: latest by time, or keep both and flag it.
-- [ ] **Several agents in one store.** `agent` could be a namespace. Decide before the `Refs` layout is fixed.
+- [x] **Several agents in one store.** Decided: ref names are `agent/topic`. Memories keep `agent` as a plain header.
+- [ ] **Stale lock.** A crash leaves `refs/.lock`, and `setRef` then returns `Locked` until someone removes it by hand.
+      Options: a lock age limit, or an OS file lock (`filelock`, needs a new dependency in `akyuu.nix`).
 - [ ] **Dangling targets in `reachable`.** The result can include them. Decide whether GC may rely on that.
 - [ ] **Automatic supersession.** Today an agent says so explicitly. A consolidation pass that finds superseded memories is a separate layer that emits `supersede` operations.
 
@@ -81,3 +96,9 @@ SQLite index. It is never the source of truth, so it can be deleted and rebuilt.
 - [ ] `Graph` now has `Eq`, so `observe` in `test/GraphTests.hs` can become plain `===`.
 - [ ] Run `ormolu` over the whole tree so the style is the same everywhere.
 - [ ] Pick one style for `Akyuu.Id` imports (`qualified` at the front or the back).
+- [ ] Add `-Wprepositive-qualified-module` and `-Wmissing-import-lists` to `shared` in `akyuu.cabal`, and fix what they flag.
+- [ ] `Store.add`: wrap `removeFile tmp` in the cleanup with `ignoreIO`, so a cleanup error cannot hide the real one.
+- [ ] Move `ignoreIO` from `Akyuu.Store` to `Akyuu.Fs`. Make `tryIO` take the error constructor
+      (`tryWith :: (IOException -> e) -> IO a -> IO (Either e a)`), so `Refs` does not copy it.
+      Do the same for `orNotFound` once `getRef` shows what it needs.
+- [ ] Add `-threaded` to the test suite, so the race test with `MustBe` can really run threads in parallel.
