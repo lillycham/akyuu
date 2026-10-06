@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module MemoryTests (memoryTests) where
+module MemoryTests (memoryTests, genMemory, shrinkMemory) where
 
 import Akyuu.Graph (Edge (..), EdgeType (..))
 import Akyuu.Graph qualified as Graph
