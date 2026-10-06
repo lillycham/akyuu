@@ -28,16 +28,22 @@ library
                  , directory, filepath, time
 
     exposed-modules: Akyuu.Id
+                   , Akyuu.Graph
+
+    default-extensions: ImportQualifiedPost
 
 test-suite akyuu-test
     import:           shared
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
     hs-source-dirs:   test
+    other-modules:    GraphTests
     build-depends:    base >=4 && <5
                     , akyuu
                     , base16-bytestring
                     , bytestring
+                    , containers
+                    , directory
                     , tasty
                     , tasty-hunit
                     , tasty-quickcheck
