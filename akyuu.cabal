@@ -27,6 +27,7 @@ library
                  , text
                  , containers
                  , directory, filepath, time
+                 , unix
 
     exposed-modules: Akyuu.Id
                    , Akyuu.Fs
