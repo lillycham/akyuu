@@ -2,7 +2,7 @@
 
 module FsTests (fsTests) where
 
-import Akyuu.Fs (atomicWrite, ignoreIO, tryWith)
+import Akyuu.Fs (atomicWrite, ignoreIO, tryAs, tryWith)
 import Control.Exception (ArithException (..), IOException, throwIO, try)
 import Data.ByteString qualified as BS
 import Support (withTempDir)
@@ -17,8 +17,25 @@ fsTests =
   testGroup
     "Akyuu.Fs"
     [ atomicWriteTests
+    , tryAsTests
     , tryWithTests
     , ignoreIOTests
+    ]
+
+tryAsTests :: TestTree
+tryAsTests =
+  testGroup
+    "tryAs"
+    [ testCase "returns Right with the result if there is no exception" $
+        tryAs (\(e :: ArithException) -> show e) (pure (3 :: Int)) >>= (@?= Right 3)
+    , testCase "turns an exception of the type of the function into Left" $
+        tryAs (\(e :: ArithException) -> show e) (throwIO Overflow :: IO ())
+          >>= (@?= Left "arithmetic overflow")
+    , testCase "does not catch an exception of another type" $ do
+        r <- try (tryAs (\(_ :: ArithException) -> ("a" :: String)) (readFile "/nonexistent/akyuu-test-missing-file"))
+        case r of
+          Left (_ :: IOException) -> pure ()
+          Right x -> assertFailure ("expected an IOException, got " ++ show x)
     ]
 
 tryWithTests :: TestTree

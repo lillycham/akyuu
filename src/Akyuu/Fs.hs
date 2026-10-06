@@ -1,12 +1,13 @@
 -- | Small file helpers that more than one module uses.
 module Akyuu.Fs
   ( atomicWrite,
+    tryAs,
     tryWith,
     ignoreIO,
   )
 where
 
-import Control.Exception (IOException, bracket, bracketOnError, finally, try)
+import Control.Exception (Exception, IOException, bracket, bracketOnError, finally, try)
 import Control.Monad (void)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
@@ -17,14 +18,19 @@ import System.IO (hClose, openBinaryTempFile)
 import System.Posix.IO (OpenMode (ReadOnly), closeFd, defaultFileFlags, handleToFd, openFd)
 import System.Posix.Unistd (fileSynchronise)
 
--- | Run an action that can throw an 'IOException'. The exception becomes a
--- 'Left' that holds the result of the function.
+-- | Run an action that can throw an exception of type @x@. The exception
+-- becomes a 'Left' that holds the result of the function. Other exceptions,
+-- for example a timeout, are not caught.
 --
 -- Each module that does I/O has its own error type. It uses this function
--- with the constructor for disk errors, for example @tryWith StoreIO@.
--- Other exceptions, for example a timeout, are not caught.
+-- with the constructor for its own failures, for example @tryAs CacheSQL@
+-- for a SQLite error. The type @x@ comes from the function that you pass.
+tryAs :: (Exception x) => (x -> e) -> IO a -> IO (Either e a)
+tryAs f = fmap (first f) . try
+
+-- | 'tryAs' for an 'IOException', for example @tryWith StoreIO@.
 tryWith :: (IOException -> e) -> IO a -> IO (Either e a)
-tryWith f = fmap (first f) . try
+tryWith = tryAs
 
 -- | Run an action and ignore an 'IOException'. Use it only for cleanup.
 ignoreIO :: IO () -> IO ()
