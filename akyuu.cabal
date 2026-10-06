@@ -28,6 +28,7 @@ library
                  , containers
                  , directory, filepath, time
                  , filelock
+                 , transformers
                  , unix
 
     exposed-modules: Akyuu.Id

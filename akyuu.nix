@@ -1,6 +1,6 @@
 { mkDerivation, base, base16-bytestring, bytestring, containers
 , cryptohash-sha256, directory, filelock, filepath, lib, sqlite-simple
-, text, time, unix
+, text, time, transformers, unix
 }:
 mkDerivation {
   pname = "akyuu";
@@ -10,7 +10,7 @@ mkDerivation {
   isExecutable = true;
   libraryHaskellDepends = [
     base base16-bytestring bytestring containers cryptohash-sha256
-    directory filelock filepath sqlite-simple text time unix
+    directory filelock filepath sqlite-simple text time transformers unix
   ];
   executableHaskellDepends = [ base ];
   description = "akyuu";
