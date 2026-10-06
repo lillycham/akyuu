@@ -11,12 +11,14 @@ import Control.Monad (forM, forM_)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.List (sort)
+import Data.Maybe (isJust)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Support (nid, right, withTempDir)
+import System.FileLock (SharedExclusive (Exclusive), tryLockFile, unlockFile, withFileLock)
 import System.Directory
   ( createDirectory
   , createDirectoryIfMissing
@@ -59,6 +61,10 @@ withRefs act = withTempDir $ \dir -> do
 -- A name that the test knows is valid.
 nm :: Text -> Name
 nm = either (error . show) id . mkName
+
+-- The file that the lock is on.
+lockPath :: Refs -> FilePath
+lockPath r = refsRoot r </> "refs" </> ".lock"
 
 -- Put bytes in the file of a name, without the module's own functions.
 -- The tests use it to make refs that are damaged.
@@ -311,11 +317,11 @@ setTests =
         withRefs $ \r _ -> do
           _ <- set r (nm "agent/topic") a
           getRef r (nm "agent/topic") >>= (@?= Right (Ref a []))
-    , testCase "leaves only the ref file in the refs directory" $
+    , testCase "leaves only the ref file and the lock file in the refs directory" $
         withRefs $ \r _ -> do
           _ <- set r (nm "x") a
           _ <- set r (nm "x") b
-          listDirectory (refsRoot r </> "refs") >>= (@?= ["x"])
+          sort <$> listDirectory (refsRoot r </> "refs") >>= (@?= [".lock", "x"])
     , testGroup
         "NameConflict"
         [ testCase "a name that is the start of an existing ref" $
@@ -397,13 +403,27 @@ lockTests =
           _ <- set r (nm "a") a
           _ <- setRef r (nm "a/b") Unchecked b
           setRef r (nm "z") Unchecked c >>= (@?= Right (Ref c []))
-    , -- This test knows that the lock is the directory refs/.lock.
-      -- Change it if the lock changes. It takes about a second.
-      testCase "returns Locked, and writes nothing, if another process holds the lock" $
+    , -- These tests know that the lock is a file lock on refs/.lock.
+      -- Change them if the lock changes. This one takes about a second.
+      testCase "returns Locked, and writes nothing, while another holder has the lock" $
         withRefs $ \r _ -> do
-          createDirectory (refsRoot r </> "refs" </> ".lock")
-          setRef r (nm "x") Unchecked a >>= (@?= Left Locked)
+          withFileLock (lockPath r) Exclusive $ \_ ->
+            setRef r (nm "x") Unchecked a >>= (@?= Left Locked)
           getRef r (nm "x") >>= (@?= Left (NoSuchRef (nm "x")))
+    , testCase "works again as soon as the other holder releases the lock" $
+        withRefs $ \r _ -> do
+          withFileLock (lockPath r) Exclusive $ \_ -> pure ()
+          setRef r (nm "x") Unchecked a >>= (@?= Right (Ref a []))
+    , testCase "a lock file that nobody holds does not block (as after a crash)" $
+        withRefs $ \r _ -> do
+          BS.writeFile (lockPath r) BS.empty
+          setRef r (nm "x") Unchecked a >>= (@?= Right (Ref a []))
+    , testCase "nobody holds the lock after setRef" $
+        withRefs $ \r _ -> do
+          _ <- set r (nm "x") a
+          held <- tryLockFile (lockPath r) Exclusive
+          assertBool "the lock is still held" (isJust held)
+          mapM_ unlockFile held
     , testCase "of many agents with MustBe, exactly one wins" $
         withRefs $ \r _ -> do
           _ <- set r (nm "x") a
@@ -452,7 +472,7 @@ listTests =
     , testCase "skips the lock, hidden files and names that are not valid" $
         withRefs $ \r _ -> do
           _ <- set r (nm "x") a
-          createDirectory (refsRoot r </> "refs" </> ".lock")
+          BS.writeFile (lockPath r) BS.empty
           BS.writeFile (refsRoot r </> "refs" </> ".tmp123") "x"
           BS.writeFile (refsRoot r </> "refs" </> "Bad Name") "x"
           listRefs r >>= (@?= Right [nm "x"])

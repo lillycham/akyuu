@@ -27,6 +27,7 @@ library
                  , text
                  , containers
                  , directory, filepath, time
+                 , filelock
                  , unix
 
     exposed-modules: Akyuu.Id
@@ -56,6 +57,7 @@ test-suite akyuu-test
                     , bytestring
                     , containers
                     , directory
+                    , filelock
                     , filepath
                     , tasty
                     , tasty-hunit

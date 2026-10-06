@@ -10,7 +10,7 @@
 -- Layout, under the root directory of the store:
 --
 -- > refs/claude/notes      the ref named claude/notes
--- > refs/.lock/            exists while a process changes a ref
+-- > refs/.lock             the lock file (see below)
 --
 -- A ref file holds one 'Id' on each line, in the text form, newest first.
 -- The first line is the current value. 'renderRef' and 'parseRef' read and
@@ -28,6 +28,9 @@
 --   lock (compare and set). Two agents that move the same ref cannot lose
 --   each other's update.
 -- * A read does not take the lock. It does not need to.
+-- * The lock is an OS file lock (@flock@) on @refs/.lock@. The OS releases it
+--   when the process ends, also after a crash, so no lock can be left behind.
+--   The file itself stays on the disk. This is normal.
 -- * This module does not look at the store. A ref can point to an 'Id' that
 --   is not in the store. 'Akyuu.Store' and this module are joined one layer
 --   above, in @supersede@.
@@ -68,10 +71,10 @@ module Akyuu.Refs
   )
 where
 
-import Akyuu.Fs (atomicWrite, ignoreIO, tryWith)
+import Akyuu.Fs (atomicWrite, tryWith)
 import Akyuu.Id (Id, IdParseError, parse, render)
 import Control.Concurrent (threadDelay)
-import Control.Exception (IOException, finally, try)
+import Control.Exception (IOException)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -84,12 +87,11 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import GHC.IO.Exception (IOErrorType (InappropriateType))
 import System.Directory
-  ( createDirectory,
-    createDirectoryIfMissing,
+  ( createDirectoryIfMissing,
     doesDirectoryExist,
     listDirectory,
-    removeDirectory,
   )
+import System.FileLock (SharedExclusive (Exclusive), withTryFileLock)
 import System.FilePath (joinPath, takeDirectory, (</>))
 import System.IO.Error
   ( ioeGetErrorType,
@@ -240,9 +242,9 @@ data RefError
   | -- | 'setRef' got an 'Expected' value that is not true. The error holds the
     -- value that the ref has now, or 'Nothing' if the ref does not exist.
     Stale Name (Maybe Id)
-  | -- | Another process holds the lock, and it did not release it in time.
-    -- If no process runs, a crash left the lock. Remove the @refs/.lock@
-    -- directory by hand.
+  | -- | Another process or thread holds the lock, and it did not release it
+    -- in time. A crash cannot cause this: the OS releases the lock when a
+    -- process ends.
     Locked
   | -- | The name is the start of another name, or another name is the start
     -- of it. For example @a@ and @a/b@.
@@ -319,26 +321,31 @@ getRef r n = do
 
 -- | Run an action with the lock of the refs.
 --
--- The lock is the directory @refs/.lock@. The function makes it with
--- 'createDirectory', which is atomic: only one caller can succeed. A caller
--- that finds the lock taken waits 10 ms and tries again, up to 100 times
--- (about one second), and then returns 'Locked'.
+-- The lock is an exclusive @flock@ on the file @refs/.lock@ (the package
+-- @filelock@ makes the file if it is not there). Only one holder at a time
+-- can have it, in this process or in another one. The OS releases the lock
+-- when the holder ends, so a crash cannot leave the lock held.
+--
+-- The function does not wait inside the lock call. A blocked call would
+-- also block the other Haskell threads of the program, and the holder could
+-- never release the lock. Instead, it tries the lock without waiting. If the
+-- lock is taken, it waits 10 ms with 'threadDelay' and tries again, up to 100
+-- times (about one second), and then returns 'Locked'.
 --
 -- The function releases the lock when the action ends, also if the action
--- returns 'Left' or throws. It does not release a lock that it did not get:
--- the release is only around the action, not around the retries.
+-- returns 'Left' or throws. An 'IOException' from the lock, or from the
+-- action, becomes 'RefIO'.
 withLock :: Refs -> IO (Either RefError a) -> IO (Either RefError a)
 withLock r act = go (100 :: Int)
   where
     lock = refsRoot r </> "refs" </> ".lock"
     go 0 = pure (Left Locked) -- tried 100 times: give up
     go k = do
-      got <- try (createDirectory lock)
+      got <- tryIO (withTryFileLock lock Exclusive (const act))
       case got of
-        Right () -> act `finally` ignoreIO (removeDirectory lock)
-        Left e
-          | isAlreadyExistsError e -> threadDelay 10000 >> go (k - 1)
-          | otherwise -> pure (Left (RefIO e))
+        Left e -> pure (Left e)
+        Right Nothing -> threadDelay 10000 >> go (k - 1)
+        Right (Just v) -> pure v
 
 -- | Compare the current value of a ref with what the caller 'Expected'.
 -- This function is pure.

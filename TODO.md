@@ -34,7 +34,7 @@ To do, in this order:
 - [x] `Akyuu.Fs.atomicWrite`: lift it out of `Store.add`, then make `add` call it.
 - [x] Pure part: `mkName`, `advance`, `retained`, `renderRef`, `parseRef`.
 - [x] `openRefs`, `refPath`, `getRef`, `listRefs`.
-- [x] `setRef` with the lock (`refs/.lock`, made with `createDirectory`) and the `Expected` check.
+- [x] `setRef` with the lock (a `flock` on `refs/.lock`) and the `Expected` check.
 - [ ] `supersede :: Store -> Refs -> Name -> Memory -> IO (Either AkyuuError Id)`. It lives above `Store` and `Refs`.
       Order: read the ref, add the `Supersedes` edge, `Store.add`, then `setRef (MustBe old)`.
       Do it with `AkyuuError` in the CLI step.
@@ -83,11 +83,11 @@ SQLite index. It is never the source of truth, so it can be deleted and rebuilt.
       Decide whether to accept only the canonical form.
 - [ ] **Forks.** Two memories that supersede the same one are both `heads`. Choose a policy: latest by time, or keep both and flag it.
 - [x] **Several agents in one store.** Decided: ref names are `agent/topic`. Memories keep `agent` as a plain header.
-- [ ] **No `fsync`.** `atomicWrite` flushes (`hClose`) but does not call `fsync` on the file or on its directory.
-      After a power loss, a renamed file can be empty on some file systems. It matters most for a ref.
-      `Store` has the same gap. Decide before the CLI.
-- [ ] **Stale lock.** A crash leaves `refs/.lock`, and `setRef` then returns `Locked` until someone removes it by hand.
-      Options: a lock age limit, or an OS file lock (`filelock`, needs a new dependency in `akyuu.nix`).
+- [x] **`fsync`.** Done: `atomicWrite` flushes the temporary file before the rename and the directory after it.
+      Not done: on macOS, `fsync` does not flush the drive cache. That needs `fcntl(F_FULLFSYNC)`, and `unix` has no wrapper for it.
+      Add it through the FFI if the gap matters.
+- [x] **Stale lock.** Done: the lock is an OS file lock (`flock`, from `filelock`) on `refs/.lock`. The OS releases it when the process ends.
+      The lock file stays on disk. This is normal.
 - [ ] **Dangling targets in `reachable`.** The result can include them. Decide whether GC may rely on that.
 - [ ] **Automatic supersession.** Today an agent says so explicitly. A consolidation pass that finds superseded memories is a separate layer that emits `supersede` operations.
 
