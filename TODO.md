@@ -3,7 +3,7 @@
 Build order, from the bottom up. Each module depends only on the ones above it.
 
 ```
-Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache (scaffolded) → GC → Query → CLI → MCP
+Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ → GC → Query → CLI → MCP
 ```
 
 ## Modules
@@ -46,7 +46,7 @@ SQLite index. It is never the source of truth, so it can be deleted and rebuilt.
 - [x] Smoke-test FTS5 in the Nix build first. Done: `sqlite-simple` (with `direct-sqlite` 2.3.29) gives SQLite 3.45.0 with `ENABLE_FTS5`.
       `create virtual table … using fts5(…, tokenize='porter unicode61')`, `match`, `bm25` and `snippet` all work.
 
-The scaffold, the doc comments and the tests are on `feat/cache`. The functions still call `error`.
+The module and its tests are on `feat/cache`. All 72 Cache tests pass. The hardening for several agents is open: see the clean-up list.
 
 Decided:
 
@@ -59,12 +59,12 @@ Decided:
 
 To do, in this order:
 
-- [ ] Pure part: `ftsQuery`.
-- [ ] `openCache` and `closeCache`: the schema, `PRAGMA user_version`, WAL and `busy_timeout`. Delete and recreate a bad file.
-- [ ] `index`, `forget`, `cachedIds`. Each one is one transaction.
-- [ ] `loadGraph`: one `singleton` for each `memories` row, joined with `<>`.
-- [ ] `sync`: read every new object first, then change the cache in one transaction. `reindex` is "empty it, then `sync`".
-- [ ] `search`: `bm25` order, `snippet` with `[` and `]`, and a limit.
+- [x] Pure part: `ftsQuery`.
+- [x] `openCache` and `closeCache`: the schema, `PRAGMA user_version`, WAL and `busy_timeout`. Delete and recreate a bad file.
+- [x] `index`, `forget`, `cachedIds`. Each one is one transaction.
+- [x] `loadGraph`: one `singleton` for each `memories` row, joined with `<>`.
+- [x] `sync`: read every new object first, then change the cache in one transaction. `reindex` is "empty it, then `sync`".
+- [x] `search`: `bm25` order, `snippet` with `[` and `]`, and a limit.
 - [ ] Check that SQLite is built thread-safe, before several agents share one store.
 
 ### `Akyuu.GC`
@@ -114,6 +114,14 @@ To do, in this order:
 - [ ] `Backward` in `WalkMode` (`src/Akyuu/Graph.hs`) is never built. Remove it, or add a test that uses it.
 - [ ] `Graph` now has `Eq`, so `observe` in `test/GraphTests.hs` can become plain `===`.
 - [ ] Run `ormolu` over the whole tree so the style is the same everywhere.
+- [ ] Cache: `tryExisting` treats every `SQLError` as "not usable", and `openCache` then deletes the file.
+      A busy or locked database (`ErrorBusy`, `ErrorLocked`) must not do that. Match only `ErrorNotADatabase` and `ErrorCorrupt`.
+- [ ] Cache: set `PRAGMA busy_timeout` right after `open`, before `tryExisting` reads the version.
+- [ ] Cache: use `withImmediateTransaction` in `index`, `forget`, `sync` and `reindex`. A deferred transaction that reads and then writes can fail with `BUSY`, and the timeout does not help.
+- [ ] Cache: `sync` fails if GC sweeps an object between `Store.list` and `Store.get` (`NotFound`). Skip that object. Add a test.
+- [ ] Cache: remove `tryIO` (unused) and the `CacheIO` constructor (nothing builds it), or give it a job.
+- [ ] Cache: `cachedIds` has its own `toId`. Use `parseCached`.
+- [ ] Cache: two processes that find a bad cache at the same time can each delete the file that the other made. Decide if a lock around `openCache` is worth it.
 - [ ] Pick one style for `Akyuu.Id` imports (`qualified` at the front or the back).
 - [ ] Add `-Wprepositive-qualified-module` and `-Wmissing-import-lists` to `shared` in `akyuu.cabal`, and fix what they flag.
 - [ ] `Store.add`: wrap `removeFile tmp` in the cleanup with `ignoreIO`, so a cleanup error cannot hide the real one.
