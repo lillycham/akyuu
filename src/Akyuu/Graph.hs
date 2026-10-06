@@ -60,7 +60,7 @@ data Edge = Edge
     -- | The older memory that the edge points at.
     target :: Id
   }
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
 -- | The relation graph.
 --
