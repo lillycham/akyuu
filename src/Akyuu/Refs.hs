@@ -68,11 +68,34 @@ module Akyuu.Refs
   )
 where
 
-import Akyuu.Id (Id, IdParseError)
-import Control.Exception (IOException)
+import Akyuu.Fs (atomicWrite, ignoreIO, tryWith)
+import Akyuu.Id (Id, IdParseError, parse, render)
+import Control.Concurrent (threadDelay)
+import Control.Exception (IOException, finally, try)
+import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
+import Data.Char (isAsciiLower, isDigit)
+import Data.List (find)
 import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import GHC.IO.Exception (IOErrorType (InappropriateType))
+import System.Directory
+  ( createDirectory,
+    createDirectoryIfMissing,
+    doesDirectoryExist,
+    listDirectory,
+    removeDirectory,
+  )
+import System.FilePath (joinPath, takeDirectory, (</>))
+import System.IO.Error
+  ( ioeGetErrorType,
+    isAlreadyExistsError,
+    isDoesNotExistError,
+  )
 
 -- Names ----------------------------------------------------------------
 
@@ -107,7 +130,25 @@ data NameError
 -- The check comes before the file system sees the name. The parts are
 -- checked from left to right, and the first bad part is in the error.
 mkName :: Text -> Either NameError Name
-mkName = error "Akyuu.Refs.mkName: not implemented"
+mkName t
+  | T.null t = Left EmptyName
+  | otherwise =
+      maybe
+        (Right (Name t))
+        (Left . BadSegment)
+        (find (not . okPart) parts)
+  where
+    parts = T.splitOn "/" t
+
+okPart :: Text -> Bool
+okPart t =
+  T.all okChar t
+    && T.take 1 t /= "."
+    && not (T.null t)
+    && (T.length t <= 64)
+
+okChar :: Char -> Bool
+okChar c = isAsciiLower c || isDigit c || c `elem` ("-_." :: String)
 
 -- | The text of a name. @mkName (nameText n) == Right n@.
 nameText :: Name -> Text
@@ -133,14 +174,20 @@ data Ref = Ref
 -- If the new 'Id' is the current value, the ref does not change. The history
 -- does not get a duplicate. This function is pure. 'setRef' uses it.
 advance :: Id -> Ref -> Ref
-advance = error "Akyuu.Refs.advance: not implemented"
+advance i r
+  | i == current r = r
+  | otherwise =
+      Ref
+        { current = i,
+          history = current r : history r
+        }
 
 -- | The 'Id' values that GC must keep for this ref: the current value and the
 -- @n@ newest older values. A negative @n@ is the same as 0.
 --
 -- This function is pure. GC uses it to find the roots of the graph.
 retained :: Int -> Ref -> Set Id
-retained = error "Akyuu.Refs.retained: not implemented"
+retained n r = Set.fromList $ current r : (take n $ history r)
 
 -- File format ----------------------------------------------------------
 
@@ -157,7 +204,9 @@ data RefParseError
 -- | Write a ref as bytes: one line for each 'Id', the current value first.
 -- Each line ends with a newline.
 renderRef :: Ref -> ByteString
-renderRef = error "Akyuu.Refs.renderRef: not implemented"
+renderRef r = (TE.encodeUtf8 . T.unlines . map render) ids
+  where
+    ids = current r : history r
 
 -- | Read a ref from bytes. This reverses 'renderRef'.
 --
@@ -166,7 +215,12 @@ renderRef = error "Akyuu.Refs.renderRef: not implemented"
 -- remove a repeated 'Id', so a file that someone edited by hand is read as it
 -- is.
 parseRef :: ByteString -> Either RefParseError Ref
-parseRef = error "Akyuu.Refs.parseRef: not implemented"
+parseRef bs = do
+  t <- first (const NotUtf8) (TE.decodeUtf8' bs)
+  ids <- traverse (\(n, l) -> first (BadRefLine n) (parse l)) (zip [1 ..] (T.lines t))
+  case ids of
+    [] -> Left EmptyRef
+    (x : xs) -> Right (Ref x xs)
 
 -- The refs directory ---------------------------------------------------
 
@@ -195,13 +249,20 @@ data RefError
     NameConflict Name
   deriving (Eq, Show)
 
+-- | Run an action that can throw an 'IOException'. An exception becomes
+-- 'RefIO'. Other exceptions, for example a timeout, are not caught.
+tryIO :: IO a -> IO (Either RefError a)
+tryIO = tryWith RefIO
+
 -- | Open the refs of a store. The function makes the @refs@ directory under
 -- the root if it is not there. The root is the same directory that
 -- 'Akyuu.Store.openStore' gets.
 --
 -- It is safe to call this function on refs that already exist.
 openRefs :: FilePath -> IO (Either RefError Refs)
-openRefs = error "Akyuu.Refs.openRefs: not implemented"
+openRefs root = tryIO $ do
+  createDirectoryIfMissing True (root </> "refs")
+  pure (Refs root)
 
 -- | The root directory that 'openRefs' got.
 refsRoot :: Refs -> FilePath
@@ -211,7 +272,7 @@ refsRoot (Refs root) = root
 --
 -- This function is pure: it does not look at the disk. The ref may not exist.
 refPath :: Refs -> Name -> FilePath
-refPath = error "Akyuu.Refs.refPath: not implemented"
+refPath r n = (refsRoot r) </> "refs" </> (T.unpack $ nameText n)
 
 -- Operations -----------------------------------------------------------
 
@@ -228,12 +289,87 @@ data Expected
     MustBe Id
   deriving (Eq, Show)
 
+-- | Does this error from a /read/ mean that the ref is not there?
+--
+-- A missing file is 'isDoesNotExistError'. Two more cases have the same
+-- meaning for a ref. If a part of the name is a ref (a file), the disk says
+-- "not a directory". If the name is a directory of other refs, the disk says
+-- "is a directory". GHC gives both of them the type 'InappropriateType'.
+-- 'isConflict' uses the same type for a /write/.
+isMissing :: IOException -> Bool
+isMissing e = isDoesNotExistError e || ioeGetErrorType e == InappropriateType
+
+-- | Run a read. An error for which 'isMissing' is true becomes 'NoSuchRef'.
+-- Any other 'IOException' becomes 'RefIO'.
+orNoSuchRef :: Name -> IO a -> IO (Either RefError a)
+orNoSuchRef n = tryWith (\e -> if isMissing e then NoSuchRef n else RefIO e)
+
+-- | Read the bytes of a ref file. 'getRef' parses them.
+readRef :: Refs -> Name -> IO (Either RefError BS.ByteString)
+readRef r n = orNoSuchRef n (BS.readFile (refPath r n))
+
 -- | Read a ref. This function does not take the lock.
 --
 -- Returns 'NoSuchRef' if the ref is not there, and 'CorruptRef' if the file
 -- is not a valid ref.
 getRef :: Refs -> Name -> IO (Either RefError Ref)
-getRef = error "Akyuu.Refs.getRef: not implemented"
+getRef r n = do
+  bytes <- readRef r n
+  pure (bytes >>= first (CorruptRef n) . parseRef)
+
+-- | Run an action with the lock of the refs.
+--
+-- The lock is the directory @refs/.lock@. The function makes it with
+-- 'createDirectory', which is atomic: only one caller can succeed. A caller
+-- that finds the lock taken waits 10 ms and tries again, up to 100 times
+-- (about one second), and then returns 'Locked'.
+--
+-- The function releases the lock when the action ends, also if the action
+-- returns 'Left' or throws. It does not release a lock that it did not get:
+-- the release is only around the action, not around the retries.
+withLock :: Refs -> IO (Either RefError a) -> IO (Either RefError a)
+withLock r act = go (100 :: Int)
+  where
+    lock = refsRoot r </> "refs" </> ".lock"
+    go 0 = pure (Left Locked) -- tried 100 times: give up
+    go k = do
+      got <- try (createDirectory lock)
+      case got of
+        Right () -> act `finally` ignoreIO (removeDirectory lock)
+        Left e
+          | isAlreadyExistsError e -> threadDelay 10000 >> go (k - 1)
+          | otherwise -> pure (Left (RefIO e))
+
+-- | Compare the current value of a ref with what the caller 'Expected'.
+-- This function is pure.
+--
+-- Every failure is 'Stale', and it holds the real current value (or
+-- 'Nothing' if the ref does not exist). In particular, 'MustBeAbsent' fails
+-- if the ref exists, and 'MustBe' fails if the ref does not exist.
+checkExpected :: Name -> Expected -> Maybe Ref -> Either RefError ()
+checkExpected n ex mr =
+  case (ex, mr) of
+    (Unchecked, _) -> Right ()
+    (MustBeAbsent, Nothing) -> Right ()
+    (MustBe x, Just ref) | current ref == x -> Right ()
+    _ -> Left $ Stale n (current <$> mr)
+
+-- | Change the result of 'getRef' for 'setRef'. For 'setRef', a missing ref is
+-- not an error. It means that there is no current value ('Nothing').
+-- Other errors stay errors: a corrupt ref must not be replaced without notice.
+absentIsNothing :: Either RefError Ref -> Either RefError (Maybe Ref)
+absentIsNothing r = case r of
+  Left (NoSuchRef _) -> Right Nothing
+  Left e -> Left e -- CorruptRef, RefIO: still errors
+  Right ref -> Right (Just ref)
+
+-- | Does this error from a /write/ mean that the name clashes with another ref?
+--
+-- If a part of the name is a ref, 'createDirectory' fails with "already
+-- exists". If the name is a directory of other refs, 'renameFile' fails with
+-- "inappropriate type". See also 'isMissing', for a read.
+isConflict :: IOException -> Bool
+isConflict e = isAlreadyExistsError e || ioeGetErrorType e == InappropriateType
 
 -- | Move a ref to an 'Id', and return the new value of the ref.
 --
@@ -251,7 +387,21 @@ getRef = error "Akyuu.Refs.getRef: not implemented"
 -- Returns 'Locked' if it cannot get the lock in about one second, and
 -- 'NameConflict' if the name clashes with another ref.
 setRef :: Refs -> Name -> Expected -> Id -> IO (Either RefError Ref)
-setRef = error "Akyuu.Refs.setRef: not implemented"
+setRef rs n ex i = withLock rs $ do
+  cur <- getRef rs n
+  case (absentIsNothing cur >>= \mr -> checkExpected n ex mr >> Right mr) of
+    Left err -> pure (Left err)
+    Right mr ->
+      let new = maybe (Ref i []) (advance i) mr
+       in (new <$) <$> (write n new)
+  where
+    write :: Name -> Ref -> IO (Either RefError ())
+    write n' r = do
+      tryWith
+        (\e -> if isConflict e then NameConflict n' else (RefIO e))
+        $ (createDirectoryIfMissing True (takeDirectory path))
+          >> atomicWrite path (renderRef r)
+    path = refPath rs n
 
 -- | The names of all the refs.
 --
@@ -260,4 +410,22 @@ setRef = error "Akyuu.Refs.setRef: not implemented"
 -- renamed yet. It does not open the files, so it does not find a corrupt ref.
 -- The order of the result is not defined.
 listRefs :: Refs -> IO (Either RefError [Name])
-listRefs = error "Akyuu.Refs.listRefs: not implemented"
+listRefs r = tryIO (walk [])
+  where
+    base = refsRoot r </> "refs"
+
+    walk :: [FilePath] -> IO [Name]
+    walk parts = do
+      entries <- listDirectory (joinPath (base : parts))
+      concat <$> traverse (visit parts) entries
+
+    visit :: [FilePath] -> FilePath -> IO [Name]
+    visit parts e = case mkName (asText parts') of
+      Left _ -> pure [] -- .lock, .tmp…, Bad Name: skip
+      Right n -> do
+        isDir <- doesDirectoryExist (joinPath (base : parts'))
+        if isDir then walk parts' else pure [n]
+      where
+        parts' = parts ++ [e]
+
+    asText = T.intercalate "/" . map T.pack
