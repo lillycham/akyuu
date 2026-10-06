@@ -29,9 +29,11 @@ library
                  , directory, filepath, time
 
     exposed-modules: Akyuu.Id
+                   , Akyuu.Fs
                    , Akyuu.Graph
                    , Akyuu.Memory
                    , Akyuu.Store
+                   , Akyuu.Refs
 
     default-extensions: ImportQualifiedPost
                       , OverloadedStrings
