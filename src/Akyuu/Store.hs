@@ -49,10 +49,10 @@ module Akyuu.Store
   )
 where
 
-import Akyuu.Fs (ignoreIO, tryWith)
+import Akyuu.Fs (tryWith, atomicWrite)
 import Akyuu.Id (Id, hashBytes, hashFile, parse, render, toBytes)
 import Akyuu.Memory (Memory, MemoryParseError, parseMemory, renderMemory)
-import Control.Exception (IOException, bracketOnError, try)
+import Control.Exception (IOException, try)
 import Control.Monad (filterM, unless)
 import Data.Bifunctor (first)
 import Data.ByteString qualified as BS
@@ -60,9 +60,8 @@ import Data.ByteString.Base16 qualified as B16
 import Data.Maybe (mapMaybe)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory, removeFile, renameFile)
+import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory, renameFile)
 import System.FilePath (takeDirectory, (</>))
-import System.IO (hClose, openBinaryTempFile)
 import System.IO.Error (isDoesNotExistError)
 
 -- | A store on disk. A value of this type holds only the path of the root
@@ -126,11 +125,7 @@ add :: Store -> Memory -> IO (Either StoreError Id)
 add s m = tryIO $ do
   createDirectoryIfMissing True (takeDirectory final)
   fileExists <- doesFileExist final
-  unless fileExists $
-    bracketOnError
-      (openBinaryTempFile (takeDirectory final) ".tmp")
-      (\(tmp, h) -> ignoreIO (hClose h) >> removeFile tmp)
-      (\(tmp, h) -> BS.hPut h bytes >> hClose h >> (renameFile tmp final))
+  unless fileExists $ atomicWrite final bytes
   pure i
   where
     i = hashBytes bytes

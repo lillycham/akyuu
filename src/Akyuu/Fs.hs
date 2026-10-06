@@ -6,10 +6,14 @@ module Akyuu.Fs
   )
 where
 
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, bracketOnError, try)
 import Control.Monad (void)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
+import System.Directory (removeFile, renameFile)
+import System.FilePath (takeDirectory)
+import System.IO (hClose, openBinaryTempFile)
 
 -- | Run an action that can throw an 'IOException'. The exception becomes a
 -- 'Left' that holds the result of the function.
@@ -38,4 +42,8 @@ ignoreIO = void . try @IOException
 -- 'Akyuu.Store.add' has the same steps. It can use this function when it
 -- is ready.
 atomicWrite :: FilePath -> ByteString -> IO ()
-atomicWrite = error "Akyuu.Fs.atomicWrite: not implemented"
+atomicWrite final bytes =
+  bracketOnError
+    (openBinaryTempFile (takeDirectory final) ".tmp")
+    (\(tmp, h) -> ignoreIO (hClose h) >> ignoreIO (removeFile tmp))
+    (\(tmp, h) -> BS.hPut h bytes >> hClose h >> (renameFile tmp final))
