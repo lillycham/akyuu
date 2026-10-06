@@ -216,6 +216,10 @@ search = error "Akyuu.Cache.search: not implemented"
 -- each @"@ inside the word. Join the words with a space, which means AND in
 -- FTS5. A text without words gives the empty text.
 --
+-- A NUL character (@\\0@) counts as white space. SQLite reads the query as a C
+-- string, so a NUL would end it in the middle of a quoted word, and the
+-- query would be an error.
+--
 -- FTS5 gives an error for a bare @foo-bar@, @AND@ or an open quote. A word in
 -- quotes is always a plain phrase, so the query is always valid.
 --

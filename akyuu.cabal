@@ -46,7 +46,8 @@ test-suite akyuu-test
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
     hs-source-dirs:   test
-    other-modules:    FsTests
+    other-modules:    CacheTests
+                    , FsTests
                     , GraphTests
                     , MemoryTests
                     , RefsTests
@@ -60,6 +61,7 @@ test-suite akyuu-test
                     , directory
                     , filelock
                     , filepath
+                    , sqlite-simple
                     , tasty
                     , tasty-hunit
                     , tasty-quickcheck
