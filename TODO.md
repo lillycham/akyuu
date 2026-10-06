@@ -18,10 +18,9 @@ Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs (scaffolded) → Cach
       `list`, `verify`, `trash`. Errors are a `StoreError`, so callers never catch an exception.
       Not done: a test for a crash between the write and the rename, and `verify` carrying on after a vanished file.
 
-### `Akyuu.Refs` (next)
+### `Akyuu.Refs` (next: only `supersede` is left)
 
-The only mutable layer: `Name -> Id`. The scaffold, the doc comments and the tests are on `feat/refs`.
-The functions still call `error`.
+The only mutable layer: `Name -> Id`. The module and its tests are on `feat/refs`.
 
 Decided:
 
@@ -32,10 +31,10 @@ Decided:
 
 To do, in this order:
 
-- [ ] `Akyuu.Fs.atomicWrite`: lift it out of `Store.add`, then make `add` call it.
-- [ ] Pure part: `mkName`, `advance`, `retained`, `renderRef`, `parseRef`.
-- [ ] `openRefs`, `refPath`, `getRef`, `listRefs`.
-- [ ] `setRef` with the lock (`refs/.lock`, made with `createDirectory`) and the `Expected` check.
+- [x] `Akyuu.Fs.atomicWrite`: lift it out of `Store.add`, then make `add` call it.
+- [x] Pure part: `mkName`, `advance`, `retained`, `renderRef`, `parseRef`.
+- [x] `openRefs`, `refPath`, `getRef`, `listRefs`.
+- [x] `setRef` with the lock (`refs/.lock`, made with `createDirectory`) and the `Expected` check.
 - [ ] `supersede :: Store -> Refs -> Name -> Memory -> IO (Either AkyuuError Id)`. It lives above `Store` and `Refs`.
       Order: read the ref, add the `Supersedes` edge, `Store.add`, then `setRef (MustBe old)`.
       Do it with `AkyuuError` in the CLI step.
@@ -84,6 +83,9 @@ SQLite index. It is never the source of truth, so it can be deleted and rebuilt.
       Decide whether to accept only the canonical form.
 - [ ] **Forks.** Two memories that supersede the same one are both `heads`. Choose a policy: latest by time, or keep both and flag it.
 - [x] **Several agents in one store.** Decided: ref names are `agent/topic`. Memories keep `agent` as a plain header.
+- [ ] **No `fsync`.** `atomicWrite` flushes (`hClose`) but does not call `fsync` on the file or on its directory.
+      After a power loss, a renamed file can be empty on some file systems. It matters most for a ref.
+      `Store` has the same gap. Decide before the CLI.
 - [ ] **Stale lock.** A crash leaves `refs/.lock`, and `setRef` then returns `Locked` until someone removes it by hand.
       Options: a lock age limit, or an OS file lock (`filelock`, needs a new dependency in `akyuu.nix`).
 - [ ] **Dangling targets in `reachable`.** The result can include them. Decide whether GC may rely on that.

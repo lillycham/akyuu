@@ -39,8 +39,7 @@ ignoreIO = void . try @IOException
 --
 -- The directory of the target must exist. If the write fails, the function
 -- removes the temporary file and rethrows the 'Control.Exception.IOException'.
--- 'Akyuu.Store.add' has the same steps. It can use this function when it
--- is ready.
+-- 'Akyuu.Store.add' and 'Akyuu.Refs.setRef' both use this function.
 atomicWrite :: FilePath -> ByteString -> IO ()
 atomicWrite final bytes =
   bracketOnError
