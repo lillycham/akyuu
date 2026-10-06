@@ -2,8 +2,10 @@
 module Main (main) where
 
 import Akyuu.Id
+import FsTests (fsTests)
 import GraphTests (graphTests)
 import MemoryTests (memoryTests)
+import RefsTests (refsTests)
 import StoreTests (storeTests)
 import Control.Exception (IOException, bracket, try)
 import Data.ByteString qualified as BS
@@ -19,7 +21,7 @@ import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, storeTests]
+main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests]
 
 idTests :: TestTree
 idTests =
