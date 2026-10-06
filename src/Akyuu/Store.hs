@@ -49,10 +49,11 @@ module Akyuu.Store
   )
 where
 
+import Akyuu.Fs (ignoreIO, tryWith)
 import Akyuu.Id (Id, hashBytes, hashFile, parse, render, toBytes)
 import Akyuu.Memory (Memory, MemoryParseError, parseMemory, renderMemory)
 import Control.Exception (IOException, bracketOnError, try)
-import Control.Monad (filterM, unless, void)
+import Control.Monad (filterM, unless)
 import Data.Bifunctor (first)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -84,7 +85,7 @@ data StoreError
 -- | Run an action that can throw an 'IOException'. An exception becomes
 -- 'StoreIO'. Other exceptions, for example a timeout, are not caught.
 tryIO :: IO a -> IO (Either StoreError a)
-tryIO = fmap (first StoreIO) . try
+tryIO = tryWith StoreIO
 
 -- | Open the store in a directory. The function makes the directory and its
 -- @store@ and @trash@ directories if they are not there.
@@ -111,10 +112,6 @@ shard = T.unpack . TE.decodeUtf8 . B16.encode . BS.take 1 . toBytes
 -- exist.
 objectPath :: Store -> Id -> FilePath
 objectPath s i = storeRoot s </> "store" </> shard i </> fileName i
-
--- | Run an action and ignore an 'IOException'. Use it only for cleanup.
-ignoreIO :: IO () -> IO ()
-ignoreIO = void . try @IOException
 
 -- | Write a memory to the store and return its 'Id'.
 --

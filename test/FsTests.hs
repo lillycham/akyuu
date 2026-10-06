@@ -2,8 +2,8 @@
 
 module FsTests (fsTests) where
 
-import Akyuu.Fs (atomicWrite)
-import Control.Exception (IOException, try)
+import Akyuu.Fs (atomicWrite, ignoreIO, tryWith)
+import Control.Exception (ArithException (..), IOException, throwIO, try)
 import Data.ByteString qualified as BS
 import Support (withTempDir)
 import System.Directory (listDirectory)
@@ -17,6 +17,41 @@ fsTests =
   testGroup
     "Akyuu.Fs"
     [ atomicWriteTests
+    , tryWithTests
+    , ignoreIOTests
+    ]
+
+tryWithTests :: TestTree
+tryWithTests =
+  testGroup
+    "tryWith"
+    [ testCase "returns Right with the result if there is no exception" $
+        tryWith show (pure (3 :: Int)) >>= (@?= Right 3)
+    , testCase "turns an IOException into Left, with the function applied" $ do
+        r <- tryWith (const ("io" :: String)) (readFile "/nonexistent/akyuu-test-missing-file")
+        r @?= Left "io"
+    , testCase "does not catch other exceptions" $ do
+        r <- try (tryWith (const ("io" :: String)) (throwIO Overflow :: IO ()))
+        case r of
+          Left Overflow -> pure ()
+          Left e -> assertFailure ("unexpected: " ++ show e)
+          Right x -> assertFailure ("expected an exception, got " ++ show x)
+    ]
+
+ignoreIOTests :: TestTree
+ignoreIOTests =
+  testGroup
+    "ignoreIO"
+    [ testCase "runs the action" $
+        ignoreIO (pure ())
+    , testCase "ignores an IOException" $
+        ignoreIO (() <$ readFile "/nonexistent/akyuu-test-missing-file")
+    , testCase "does not ignore other exceptions" $ do
+        r <- try (ignoreIO (throwIO Overflow))
+        case r of
+          Left Overflow -> pure ()
+          Left e -> assertFailure ("unexpected: " ++ show e)
+          Right () -> assertFailure "expected an exception"
     ]
 
 atomicWriteTests :: TestTree

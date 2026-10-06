@@ -98,7 +98,6 @@ SQLite index. It is never the source of truth, so it can be deleted and rebuilt.
 - [ ] Pick one style for `Akyuu.Id` imports (`qualified` at the front or the back).
 - [ ] Add `-Wprepositive-qualified-module` and `-Wmissing-import-lists` to `shared` in `akyuu.cabal`, and fix what they flag.
 - [ ] `Store.add`: wrap `removeFile tmp` in the cleanup with `ignoreIO`, so a cleanup error cannot hide the real one.
-- [ ] Move `ignoreIO` from `Akyuu.Store` to `Akyuu.Fs`. Make `tryIO` take the error constructor
-      (`tryWith :: (IOException -> e) -> IO a -> IO (Either e a)`), so `Refs` does not copy it.
-      Do the same for `orNotFound` once `getRef` shows what it needs.
+- [x] Move `ignoreIO` and a generic `tryWith` from `Akyuu.Store` to `Akyuu.Fs`.
+- [ ] Do the same for `orNotFound` once `getRef` shows what it needs.
 - [ ] Add `-threaded` to the test suite, so the race test with `MustBe` can really run threads in parallel.

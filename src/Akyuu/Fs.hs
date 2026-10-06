@@ -1,10 +1,28 @@
 -- | Small file helpers that more than one module uses.
 module Akyuu.Fs
   ( atomicWrite,
+    tryWith,
+    ignoreIO,
   )
 where
 
+import Control.Exception (IOException, try)
+import Control.Monad (void)
+import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
+
+-- | Run an action that can throw an 'IOException'. The exception becomes a
+-- 'Left' that holds the result of the function.
+--
+-- Each module that does I/O has its own error type. It uses this function
+-- with the constructor for disk errors, for example @tryWith StoreIO@.
+-- Other exceptions, for example a timeout, are not caught.
+tryWith :: (IOException -> e) -> IO a -> IO (Either e a)
+tryWith f = fmap (first f) . try
+
+-- | Run an action and ignore an 'IOException'. Use it only for cleanup.
+ignoreIO :: IO () -> IO ()
+ignoreIO = void . try @IOException
 
 -- | Write bytes to a file so that a reader sees the old content or the new
 -- content, and never a part of it. This holds also after a crash.
