@@ -3,7 +3,7 @@
 Build order, from the bottom up. Each module depends only on the ones above it.
 
 ```
-Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs (scaffolded) → Cache → GC → Query → CLI → MCP
+Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache → GC → Query → CLI → MCP
 ```
 
 ## Modules
@@ -43,7 +43,8 @@ To do, in this order:
 
 SQLite index. It is never the source of truth, so it can be deleted and rebuilt.
 
-- [ ] Smoke-test FTS5 in the Nix build first. If `sqlite-simple` links system SQLite, it may be missing.
+- [x] Smoke-test FTS5 in the Nix build first. Done: `sqlite-simple` (with `direct-sqlite` 2.3.29) gives SQLite 3.45.0 with `ENABLE_FTS5`.
+      `create virtual table … using fts5(…, tokenize='porter unicode61')`, `match`, `bm25` and `snippet` all work.
 - [ ] Tables: `edges (src, kind, dst)`, FTS5 over bodies.
 - [ ] `reindex = foldMap memoryGraph` over the store, inside one transaction.
 - [ ] `PRAGMA user_version`. On a mismatch, delete the database and reindex. No migrations.
