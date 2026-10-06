@@ -31,8 +31,10 @@ library
     exposed-modules: Akyuu.Id
                    , Akyuu.Graph
                    , Akyuu.Memory
+                   , Akyuu.Store
 
     default-extensions: ImportQualifiedPost
+                      , OverloadedStrings
 
 test-suite akyuu-test
     import:           shared
