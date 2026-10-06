@@ -54,6 +54,8 @@ import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, parseTimeM)
 
+-- | The format of the @created@ header, for example @2026-10-05T12:00:00Z@.
+-- 'renderMemory' and 'parseTime' both use it, so they cannot disagree.
 timeFormat :: String
 timeFormat = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -101,6 +103,8 @@ data MemoryParseError
     BadLink Text IdParseError
   deriving (Eq, Show)
 
+-- | The name of the header for a kind of edge.
+-- 'renderMemory' writes this name, and 'parseEdges' reads it.
 edgeToHeader :: Graph.EdgeType -> Text
 edgeToHeader Supersedes = "supersedes"
 edgeToHeader About = "about"
@@ -143,6 +147,11 @@ renderMemory m =
 --   (_, rest) | T.null rest -> Nothing
 --   (before, rest) -> Just (before, T.drop (T.length sep) rest)
 
+-- | Split a file at its first blank line. The result is the block of
+-- headers and the body.
+--
+-- Returns 'MissingBlankLine' if the text has no blank line. An empty body is
+-- not an error.
 splitBody :: Text -> Either MemoryParseError (Text, Text)
 splitBody t =
   let (hdrs, rest) = T.breakOn "\n\n" t
@@ -150,6 +159,10 @@ splitBody t =
         then Left MissingBlankLine
         else Right (hdrs, T.drop 2 rest)
 
+-- | Split one header line at its first @: @. The result is the name and the
+-- value.
+--
+-- Returns 'MalformedHeader' with the whole line if the line has no @: @.
 splitHeader :: Text -> Either MemoryParseError (Text, Text)
 splitHeader t =
   let (hdrs, rest) = T.breakOn ": " t
@@ -157,30 +170,54 @@ splitHeader t =
         then Left (MalformedHeader hdrs)
         else Right (hdrs, T.drop 2 rest)
 
+-- | The names of all headers that the format allows. It holds the three
+-- required names and one name for each kind of edge.
 known :: Set Text
 known = Set.fromList (["kind", "created", "agent"] ++ map edgeToHeader [minBound .. maxBound])
 
+-- | Check that a header name is in 'known'.
+-- Returns 'UnknownHeader' if it is not.
 checkKnown :: Text -> Either MemoryParseError ()
 checkKnown n
   | n `Set.member` known = Right ()
   | otherwise = Left (UnknownHeader n)
 
+-- | Collect the values of each header name.
+--
+-- The values of one name stay in the order of the file. Returns
+-- 'UnknownHeader' for the first name that is not in 'known'.
 groupHeaders :: [(Text, Text)] -> Either MemoryParseError (Map Text [Text])
 groupHeaders pairs = do
   traverse_ checkKnown (map fst pairs)
   pure (Map.fromListWith (flip (++)) [(k, [v]) | (k, v) <- pairs])
 
+-- | The value of a header that must appear exactly once.
+--
+-- Returns 'MissingHeader' if the name is not in the map, and
+-- 'DuplicateHeader' if the name has more than one value.
 single :: Text -> Map Text [Text] -> Either MemoryParseError Text
 single name m = case Map.lookup name m of
   Just [x] -> Right x
   Just (_ : _ : _) -> Left (DuplicateHeader name)
   _ -> Left (MissingHeader name)
 
+-- | Read the value of the @created@ header.
+--
+-- The function accepts only text that 'renderMemory' can write. It formats
+-- the result again and compares it with the input. This rejects a leading
+-- space and a leap second such as @:60@, which 'parseTimeM' alone accepts.
+-- Returns 'BadHeaderValue' for any other text.
 parseTime :: Text -> Either MemoryParseError UTCTime
 parseTime t = case parseTimeM False defaultTimeLocale timeFormat (T.unpack t) of
   Just u | formatTime defaultTimeLocale timeFormat u == T.unpack t -> Right u
   _ -> Left (BadHeaderValue "created" t)
 
+-- | Read the edge headers of a memory.
+--
+-- Each value must be a valid 'Id'. Two equal lines are one edge. If more
+-- than one header has a bad value, the error is for the first kind in the
+-- order of 'EdgeType'. A bad value gives 'BadLink' with the name of the
+-- header.
 parseEdges :: Map Text [Text] -> Either MemoryParseError (Set Edge)
 parseEdges m = Set.fromList . concat <$> traverse forKind [minBound .. maxBound]
   where
