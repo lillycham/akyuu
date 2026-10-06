@@ -17,6 +17,7 @@ executable akyuu
                     , akyuu
 
 library
+    import: shared
     hs-source-dirs: src/
     build-depends: base >= 4 && <5
                  , cryptohash-sha256
