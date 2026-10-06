@@ -35,6 +35,7 @@ module Akyuu.Memory
     parseMemory,
     memoryId,
     memoryGraph,
+    edgeToHeader,
   )
 where
 
