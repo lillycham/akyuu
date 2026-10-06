@@ -36,6 +36,7 @@ library
                    , Akyuu.Memory
                    , Akyuu.Store
                    , Akyuu.Refs
+                   , Akyuu.Cache
 
     default-extensions: ImportQualifiedPost
                       , OverloadedStrings
