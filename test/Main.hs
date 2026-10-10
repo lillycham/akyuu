@@ -7,6 +7,7 @@ import FsTests (fsTests)
 import GCTests (gcTests)
 import GraphTests (graphTests)
 import MemoryTests (memoryTests)
+import QueryTests (queryTests)
 import RefsTests (refsTests)
 import StoreTests (storeTests)
 import SupersedeTests (supersedeTests)
@@ -24,7 +25,7 @@ import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests]
+main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests]
 
 idTests :: TestTree
 idTests =

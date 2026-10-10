@@ -40,6 +40,7 @@ library
                    , Akyuu.Cache
                    , Akyuu.Supersede
                    , Akyuu.GC
+                   , Akyuu.Query
 
     default-extensions: ImportQualifiedPost
                       , OverloadedStrings
@@ -55,6 +56,7 @@ test-suite akyuu-test
                     , GCTests
                     , GraphTests
                     , MemoryTests
+                    , QueryTests
                     , RefsTests
                     , StoreTests
                     , SupersedeTests
