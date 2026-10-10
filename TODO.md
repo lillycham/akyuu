@@ -3,7 +3,7 @@
 Build order, from the bottom up. Each module depends only on the ones above it.
 
 ```
-Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ → GC ✓ → Query ✓ → CLI → MCP
+Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ → GC ✓ → Query ✓ → CLI ✓ → MCP
 ```
 
 ## Modules
@@ -39,7 +39,7 @@ To do, in this order:
       Order: read the ref, add the `Supersedes` edge, `Store.add`, then `setRef (MustBe old)`.
       `supersedeFrom` takes the `old` value that the caller read, so the check covers the time that an agent spends thinking.
       On `Stale`, the new object stays in the store and GC collects it later.
-- [ ] Wrap `SupersedeError` (and the other module errors) in one `AkyuuError` in the CLI step.
+- [x] Wrap `SupersedeError` (and the other module errors) in one `AkyuuError` in the CLI step. Done: `Akyuu.Error`, with `fromSupersede`.
 
 ### `Akyuu.Cache`
 
@@ -148,8 +148,45 @@ Decided:
 
 ### CLI (`app/Main.hs`)
 
-- [ ] `add`, `get`, `supersede`, `ref set|get`, `search`, `neighbours`, `gc [--dry-run]`, `reindex`, `verify`.
-- [ ] Friendly error text from `AkyuuError`, not `Show`.
+The parser and the runner are in `Akyuu.CLI`, so the tests can call them. `app/Main.hs` only calls `Akyuu.CLI.main`.
+The operations are in `Akyuu.Ops`, and the text of the results is in `Akyuu.Render`. The MCP server uses both, so the two front ends do the same thing.
+
+Decided:
+
+- `AkyuuError` is in `Akyuu.Error`. It wraps `StoreError`, `RefError`, `CacheError` and `GCError`, and has its own cases for bad input.
+  `fromSupersede` turns a `SupersedeError` into `RefFailed` or `StoreFailed`, so it needs no case of its own.
+  `describe` gives the text. The CLI never shows `Show`.
+- The root is `--root DIR`, then `AKYUU_ROOT`. An empty value counts as none. With neither, the CLI stops with exit code 2. There is no default directory.
+- The root directory must exist (`RootMissing`, exit code 1). A typo then gives an error and not a new, empty store.
+  The directories inside it (`store`, `trash`, `refs`) and `cache.sqlite` are made when they are not there.
+- Exit codes: 0 success, 1 a failed operation, 2 bad usage. A bad `Id`, ref name, kind or agent in the arguments is bad usage.
+  `verify` exits with 1 when it finds a problem.
+- `kind` and `agent` are checked at the input (`Ops.checkField`): not empty, one line, no white space at either end.
+  `Akyuu.Memory` does not change. The open decision about `mkMemory` stays open (see below).
+- `buildMemory` cuts the `created` time to whole seconds, because `renderMemory` keeps whole seconds only.
+- `search` and `neighbours` call `Cache.sync` first. On a cache that is up to date, `sync` reads only file names.
+- `get` uses `getVerified`, so it checks the hash. `get ID` prints the stored file exactly, with no line feed added.
+  An `Id` that GC deleted gives "GC deleted it at …" from its tombstone.
+- `ref set NAME ID` is `Unchecked` by default, as for a person who sets a ref by hand. `--new` is `MustBeAbsent`. `--expect ID` is `MustBe`.
+  `Ops.setRefTo` checks that the `Id` is in the store first, so no ref points at nothing. `Akyuu.Refs` still does not look at the store.
+- `supersede NAME` reads the ref. `supersede NAME --expect ID` uses `supersedeFrom`.
+- `add` allows `--supersedes ID` as a plain edge. It does not move a ref.
+- `neighbours` of an `Id` that is not a memory and has no edges is an error, not an empty list. A dangling target shows its edges.
+- `gc` uses `defaultPolicy` and no temp roots. There are no flags for the policy yet.
+- `verify` reads and hashes every object itself, and builds the graph from them, not from the cache. It reports corrupt and unreadable objects,
+  missing edge targets, bad refs, and refs to a missing object. A target with a tombstone is "pruned". That is normal, so it is not a problem.
+- `optparse-applicative` is a new library dependency. The Nix shell already had it. `akyuu.nix` is edited by hand to add it.
+  A new run of `cabal2nix` would also add the test dependencies, and `nix build` would then run the tests. Lilly should decide that.
+
+- [x] `add`, `get`, `supersede`, `ref set|get|list`, `search`, `neighbours`, `gc [--dry-run]`, `reindex`, `verify`.
+- [x] Friendly error text from `AkyuuError`, not `Show`.
+- [x] Unit tests for the parser, the error text and `Akyuu.Ops`. `test/smoke-cli.sh` runs the executable against a temp store.
+
+Not done:
+
+- No `pin`, `unpin` or `init` commands, and no flags for the GC policy.
+- The smoke script is not part of `cabal test`. Run it by hand: `nix develop -c bash test/smoke-cli.sh`.
+- `get` does not show the edges of a memory in a separate form. Use `neighbours`.
 
 ### MCP server
 
@@ -159,6 +196,7 @@ Decided:
 
 - [ ] **Smart constructor for `Memory`.** `memKind` and `memAgent` must be non-empty, one line, no spaces at the ends.
       Today this is a precondition on `renderMemory` that nothing checks. Consider `mkMemory :: … -> Either MemoryError Memory`.
+      For now the CLI and the MCP server check `kind` and `agent` at the input, with `Ops.checkField`.
 - [ ] **Order of headers.** `parseMemory` accepts any order, so a hand-edited file can have a different `Id` from the memory it holds.
       Decide whether to accept only the canonical form.
 - [ ] **Forks.** Two memories that supersede the same one are both `heads`. Choose a policy: latest by time, or keep both and flag it.
