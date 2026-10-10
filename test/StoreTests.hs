@@ -354,14 +354,14 @@ properties =
   testGroup
     "properties"
     [ testProperty "get gives back every memory that add wrote" $
-        withNumTests 30 $
+        withMaxSuccess 30 $
           forAllShrink genMemory shrinkMemory $ \m ->
             ioProperty $ withStore $ \s _ -> do
               i <- right =<< add s m
               r <- get s i
               pure (r === Right m)
     , testProperty "getVerified agrees with get on every added memory" $
-        withNumTests 30 $
+        withMaxSuccess 30 $
           forAllShrink genMemory shrinkMemory $ \m ->
             ioProperty $ withStore $ \s _ -> do
               i <- right =<< add s m
@@ -369,20 +369,20 @@ properties =
               r2 <- getVerified s i
               pure (r1 === r2)
     , testProperty "add returns memoryId" $
-        withNumTests 30 $
+        withMaxSuccess 30 $
           forAllShrink genMemory shrinkMemory $ \m ->
             ioProperty $ withStore $ \s _ -> do
               i <- right =<< add s m
               pure (i === memoryId m)
     , testProperty "list is the set of the Ids that were added" $
-        withNumTests 30 $
+        withMaxSuccess 30 $
           forAllShrink (listOf genMemory) (shrinkList shrinkMemory) $ \ms ->
             ioProperty $ withStore $ \s _ -> do
               mapM_ (\m -> right =<< add s m) ms
               is <- right =<< list s
               pure (sort is === Set.toAscList (Set.fromList (map memoryId ms)))
     , testProperty "verify finds nothing in a store that only add wrote" $
-        withNumTests 30 $
+        withMaxSuccess 30 $
           forAllShrink (listOf genMemory) (shrinkList shrinkMemory) $ \ms ->
             ioProperty $ withStore $ \s _ -> do
               mapM_ (\m -> right =<< add s m) ms

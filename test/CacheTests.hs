@@ -602,13 +602,13 @@ properties =
   testGroup
     "properties"
     [ testProperty "search never fails, for any text" $
-        withNumTests 60 $
+        withMaxSuccess 60 $
           forAll genQuery $ \q -> ioProperty $
             withEnv $ \s c _ -> do
               _ <- addIndexed s c (mem "foo bar baz")
               isRight <$> search c q 5
     , testProperty "sync, then loadGraph, gives the graph of the memories" $
-        withNumTests 30 $
+        withMaxSuccess 30 $
           forAllShrink (listOf genMemory) (shrinkList shrinkMemory) $ \ms -> ioProperty $
             withEnv $ \s c _ -> do
               _ <- addAll s ms
@@ -616,7 +616,7 @@ properties =
               g <- right =<< loadGraph c
               pure (g === expectedGraph ms)
     , testProperty "sync reports each memory once, and a second sync reports none" $
-        withNumTests 30 $
+        withMaxSuccess 30 $
           forAllShrink (listOf genMemory) (shrinkList shrinkMemory) $ \ms -> ioProperty $
             withEnv $ \s c _ -> do
               ids <- addAll s ms
@@ -628,7 +628,7 @@ properties =
                   , second === SyncReport [] []
                   ]
     , testProperty "after memories are trashed, sync gives the graph of the rest" $
-        withNumTests 30 $
+        withMaxSuccess 30 $
           forAllShrink ((,) <$> listOf genMemory <*> listOf arbitrary) (const []) $ \(ms, flags) -> ioProperty $
             withEnv $ \s c _ -> do
               ids <- addAll s ms
@@ -646,7 +646,7 @@ properties =
                   , g === expectedGraph kept
                   ]
     , testProperty "a cache that is rebuilt from the store is the same" $
-        withNumTests 20 $
+        withMaxSuccess 20 $
           forAllShrink (listOf genMemory) (shrinkList shrinkMemory) $ \ms -> ioProperty $
             withTempDir $ \dir -> do
               s <- right =<< openStore dir
@@ -662,7 +662,7 @@ properties =
               closeCache c'
               pure (rebuilt === original)
     , testProperty "every memory can be indexed, and found by cachedIds" $
-        withNumTests 50 $
+        withMaxSuccess 50 $
           forAllShrink genMemory shrinkMemory $ \m -> ioProperty $
             withEnv $ \_ c _ -> do
               let i = memoryId m

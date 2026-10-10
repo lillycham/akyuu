@@ -512,7 +512,7 @@ properties =
     , testProperty "parseRef (renderRef r) == Right r" $
         forAll genRef $ \r -> parseRef (renderRef r) === Right r
     , testProperty "setRef agrees with a model of advance" $
-        withNumTests 30 $
+        withMaxSuccess 30 $
           forAll (listOf ((,) <$> elements pool <*> genId)) $ \steps ->
             ioProperty $ withRefs $ \r _ -> do
               forM_ steps $ \(t, i) -> set r (nm t) i
