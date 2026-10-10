@@ -18,9 +18,9 @@ Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ →
       `list`, `verify`, `trash`. Errors are a `StoreError`, so callers never catch an exception.
       Not done: a test for a crash between the write and the rename, and `verify` carrying on after a vanished file.
 
-### `Akyuu.Refs` (next: only `supersede` is left)
+### `Akyuu.Refs` and `Akyuu.Supersede`
 
-The only mutable layer: `Name -> Id`. The module and its tests are on `feat/refs`.
+The only mutable layer: `Name -> Id`. `supersede` joins it to the store, in `Akyuu.Supersede`. It is on `feat/supersede`.
 
 Decided:
 
@@ -35,9 +35,11 @@ To do, in this order:
 - [x] Pure part: `mkName`, `advance`, `retained`, `renderRef`, `parseRef`.
 - [x] `openRefs`, `refPath`, `getRef`, `listRefs`.
 - [x] `setRef` with the lock (a `flock` on `refs/.lock`) and the `Expected` check.
-- [ ] `supersede :: Store -> Refs -> Name -> Memory -> IO (Either AkyuuError Id)`. It lives above `Store` and `Refs`.
+- [x] `supersede :: Store -> Refs -> Name -> Memory -> IO (Either SupersedeError Id)`, in `Akyuu.Supersede`. It lives above `Store` and `Refs`.
       Order: read the ref, add the `Supersedes` edge, `Store.add`, then `setRef (MustBe old)`.
-      Do it with `AkyuuError` in the CLI step.
+      `supersedeFrom` takes the `old` value that the caller read, so the check covers the time that an agent spends thinking.
+      On `Stale`, the new object stays in the store and GC collects it later.
+- [ ] Wrap `SupersedeError` (and the other module errors) in one `AkyuuError` in the CLI step.
 
 ### `Akyuu.Cache`
 
