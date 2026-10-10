@@ -9,6 +9,7 @@
 module Akyuu.Render
   ( memoryText,
     refLines,
+    refListLines,
     searchLines,
     neighbourLines,
     planLines,
@@ -29,7 +30,7 @@ import Akyuu.Id (Id, render)
 import Akyuu.Memory (Memory, edgeToHeader, renderMemory)
 import Akyuu.Ops (VerifyReport (..), verifyOk)
 import Akyuu.Query (Match (..), Neighbour (..), SearchResult (..))
-import Akyuu.Refs (Ref (..), nameText)
+import Akyuu.Refs (Name, Ref (..), nameText)
 import Data.List (sort)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -129,3 +130,10 @@ count n noun = T.pack (show n) <> " " <> plural noun
     plural w
       | "y" `T.isSuffixOf` w = T.dropEnd 1 w <> "ies"
       | otherwise = w <> "s"
+
+-- | A list of refs: one line for each, the name, two spaces and the 'Id'
+-- that the ref points to now. This is the one list that starts a line with
+-- a name and not an 'Id'. A name has no space, so a script can split the
+-- line at the first space. An empty list gives no lines.
+refListLines :: [(Name, Id)] -> [Text]
+refListLines = map (\(n, i) -> nameText n <> "  " <> render i)

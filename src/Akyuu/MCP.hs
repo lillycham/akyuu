@@ -41,7 +41,7 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Ops
 import Akyuu.Query (SearchOptions (..), defaultSearchOptions)
-import Akyuu.Refs (Expected (..), Name, Ref (current), mkName, nameText)
+import Akyuu.Refs (Expected (..), Name, Ref (current), mkName)
 import Akyuu.Render
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (unless)
@@ -183,7 +183,7 @@ toolList =
       ),
     tool
       "ref_list"
-      "List the names of all refs, one on each line."
+      "List all refs, one on each line: the name, two spaces and the id that the ref points to."
       (objectSchema [] [])
   ]
   where
@@ -335,7 +335,7 @@ runTool env c = either failed id <$> go
       CallNeighbours i -> fmap (lines' "This memory has no edges." . neighbourLines) <$> neighboursOf env i
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
-      CallRefList -> fmap (lines' "There are no refs." . map nameText) <$> listRefNames env
+      CallRefList -> fmap (lines' "There are no refs." . refListLines) <$> listRefValues env
 
 -- Protocol -------------------------------------------------------------
 

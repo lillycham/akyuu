@@ -5,7 +5,8 @@ module OpsTests (opsTests, withOpsEnv, note) where
 import Akyuu.Error
 import Akyuu.GC (Tombstone (..))
 import Akyuu.Graph (Dir (..), Edge (..), EdgeType (..))
-import Akyuu.Id (render)
+import Akyuu.Id (Id, render)
+import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (..), parseMemory, renderMemory)
 import Akyuu.Ops
 import Akyuu.Query (Match (..), Neighbour (..), SearchResult (..), defaultSearchOptions)
@@ -14,13 +15,14 @@ import Akyuu.Store (StoreError (..), objectPath)
 import Akyuu.Supersede (SupersedeError (..))
 import Data.ByteString qualified as BS
 import Data.Either (isLeft)
+import Data.List (sort)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Support (nid, right, withTempDir)
 import System.Directory (createDirectoryIfMissing)
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import Test.Tasty
 import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
@@ -49,13 +51,35 @@ withOpsEnv act = withTempDir $ \dir -> do
 note :: Text -> [Edge] -> NewMemory
 note body es = NewMemory {newKind = "fact", newAgent = "claude", newEdges = Set.fromList es, newBody = body}
 
+-- Make an empty file with the name of the object of an 'Id', so that
+-- 'Akyuu.Store.list' sees it.
+plant :: Env -> Id -> IO ()
+plant env i = do
+  let p = objectPath (envStore env) i
+  createDirectoryIfMissing True (takeDirectory p)
+  BS.writeFile p BS.empty
+
 -- Pure part ------------------------------------------------------------
 
 pureCases :: TestTree
 pureCases =
   testGroup
     "pure"
-    [ testCase "resolveRoot takes --root first" $
+    [ testCase "parseIdSpec reads a whole id as Full" $
+        parseIdSpec (render (nid 1)) @?= Right (Full (nid 1))
+    , testCase "parseIdSpec reads sha256- and some digits as a prefix" $
+        parseIdSpec "sha256-08d4" @?= Right (Prefix "sha256-08d4")
+    , testCase "parseIdSpec adds sha256- to bare digits, and lowers the case" $
+        parseIdSpec "08D4" @?= Right (Prefix "sha256-08d4")
+    , testCase "parseIdSpec refuses fewer than 4 digits" $
+        parseIdSpec "sha256-08d" @?= Left (BadIdSpec "sha256-08d")
+    , testCase "parseIdSpec refuses a character that is not hex" $
+        parseIdSpec "08dg" @?= Left (BadIdSpec "08dg")
+    , testCase "parseIdSpec refuses a text that is longer than an id" $
+        parseIdSpec (T.replicate 65 "a") @?= Left (BadIdSpec (T.replicate 65 "a"))
+    , testCase "parseIdSpec refuses an empty text" $
+        parseIdSpec "" @?= Left (BadIdSpec "")
+    , testCase "resolveRoot takes --root first" $
         resolveRoot (Just "/a") (Just "/b") @?= Right "/a"
     , testCase "resolveRoot takes AKYUU_ROOT second" $
         resolveRoot Nothing (Just "/b") @?= Right "/b"
@@ -160,6 +184,38 @@ opCases =
           mapM_ (\n -> right =<< setRefTo env n Unchecked v) ns
           names <- right =<< listRefNames env
           names @?= [ns !! 1, ns !! 0, ns !! 2]
+    , testCase "listRefValues gives each name with its id, sorted" $
+        withOpsEnv $ \_ env -> do
+          v <- right =<< addMemory env (note "v" [])
+          w <- right =<< addMemory env (note "w" [])
+          [nb, na] <- traverse (right . mkName) ["b/x", "a"]
+          _ <- right =<< setRefTo env nb Unchecked v
+          _ <- right =<< setRefTo env na Unchecked w
+          vals <- right =<< listRefValues env
+          vals @?= [(na, w), (nb, v)]
+    , testCase "listRefValues of a store with no refs is empty" $
+        withOpsEnv $ \_ env -> listRefValues env >>= (@?= Right [])
+    , testCase "resolveId passes a whole id through, even if it is not in the store" $
+        withOpsEnv $ \_ env ->
+          resolveId env (Full (nid 7)) >>= (@?= Right (nid 7))
+    , testCase "resolveId finds the one memory that a prefix names" $
+        withOpsEnv $ \_ env -> do
+          i <- right =<< addMemory env (note "one" [])
+          _ <- right =<< addMemory env (note "two" [])
+          resolveId env (Prefix (T.take 12 (render i))) >>= (@?= Right i)
+    , testCase "resolveId says when no memory has the prefix" $
+        withOpsEnv $ \_ env -> do
+          _ <- right =<< addMemory env (note "one" [])
+          resolveId env (Prefix "sha256-ffffffff") >>= (@?= Left (NoSuchPrefix "sha256-ffffffff"))
+    , testCase "resolveId lists the matches when a prefix is ambiguous" $
+        withOpsEnv $ \_ env -> do
+          -- Two names that share a long start. Only the file names matter
+          -- to 'resolveId', so the files can be empty.
+          let a = nid 170
+              b = either (error . show) id (Id.parse ("sha256-" <> T.replicate 62 "a" <> "bb"))
+          mapM_ (plant env) [a, b]
+          r <- resolveId env (Prefix "sha256-aaaa")
+          r @?= Left (AmbiguousPrefix "sha256-aaaa" (sort [a, b]))
     , testCase "search finds a memory added after the cache opened" $
         withOpsEnv $ \_ env -> do
           i <- right =<< addMemory env (note "Lilly prefers Haskell" [])

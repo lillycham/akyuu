@@ -55,6 +55,14 @@ data AkyuuError
     RootMissing FilePath
   | -- | The memory is not in the store, and GC deleted it at this time.
     Pruned Id Tombstone
+  | -- | The text is neither a full 'Id' nor a usable prefix of one. See
+    -- 'Akyuu.Ops.parseIdSpec'.
+    BadIdSpec Text
+  | -- | No memory in the store has an 'Id' that starts with this prefix.
+    NoSuchPrefix Text
+  | -- | More than one memory has an 'Id' that starts with this prefix. The
+    -- list holds the first few of them, sorted.
+    AmbiguousPrefix Text [Id]
   deriving (Eq, Show)
 
 -- | Turn a 'SupersedeError' into an 'AkyuuError'. A supersede is a store
@@ -79,6 +87,13 @@ describe err = case err of
   NoRoot -> "No store is given. Use --root DIR, or set AKYUU_ROOT."
   RootMissing p -> "The store directory " <> quote (T.pack p) <> " does not exist. Make it first."
   Pruned i t -> "The memory " <> render i <> " is gone: GC deleted it at " <> time t <> "."
+  BadIdSpec t ->
+    quote t <> " is not an id or the start of one. Give the whole id (sha256- and 64 hex digits),"
+      <> " or the first 4 or more characters of it."
+  NoSuchPrefix t -> "No memory has an id that starts with " <> quote t <> "."
+  AmbiguousPrefix t is ->
+    "More than one memory has an id that starts with " <> quote t <> ". Give more characters. They are: "
+      <> T.intercalate ", " (map render is) <> "."
   where
     time = T.pack . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" . prunedAt
 

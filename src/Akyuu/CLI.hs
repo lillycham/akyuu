@@ -13,6 +13,7 @@ module Akyuu.CLI
     MemoryArgs (..),
     BodySource (..),
     GetTarget (..),
+    Check (..),
 
     -- * Parsing
     cliInfo,
@@ -21,7 +22,10 @@ module Akyuu.CLI
     -- * Running
     Output (..),
     readBody,
+    resolveCommand,
     runCommand,
+    withNewline,
+    terminalBytes,
     main,
   )
 where
@@ -33,7 +37,7 @@ import Akyuu.Id qualified as Id
 import Akyuu.Memory (renderMemory)
 import Akyuu.Ops
 import Akyuu.Query (SearchOptions (..), defaultSearchOptions)
-import Akyuu.Refs (Expected (..), Name, Ref (current), mkName, nameText)
+import Akyuu.Refs (Expected (..), Name, Ref (current), mkName)
 import Akyuu.MCP qualified as MCP
 import Akyuu.Render
 import Control.Monad.IO.Class (liftIO)
@@ -42,7 +46,6 @@ import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -50,15 +53,19 @@ import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Options.Applicative
 import System.Environment (getArgs, getProgName, lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
-import System.IO (hPutStrLn, stderr)
+import System.IO (hIsTerminalDevice, hPutStrLn, stderr, stdout)
 
 -- Commands -------------------------------------------------------------
 
 -- | A whole command line: the global options and one command.
+--
+-- The command holds 'IdSpec' values, because a person can give the start of
+-- an id. 'resolveCommand' turns them into whole ids, with the help of the
+-- store.
 data Cli = Cli
   { -- | The @--root@ option, if it was given. See 'resolveRoot'.
     cliRoot :: Maybe FilePath,
-    cliCommand :: Command
+    cliCommand :: Command IdSpec
   }
   deriving (Eq, Show)
 
@@ -72,42 +79,56 @@ data BodySource
     BodyStdin
   deriving (Eq, Show)
 
--- | The options of a new memory, before the body is read.
-data MemoryArgs = MemoryArgs
+-- | The options of a new memory, before the body is read. The edges are in
+-- the order of the command line.
+data MemoryArgs i = MemoryArgs
   { argKind :: Text,
     argAgent :: Text,
-    argEdges :: Set Edge,
+    argEdges :: [(EdgeType, i)],
     argBody :: BodySource
   }
-  deriving (Eq, Show)
+  deriving (Eq, Show, Functor, Foldable, Traversable)
 
 -- | What @get@ reads.
-data GetTarget
-  = ById Id
+data GetTarget i
+  = ById i
   | -- | The current memory of a ref (@--ref@).
     ByRef Name
-  deriving (Eq, Show)
+  deriving (Eq, Show, Functor, Foldable, Traversable)
 
--- | One command.
-data Command
-  = Add MemoryArgs
-  | Get GetTarget
+-- | What @ref set@ checks before it moves the ref. It is 'Expected' with a
+-- parameter for the id, so that the id can be a prefix at first.
+data Check i
+  = -- | No check.
+    NoCheck
+  | -- | The ref must not exist (@--new@).
+    MustBeNew
+  | -- | The ref must point to this id now (@--expect@).
+    MustBeAt i
+  deriving (Eq, Show, Functor, Foldable, Traversable)
+
+-- | One command. The parameter is the type of the ids that it holds: 'IdSpec'
+-- when the command comes from the command line, and 'Id' when it is ready
+-- to run. 'resolveCommand' makes the change, and it can fail.
+data Command i
+  = Add (MemoryArgs i)
+  | Get (GetTarget i)
   | -- | The ref, the 'Id' that the ref must point to now (@--expect@), and
     -- the new memory.
-    Supersede Name (Maybe Id) MemoryArgs
+    Supersede Name (Maybe i) (MemoryArgs i)
   | -- | The ref, and 'True' to show its older values too.
     RefGet Name Bool
-  | RefSet Name Expected Id
+  | RefSet Name (Check i) i
   | RefList
   | Search SearchOptions Text
-  | Neighbours Id
+  | Neighbours i
   | -- | 'True' for @--dry-run@.
     GC Bool
   | Reindex
   | Verify
   | -- | Serve MCP on stdin and stdout until stdin ends.
     Mcp
-  deriving (Eq, Show)
+  deriving (Eq, Show, Functor, Foldable, Traversable)
 
 -- Parsing --------------------------------------------------------------
 
@@ -116,8 +137,10 @@ data Command
 via :: (Text -> Either AkyuuError a) -> ReadM a
 via f = eitherReader (first (T.unpack . describe) . f . T.pack)
 
-idReader :: ReadM Id
-idReader = via (\t -> first (BadId t) (Id.parse t))
+-- | An id as a person types it: whole, or the start of one. See
+-- 'parseIdSpec'.
+idReader :: ReadM IdSpec
+idReader = via parseIdSpec
 
 nameReader :: ReadM Name
 nameReader = via (\t -> first (BadName t) (mkName t))
@@ -134,7 +157,7 @@ atLeast lo = do
   n <- auto
   if n >= lo then pure n else readerError ("the number must be at least " <> show lo)
 
-memoryArgs :: Parser MemoryArgs
+memoryArgs :: Parser (MemoryArgs IdSpec)
 memoryArgs =
   MemoryArgs
     <$> field "kind" "The kind of memory, for example fact or preference."
@@ -143,9 +166,9 @@ memoryArgs =
     <*> body
   where
     field n h = option (via (checkField n)) (long (T.unpack n) <> metavar "TEXT" <> help h)
-    edgeOpt k h = many (Edge k <$> option idReader (long (T.unpack (edgeName k)) <> metavar "ID" <> help h))
+    edgeOpt k h = many ((,) k <$> option idReader (long (T.unpack (edgeName k)) <> metavar "ID" <> help h))
     edges =
-      (\a b c d -> Set.fromList (a <> b <> c <> d))
+      (\a b c d -> a <> b <> c <> d)
         <$> edgeOpt About "The new memory is about the memory ID. Repeat for more."
         <*> edgeOpt DerivedFrom "The new memory comes from the memory ID."
         <*> edgeOpt Refines "The new memory adds detail to the memory ID."
@@ -155,11 +178,11 @@ memoryArgs =
         <|> (BodyFile <$> strOption (long "file" <> short 'f' <> metavar "PATH" <> help "Read the body from a file."))
         <|> pure BodyStdin
 
-commandParser :: Parser Command
+commandParser :: Parser (Command IdSpec)
 commandParser =
   hsubparser $
     cmd "add" addP "Add a memory and print its id. The body comes from --body, --file or stdin."
-      <> cmd "get" getP "Print a memory, by id or by ref."
+      <> cmd "get" getP "Print a memory, by id (or the start of one) or by ref."
       <> cmd "supersede" supersedeP "Replace the memory of a ref with a new one, and print the new id."
       <> cmd "ref" refP "Read, set or list refs."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
@@ -185,7 +208,7 @@ commandParser =
       hsubparser $
         cmd "get" refGetP "Print the id that a ref points to."
           <> cmd "set" refSetP "Point a ref at a memory that is in the store."
-          <> cmd "list" (pure RefList) "Print the names of all refs."
+          <> cmd "list" (pure RefList) "Print the name and the id of each ref."
     refGetP =
       RefGet
         <$> argument nameReader (metavar "NAME")
@@ -194,9 +217,9 @@ commandParser =
       (\n i e -> RefSet n e i)
         <$> argument nameReader (metavar "NAME")
         <*> argument idReader (metavar "ID")
-        <*> ( (MustBe <$> option idReader (long "expect" <> metavar "ID" <> help "Fail if the ref does not point to ID now."))
-                <|> flag' MustBeAbsent (long "new" <> help "Fail if the ref exists.")
-                <|> pure Unchecked
+        <*> ( (MustBeAt <$> option idReader (long "expect" <> metavar "ID" <> help "Fail if the ref does not point to ID now."))
+                <|> flag' MustBeNew (long "new" <> help "Fail if the ref exists.")
+                <|> pure NoCheck
             )
     searchP =
       Search
@@ -234,13 +257,29 @@ parseCli = execParserPure defaultPrefs cliInfo
 
 -- | What a command prints on stdout, and whether it succeeded.
 data Output = Output
-  { outBytes :: ByteString,
-    outOk :: Bool
+  { -- | The bytes to print. For @get@ these are the bytes of the stored
+    -- file, with nothing added, so a pipe or a file gets exactly them.
+    outBytes :: ByteString,
+    outOk :: Bool,
+    -- | 'True' if a terminal should get a line feed at the end, when the
+    -- bytes do not end with one. Only @get@ asks for this, because a body can
+    -- end anywhere. See 'terminalBytes'.
+    outEndLine :: Bool
   }
   deriving (Eq, Show)
 
 ok :: [Text] -> Output
-ok ls = Output (encodeUtf8 (T.unlines ls)) True
+ok ls = Output (encodeUtf8 (T.unlines ls)) True False
+
+-- | The bytes to write to stdout. @True@ means that stdout is a terminal.
+--
+-- A pipe or a file gets 'outBytes' exactly. A terminal gets a line feed at
+-- the end if 'outEndLine' is set and the bytes do not end with one, so the
+-- prompt of the shell does not land on the last line of the body.
+terminalBytes :: Bool -> Output -> ByteString
+terminalBytes isTerminal o
+  | isTerminal && outEndLine o = withNewline (outBytes o)
+  | otherwise = outBytes o
 
 -- | Read the body of a new memory. It must be UTF-8 text.
 readBody :: BodySource -> IO (Either AkyuuError Text)
@@ -256,14 +295,33 @@ readBody src = case src of
     decode = first (const (BadInput "The body is not valid UTF-8 text.")) . decodeUtf8'
 
 -- | Read the body and make a 'NewMemory'.
-newMemory :: MemoryArgs -> ExceptT AkyuuError IO NewMemory
+newMemory :: MemoryArgs Id -> ExceptT AkyuuError IO NewMemory
 newMemory a = do
   b <- ExceptT (readBody (argBody a))
-  pure NewMemory {newKind = argKind a, newAgent = argAgent a, newEdges = argEdges a, newBody = b}
+  pure
+    NewMemory
+      { newKind = argKind a,
+        newAgent = argAgent a,
+        newEdges = Set.fromList [Edge k i | (k, i) <- argEdges a],
+        newBody = b
+      }
+
+-- | Find the whole 'Id' for each id that a person gave. See 'resolveId'.
+-- The first id that cannot be found is the error.
+resolveCommand :: Env -> Command IdSpec -> IO (Either AkyuuError (Command Id))
+resolveCommand env = runExceptT . traverse (ExceptT . resolveId env)
+
+-- | End the bytes with a line feed, if they do not end with one. A memory
+-- file ends exactly where its body ends, so a body with no final line feed
+-- would leave the prompt of the shell on the same line.
+withNewline :: ByteString -> ByteString
+withNewline bs
+  | BS.null bs || BS.last bs == 10 = bs
+  | otherwise = bs <> BS.singleton 10
 
 -- | Run one command against an open store. 'Mcp' takes over stdin and
 -- stdout until stdin ends, and then prints nothing more.
-runCommand :: Env -> Command -> IO (Either AkyuuError Output)
+runCommand :: Env -> Command Id -> IO (Either AkyuuError Output)
 runCommand env c = runExceptT $ case c of
   Add a -> do
     n <- newMemory a
@@ -274,14 +332,14 @@ runCommand env c = runExceptT $ case c of
       ById i -> pure i
       ByRef n -> current <$> ExceptT (readRef env n)
     m <- ExceptT (getMemory env i)
-    pure (Output (renderMemory m) True)
+    pure (Output (renderMemory m) True True)
   Supersede n old a -> do
     m <- newMemory a
     i <- ExceptT (supersedeMemory env n old m)
     pure (ok [Id.render i])
   RefGet n h -> ok . refLines h <$> ExceptT (readRef env n)
-  RefSet n e i -> ok . refLines False <$> ExceptT (setRefTo env n e i)
-  RefList -> ok . map nameText <$> ExceptT (listRefNames env)
+  RefSet n chk i -> ok . refLines False <$> ExceptT (setRefTo env n (expected chk) i)
+  RefList -> ok . refListLines <$> ExceptT (listRefValues env)
   Search o q -> ok . searchLines <$> ExceptT (searchMemories env o q)
   Neighbours i -> ok . neighbourLines <$> ExceptT (neighboursOf env i)
   GC True -> ok . planLines <$> ExceptT (dryRunGC env)
@@ -289,10 +347,14 @@ runCommand env c = runExceptT $ case c of
   Reindex -> ok . syncLines <$> ExceptT (reindexCache env)
   Verify -> do
     r <- ExceptT (verifyStore env)
-    pure (Output (encodeUtf8 (T.unlines (verifyLines r))) (verifyOk r))
+    pure (Output (encodeUtf8 (T.unlines (verifyLines r))) (verifyOk r) False)
   Mcp -> do
     liftIO (MCP.serve env)
-    pure (Output BS.empty True)
+    pure (Output BS.empty True False)
+  where
+    expected NoCheck = Unchecked
+    expected MustBeNew = MustBeAbsent
+    expected (MustBeAt i) = MustBe i
 
 -- | The program: parse the arguments, find the store, run the command.
 main :: IO ()
@@ -305,11 +367,15 @@ main = do
       case resolveRoot (cliRoot cli) envRoot of
         Left e -> failWith 2 e
         Right root -> do
-          r <- withEnv root (\env -> runCommand env (cliCommand cli))
+          r <-
+            withEnv root $ \env -> runExceptT $ do
+              c <- ExceptT (resolveCommand env (cliCommand cli))
+              ExceptT (runCommand env c)
           case r of
             Left e -> failWith 1 e
             Right o -> do
-              BS.putStr (outBytes o)
+              tty <- hIsTerminalDevice stdout
+              BS.putStr (terminalBytes tty o)
               exitWith (if outOk o then ExitSuccess else ExitFailure 1)
     Failure f -> do
       let (msg, code) = renderFailure f prog

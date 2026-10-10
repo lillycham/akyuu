@@ -27,6 +27,10 @@ module Akyuu.Ops
     readRef,
     setRefTo,
     listRefNames,
+    listRefValues,
+    IdSpec (..),
+    parseIdSpec,
+    resolveId,
     searchMemories,
     neighboursOf,
     dryRunGC,
@@ -48,6 +52,7 @@ import Akyuu.GC qualified as GC
 import Akyuu.Graph (Edge, Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
+import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (..), MemoryParseError)
 import Akyuu.Query (Neighbour, SearchOptions, SearchResult)
 import Akyuu.Query qualified as Query
@@ -57,13 +62,13 @@ import Akyuu.Store (Store, StoreError (..), openStore)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersede, supersedeFrom)
 import Control.Exception (finally)
-import Control.Monad (unless)
+import Control.Monad (forM, unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE, withExceptT)
-import Data.Char (isSpace)
+import Data.Char (isHexDigit, isSpace)
 import Data.Either (partitionEithers)
 import Data.List (sort, sortOn)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -238,6 +243,67 @@ setRefTo env n ex i = runExceptT $ do
 -- | The names of all the refs, sorted.
 listRefNames :: Env -> IO (Either AkyuuError [Name])
 listRefNames env = runExceptT (sortOn Refs.nameText <$> refs (Refs.listRefs (envRefs env)))
+
+-- | All the refs with the 'Id' that each one points to now, sorted by name.
+--
+-- A ref that is not valid (a damaged file) is an error for the whole list,
+-- like 'readRef'. The person then knows that something is wrong, and not
+-- only that one line is missing.
+listRefValues :: Env -> IO (Either AkyuuError [(Name, Id)])
+listRefValues env = runExceptT $ do
+  names <- ExceptT (listRefNames env)
+  forM names $ \n -> (,) n . current <$> ExceptT (readRef env n)
+
+-- Ids that a person typed --------------------------------------------------
+
+-- | An 'Id' as a person gives it: the whole thing, or the start of one.
+data IdSpec
+  = -- | A whole, valid 'Id'. It needs no look at the store.
+    Full Id
+  | -- | The start of an 'Id' in the text form: @sha256-@ and some hex
+    -- digits. 'resolveId' finds the one memory that it belongs to.
+    Prefix Text
+  deriving (Eq, Show)
+
+-- | The shortest prefix that 'parseIdSpec' accepts, in hex digits. A shorter
+-- prefix would match many memories, and a typo would too easily name the
+-- wrong one.
+minPrefix :: Int
+minPrefix = 4
+
+-- | Read the text of an 'Id' that a person typed. This function is pure.
+--
+-- A whole 'Id' (@sha256-@ and 64 hex digits) is 'Full'. Otherwise the text
+-- is a prefix. The @sha256-@ at the start is optional, so @08d4@ and
+-- @sha256-08d4@ are the same prefix. The prefix needs at least 'minPrefix'
+-- hex digits. Upper case is read as lower case.
+--
+-- Anything else is 'BadIdSpec'.
+parseIdSpec :: Text -> Either AkyuuError IdSpec
+parseIdSpec t = case Id.parse t of
+  Right i -> Right (Full i)
+  Left _
+    | T.length digits >= minPrefix && T.length digits < 64 && T.all isHexDigit digits ->
+        Right (Prefix ("sha256-" <> digits))
+    | otherwise -> Left (BadIdSpec t)
+  where
+    digits = T.toLower (fromMaybe t (T.stripPrefix "sha256-" t))
+
+-- | Find the 'Id' that a person meant.
+--
+-- A 'Full' id is returned as it is: the store is not asked, so a memory that
+-- GC deleted still gives its own error ('Pruned') at the next step. A
+-- 'Prefix' is matched against the memories that are in the store now.
+-- Returns 'NoSuchPrefix' if none matches, and 'AmbiguousPrefix' (with the
+-- first five matches) if more than one does.
+resolveId :: Env -> IdSpec -> IO (Either AkyuuError Id)
+resolveId _ (Full i) = pure (Right i)
+resolveId env (Prefix p) = runExceptT $ do
+  ids <- store (Store.list (envStore env))
+  case sort (filter (T.isPrefixOf p . Id.render) ids) of
+    [] -> throwE (NoSuchPrefix p)
+    [i] -> pure i
+    is -> throwE (AmbiguousPrefix p (take 5 is))
 
 -- | Make the cache match the store.
 synced :: Env -> ExceptT AkyuuError IO ()
