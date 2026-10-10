@@ -65,6 +65,9 @@ module Akyuu.Cache
 
     -- * Queries
     loadGraph,
+    Summary (..),
+    summaries,
+    firstLine,
     Hit (..),
     search,
     ftsQuery,
@@ -88,6 +91,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Database.SQLite.Simple
   ( Connection,
     Error (ErrorCorrupt, ErrorNotADatabase),
@@ -468,6 +472,58 @@ loadGraph (Cache c) = do
           <$> query_ c "SELECT id FROM memories"
           <*> query_ c "SELECT src, kind, dst FROM edges"
   pure $ rows >>= build
+
+-- | A short view of one memory: the headers without the edges, and the
+-- first line of the body. A list of these is enough to draw a graph of the
+-- store, without a read of every whole body.
+data Summary = Summary
+  { sumId :: Id,
+    sumKind :: Text,
+    sumAgent :: Text,
+    sumCreated :: UTCTime,
+    -- | The first line of the body, cut by 'firstLine'.
+    sumFirstLine :: Text
+  }
+  deriving (Eq, Show)
+
+-- | The first line of a body, for a list. This function is pure.
+--
+-- It looks only at the first 400 characters, like the query of
+-- 'summaries'. Leading blank lines are skipped, the line loses the white
+-- space at its ends, and it keeps at most 120 characters. A NUL ends the
+-- line: SQLite ends the text of a column at a NUL, so 'summaries' and this
+-- function then give the same result.
+firstLine :: Text -> Text
+firstLine =
+  T.take 120
+    . T.strip
+    . T.takeWhile (`notElem` ['\n', '\0'])
+    . T.dropWhile (`elem` ['\n', '\r', ' ', '\t'])
+    . T.take 400
+
+-- | A 'Summary' of every memory in the cache, sorted by 'Id'.
+--
+-- The rows come from the @memories@ table and the start of each body in the
+-- @bodies@ table. The query reads only the first 400 characters of a body,
+-- so a big body costs no more than a small one. It is one read transaction,
+-- and it writes nothing.
+--
+-- Returns 'CorruptCache' for a row with an @id@ that is not an 'Id'.
+summaries :: Cache -> IO (Either CacheError [Summary])
+summaries (Cache c) = do
+  rows <-
+    tryAs CacheSQL $
+      withTransaction c $
+        query_
+          c
+          "SELECT memories.id, memories.kind, memories.agent, memories.created, \
+          \substr(bodies.body, 1, 400) \
+          \FROM memories JOIN bodies ON bodies.rowid = memories.rowid \
+          \ORDER BY memories.id"
+  pure (rows >>= traverse toSummary)
+  where
+    toSummary :: (Text, Text, Text, UTCTime, Text) -> Either CacheError Summary
+    toSummary (i, k, a, t, b) = (\x -> Summary x k a t (firstLine b)) <$> parseCached i
 
 -- | A memory that matched a search.
 data Hit = Hit

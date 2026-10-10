@@ -13,7 +13,8 @@ import Control.Exception (bracket)
 import Control.Monad (forM, forM_)
 import Data.ByteString qualified as BS
 import Data.Either (isLeft, isRight)
-import Data.List (isInfixOf, nub, sort)
+import Data.List (isInfixOf, nub, sort, sortOn)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -38,6 +39,7 @@ cacheTests =
     , loadGraphTests
     , syncTests
     , reindexTests
+    , summaryTests
     , searchTests
     , properties
     , sqliteTests
@@ -493,6 +495,45 @@ reindexTests =
           _ <- right =<< sync c' s
           loadGraph c' >>= (@?= Right (expectedGraph ms))
           closeCache c'
+    ]
+
+-- summaries ------------------------------------------------------------
+
+summaryTests :: TestTree
+summaryTests =
+  testGroup
+    "summaries"
+    [ testCase "an empty cache gives no summaries" $
+        withEnv $ \_ c _ -> summaries c >>= (@?= Right [])
+    , testCase "gives the headers and the first line of each memory, sorted by id" $
+        withEnv $ \s c _ -> do
+          let m1 = (mem "\n\n  First line  \nsecond line") {memKind = "note", memAgent = "codex"}
+              m2 = memWith "" [Edge About (nid 1)]
+          is <- mapM (addIndexed s c) [m1, m2]
+          got <- right =<< summaries c
+          got
+            @?= sortOn
+              sumId
+              [ Summary i (memKind m) (memAgent m) (memCreated m) (firstLine (memBody m))
+              | (i, m) <- zip is [m1, m2]
+              ]
+          sort (map sumFirstLine got) @?= ["", "First line"]
+    , testCase "firstLine skips blank lines, strips and cuts" $ do
+        firstLine "\n\n  First line  \nsecond" @?= "First line"
+        firstLine "" @?= ""
+        firstLine (T.replicate 200 "x") @?= T.replicate 120 "x"
+    , testProperty "the summaries match the memories that sync indexed" $
+        withMaxSuccess 20 $
+          forAll (listOf genMemory) $ \ms -> ioProperty $
+            withEnv $ \s c _ -> do
+              is <- addAll s ms
+              _ <- right =<< sync c s
+              got <- right =<< summaries c
+              let want =
+                    [ Summary i (memKind m) (memAgent m) (memCreated m) (firstLine (memBody m))
+                    | (i, m) <- Map.toAscList (Map.fromList (zip is ms))
+                    ]
+              pure (got === want)
     ]
 
 -- search ---------------------------------------------------------------
