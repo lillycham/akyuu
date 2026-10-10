@@ -4,6 +4,7 @@ module Main (main) where
 import Akyuu.Id
 import CacheTests (cacheTests)
 import FsTests (fsTests)
+import GCTests (gcTests)
 import GraphTests (graphTests)
 import MemoryTests (memoryTests)
 import RefsTests (refsTests)
@@ -23,7 +24,7 @@ import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests]
+main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests]
 
 idTests :: TestTree
 idTests =
