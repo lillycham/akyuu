@@ -18,6 +18,7 @@ module Akyuu.Query
     Match (..),
     SearchResult (..),
     searchResult,
+    headsFirst,
     search,
 
     -- * Neighbours
@@ -33,6 +34,7 @@ import Akyuu.Graph (Dir, EdgeType (Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT)
+import Data.List (partition)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -108,13 +110,38 @@ searchResult o g hits =
           matchSupersededBy = Graph.predecessors Supersedes (hitId h) g
         }
 
+-- | Put the current memories before the old versions. This function is pure.
+--
+-- A hit is an old version if a memory has a 'Supersedes' edge to it. The
+-- order inside each group does not change, so the best text match is still
+-- first in its group. A person or an agent that asks for a few hits then gets
+-- the current memories, and not the ones that something replaced.
+headsFirst :: Graph -> [Hit] -> [Hit]
+headsFirst g hits = current <> old
+  where
+    (old, current) = partition replaced hits
+    replaced h = not (Set.null (Graph.predecessors Supersedes (hitId h) g))
+
+-- | How many hits 'search' asks the text index for, for a limit of @n@.
+--
+-- The text index does not know the graph. If it returned only @n@ hits, all
+-- of them could be old versions, and 'headsFirst' could not help. So 'search'
+-- reads more, puts the current memories first, and then cuts the list to @n@.
+fetchCount :: Int -> Int
+fetchCount n = max 0 n * 4
+
 -- | Search the bodies with 'Akyuu.Cache.search', then widen the hits with
 -- the graph of the cache ('searchResult').
+--
+-- The current memories come before the old versions ('headsFirst'). The
+-- function reads @4 * 'searchLimit'@ hits from the text index, orders them,
+-- and keeps the first 'searchLimit'. An old version stays in the result if
+-- there are not enough current memories to fill it.
 search :: Cache -> SearchOptions -> Text -> IO (Either CacheError SearchResult)
 search c o q = runExceptT $ do
-  hits <- ExceptT (Cache.search c q (searchLimit o))
+  hits <- ExceptT (Cache.search c q (fetchCount (searchLimit o)))
   g <- ExceptT (Cache.loadGraph c)
-  pure (searchResult o g hits)
+  pure (searchResult o g (take (searchLimit o) (headsFirst g hits)))
 
 -- Neighbours -----------------------------------------------------------
 

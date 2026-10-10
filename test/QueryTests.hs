@@ -23,6 +23,7 @@ queryTests =
   testGroup
     "Akyuu.Query"
     [ searchResultCases
+    , headsFirstCases
     , neighbourCases
     , properties
     , ioCases
@@ -81,6 +82,25 @@ searchResultCases =
     , testCase "the context can hold a dangling target" $
         let g = build [(a, [(About, x)])]
          in context (searchResult (hops 1) g [hit a]) @?= Set.singleton x
+    ]
+
+-- headsFirst -----------------------------------------------------------
+
+headsFirstCases :: TestTree
+headsFirstCases =
+  testGroup
+    "headsFirst"
+    [ testCase "puts a memory that nothing supersedes before one that is replaced" $
+        map hitId (headsFirst line [hit a, hit b]) @?= [b, a]
+    , testCase "keeps the order inside each group" $
+        -- a is replaced by b. c and d are not replaced.
+        map hitId (headsFirst line [hit a, hit d, hit b, hit c]) @?= [d, b, c, a]
+    , testCase "does not change a list that has no old version" $
+        map hitId (headsFirst line [hit c, hit d]) @?= [c, d]
+    , testCase "a hit that is not in the graph counts as current" $
+        map hitId (headsFirst line [hit a, hit x]) @?= [x, a]
+    , testCase "keeps every hit" $
+        length (headsFirst line [hit a, hit b, hit c, hit d]) @?= 4
     ]
 
 -- neighbourList --------------------------------------------------------
@@ -197,4 +217,30 @@ ioCases =
           bracket (right =<< openCache dir) closeCache $ \cache -> do
             r <- right =<< search cache defaultSearchOptions "nothing"
             r @?= SearchResult [] Set.empty
+    , testCase "search with a limit of 1 gives the current memory, not the old version" $
+        withTempDir $ \dir -> do
+          s <- right =<< openStore dir
+          bracket (right =<< openCache dir) closeCache $ \cache -> do
+            let old = memWith "Lilly prefers Nix" []
+            iOld <- right =<< add s old
+            right =<< index cache iOld old
+            let new = memWith "Lilly prefers Nix, and never Homebrew" [Edge Supersedes iOld]
+            iNew <- right =<< add s new
+            right =<< index cache iNew new
+            r <- right =<< search cache (defaultSearchOptions {searchLimit = 1}) "nix"
+            map matchId (matches r) @?= [iNew]
+            map matchSupersededBy (matches r) @?= [Set.empty]
+    , testCase "search keeps an old version if there are not enough current memories" $
+        withTempDir $ \dir -> do
+          s <- right =<< openStore dir
+          bracket (right =<< openCache dir) closeCache $ \cache -> do
+            let old = memWith "Lilly prefers Nix" []
+            iOld <- right =<< add s old
+            right =<< index cache iOld old
+            let new = memWith "a replacement without the word" [Edge Supersedes iOld]
+            iNew <- right =<< add s new
+            right =<< index cache iNew new
+            r <- right =<< search cache defaultSearchOptions "nix"
+            map matchId (matches r) @?= [iOld]
+            map matchSupersededBy (matches r) @?= [Set.singleton iNew]
     ]
