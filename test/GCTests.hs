@@ -9,6 +9,8 @@ import Akyuu.Id (Id)
 import Akyuu.Memory (Memory (..))
 import Akyuu.Refs (Expected (..), RefError (CorruptRef), Refs, mkName, openRefs, refPath, setRef)
 import Akyuu.Store (Store, add, objectPath, openStore, trashPath)
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (bracket)
 import Control.Monad (forM)
 import Data.ByteString qualified as BS
@@ -21,11 +23,11 @@ import Data.Text (Text)
 import Data.Time (UTCTime, addUTCTime, getCurrentTime, nominalDay)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Support (nid, right, withTempDir)
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, setModificationTime)
 import System.FilePath ((</>))
 import Test.Tasty
 import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
+import Test.Tasty.QuickCheck hiding (collect, recheck)
 
 gcTests :: TestTree
 gcTests =
@@ -38,6 +40,7 @@ gcTests =
     , pinTests
     , rootTests
     , sweepTests
+    , runTests
     ]
 
 -- Pure helpers ---------------------------------------------------------
@@ -390,6 +393,133 @@ sweepTests =
           Set.member i ids @?= False
     ]
 
+-- A whole run ----------------------------------------------------------
+
+runTests :: TestTree
+runTests =
+  testGroup
+    "collect"
+    [ testCase "collects an old object that nothing reaches" $
+        withEnv $ \s rs cache _ -> do
+          i <- oldObject s "lonely"
+          r <- right =<< collect cache s rs defaultPolicy Set.empty
+          planned r @?= Set.singleton i
+          trashed (swept r) @?= [i]
+          doesFileExist (trashPath s i) >>= (@?= True)
+    , testCase "an old object that is added again gets the grace period" $
+        withEnv $ \s rs cache _ -> do
+          i <- oldObject s "lonely"
+          _ <- right =<< add s (mem "lonely")
+          r <- right =<< collect cache s rs defaultPolicy Set.empty
+          planned r @?= Set.empty
+          doesFileExist (objectPath s i) >>= (@?= True)
+    , testCase "a temporary root survives" $
+        withEnv $ \s rs cache _ -> do
+          i <- oldObject s "lonely"
+          r <- right =<< collect cache s rs defaultPolicy (Set.singleton i)
+          planned r @?= Set.empty
+    , testCase "recheck keeps the plan if nothing changed" $
+        withEnv $ \s rs cache _ -> do
+          i <- oldObject s "lonely"
+          (r, g, doomed, t) <- planNow s rs cache
+          doomed @?= Set.singleton i
+          recheck s rs defaultPolicy t r g doomed >>= (@?= Right doomed)
+    , testCase "recheck drops an object that a new memory links to" $
+        withEnv $ \s rs cache _ -> do
+          i <- oldObject s "target"
+          (r, g, doomed, t) <- planNow s rs cache
+          doomed @?= Set.singleton i
+          _ <- right =<< add s (memWith "new" [Edge About i])
+          recheck s rs defaultPolicy t r g doomed >>= (@?= Right Set.empty)
+    , testCase "recheck drops an object that is pinned, or that a ref points at, after the plan" $
+        withEnv $ \s rs cache _ -> do
+          i <- oldObject s "a"
+          j <- oldObject s "b"
+          (r, g, doomed, t) <- planNow s rs cache
+          doomed @?= Set.fromList [i, j]
+          right =<< pin s i
+          setTo rs "claude/back" [j]
+          recheck s rs defaultPolicy t r g doomed >>= (@?= Right Set.empty)
+    , testCase "sweep skips an object that was added again after the plan" $
+        withEnv $ \s rs cache _ -> do
+          i <- oldObject s "lonely"
+          (_, _, doomed, t) <- planNow s rs cache
+          doomed @?= Set.singleton i
+          _ <- right =<< add s (mem "lonely")
+          rep <- right =<< sweep s defaultPolicy t doomed
+          trashed rep @?= []
+          doesFileExist (objectPath s i) >>= (@?= True)
+    , testCase "a dry run writes nothing, not even the cache" $
+        withEnv $ \s rs cache dir -> do
+          i <- oldObject s "lonely"
+          j <- right =<< add s (mem "young")
+          treeBefore <- treeOf dir
+          dryRun cache s rs defaultPolicy Set.empty >>= (@?= Right (Set.singleton i))
+          treeAfter <- treeOf dir
+          treeAfter @?= treeBefore
+          cachedIds cache >>= (@?= Right Set.empty)
+          mapM_ (\k -> doesFileExist (objectPath s k) >>= (@?= True)) [i, j]
+          doesFileExist (gcLockPath s) >>= (@?= False)
+    , testCase "the lock file is gc.lock in the root" $
+        withEnv $ \s _ _ dir -> gcLockPath s @?= dir </> "gc.lock"
+    , testCase "a run returns GCLocked while another run holds the lock" $
+        withEnv $ \s rs cache _ -> do
+          i <- oldObject s "lonely"
+          held <- newEmptyMVar
+          release <- newEmptyMVar
+          done <- newEmptyMVar
+          _ <- forkIO $ do
+            r <- withGCLock s (putMVar held () >> takeMVar release >> pure (Right ()))
+            putMVar done r
+          takeMVar held
+          collect cache s rs defaultPolicy Set.empty >>= (@?= Left GCLocked) . fmap planned
+          t <- getCurrentTime
+          sweep s defaultPolicy t (Set.singleton i) >>= (@?= Left GCLocked)
+          doesFileExist (objectPath s i) >>= (@?= True)
+          putMVar release ()
+          takeMVar done >>= (@?= Right ())
+          -- The lock is free again.
+          r <- right =<< collect cache s rs defaultPolicy Set.empty
+          planned r @?= Set.singleton i
+    , testCase "two runs at once: each object is trashed once, and no run fails" $
+        withEnv $ \s rs cache dir -> do
+          is <- mapM (oldObject s) ["a", "b", "c", "d"]
+          -- Each run has its own cache connection, like two processes.
+          cache2 <- right =<< openCache dir
+          go <- newEmptyMVar
+          results <- forM [cache, cache2] $ \c' -> do
+            out <- newEmptyMVar
+            _ <- forkIO $ readMVar go >> collect c' s rs defaultPolicy Set.empty >>= putMVar out
+            pure out
+          putMVar go ()
+          rs' <- mapM takeMVar results
+          closeCache cache2
+          let ok = [r | Right r <- rs']
+              others = [e | Left e <- rs', e /= GCLocked]
+          others @?= []
+          assertBool "no run swept" (not (null ok))
+          sort (concatMap (trashed . swept) ok) @?= sort is
+          mapM_ (\k -> doesFileExist (trashPath s k) >>= (@?= True)) is
+    ]
+
+-- An object whose file time is two days ago, so it is older than the grace
+-- period of 'defaultPolicy'.
+oldObject :: Store -> Text -> IO Id
+oldObject s body = do
+  i <- right =<< add s (mem body)
+  t <- getCurrentTime
+  setModificationTime (objectPath s i) (addUTCTime (-2 * nominalDay) t)
+  pure i
+
+-- The roots, the graph and the plan of a run now, with no temporary roots,
+-- and the time of the run.
+planNow :: Store -> Refs -> Cache -> IO (Roots, Graph, Set Id, UTCTime)
+planNow s rs cache = do
+  t <- getCurrentTime
+  (g, ages) <- right =<< snapshot cache s
+  r <- right =<< readRoots defaultPolicy rs s
+  pure (r, g, plan defaultPolicy (Observed t ages) r g, t)
+
 -- IO helpers -----------------------------------------------------------
 
 -- A fresh store, refs and cache in one directory. The cache is closed when
@@ -450,7 +580,8 @@ gcOnce s rs cache p t = do
   pure (doomed, rep)
 
 -- Every file under a directory, with its content, in order. The cache files
--- are left out: the cache is not the truth, and a dry run may sync it.
+-- are left out: SQLite can touch its own files (the WAL index) on a read.
+-- The tests check the cache with 'cachedIds'.
 treeOf :: FilePath -> IO [(FilePath, BS.ByteString)]
 treeOf root = sort <$> go ""
   where

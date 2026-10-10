@@ -6,8 +6,8 @@
 -- it is free and it cannot change the store.
 --
 -- The I/O part reads the inputs ('readRoots', 'snapshot') and does the work
--- ('sweep', 'sweepAndSync'). 'dryRun' is a whole run up to the plan, and
--- it writes nothing.
+-- ('sweep', 'sweepAndSync'). 'collect' is one whole run, under the lock of
+-- GC. 'dryRun' is the same run up to the plan, and it writes nothing.
 --
 -- = Which way liveness flows
 --
@@ -26,6 +26,7 @@
 -- > trash/sha256-9f3a….md      an object that phase 1 of 'sweep' moved
 -- > tombstones/sha256-9f3a…    one file for each object that phase 2 deleted
 -- > pins/sha256-9f3a…          one empty file for each pin
+-- > gc.lock                    the lock of a run (see 'withGCLock')
 --
 -- = What GC trusts
 --
@@ -36,10 +37,17 @@
 -- enough to collect, so 'snapshot' adds the objects that the cache does not
 -- have yet.
 --
+-- = One run at a time
+--
+-- 'collect', 'sweep' and 'sweepAndSync' run under an exclusive lock on
+-- @gc.lock@. A second run that cannot get the lock in about one second
+-- returns 'GCLocked' and changes nothing. 'dryRun' does not take the lock,
+-- because it writes nothing.
+--
 -- = The window that is not closed
 --
 -- GC and the agents do not share a lock, so an agent can change the store
--- during a run. 'recheck' looks again just before a sweep, and
+-- during a run. 'collect' looks again just before the sweep ('recheck'), and
 -- 'sweep' checks the file time of each object just before it moves it. This
 -- makes the window small, but it does not close it. Let @O@ be an old object
 -- in the plan. It goes to @trash@ although something now needs it, if one of
@@ -95,8 +103,12 @@ module Akyuu.GC
     sweep,
     sweepAndSync,
 
-    -- * A dry run
+    -- * A whole run
+    RunReport (..),
+    collect,
     dryRun,
+    withGCLock,
+    gcLockPath,
 
     -- * Tombstones
     Tombstone (..),
@@ -118,8 +130,10 @@ import Akyuu.Memory (Memory (memEdges))
 import Akyuu.Refs (RefError (NoSuchRef), Refs, getRef, listRefs, retained)
 import Akyuu.Store (Store, StoreError (NotFound), objectPath, storeRoot, trashPath)
 import Akyuu.Store qualified as Store
+import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, tryJust)
 import Control.Monad (guard, unless)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, withExceptT)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
@@ -151,6 +165,7 @@ import System.Directory
     removeFile,
     setModificationTime,
   )
+import System.FileLock (SharedExclusive (Exclusive), withTryFileLock)
 import System.FilePath ((</>))
 import System.IO.Error (isDoesNotExistError)
 
@@ -438,6 +453,9 @@ data GCError
     GCCache CacheError
   | -- | The tombstone of this 'Id' is not a valid tombstone.
     CorruptTombstone Id TombstoneParseError
+  | -- | Another run of GC held the lock for more than about one second. This
+    -- run changed nothing. Try again later.
+    GCLocked
   deriving (Eq, Show)
 
 -- Sweep ----------------------------------------------------------------
@@ -451,7 +469,7 @@ data SweepReport = SweepReport
   }
   deriving (Eq, Show)
 
--- | Sweep in two phases.
+-- | Sweep in two phases, under the lock of GC (see 'withGCLock').
 --
 -- Phase 1 moves each object of the set to @trash@ with
 -- 'Akyuu.Store.trash', and sets the file time of the moved file to the time
@@ -480,7 +498,11 @@ data SweepReport = SweepReport
 --
 -- This function does not tell the cache. Use 'sweepAndSync'.
 sweep :: Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError SweepReport)
-sweep s p t doomed = runExceptT $ do
+sweep s p t doomed = withGCLock s (sweepUnlocked s p t doomed)
+
+-- | 'sweep' without the lock. The caller holds it.
+sweepUnlocked :: Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError SweepReport)
+sweepUnlocked s p t doomed = runExceptT $ do
   moved <- catMaybes <$> traverse (ExceptT . moveOne) (Set.toList doomed)
   gone <- ExceptT (purge s p t)
   pure SweepReport {trashed = moved, deleted = gone}
@@ -524,17 +546,65 @@ trashId n = do
   either (const Nothing) Just (Id.parse stem)
 
 -- | 'sweep', then 'Akyuu.Cache.sync', so that the cache forgets the swept
--- objects. GC does not call 'Akyuu.Cache.forget' itself.
+-- objects. GC does not call 'Akyuu.Cache.forget' itself. Both steps run
+-- under the lock of GC.
 --
 -- The sync runs also if the sweep fails, because a sweep that stops in the
 -- middle can still have moved some objects. The first error is the result.
 sweepAndSync :: Cache -> Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError (SweepReport, SyncReport))
-sweepAndSync c s p t doomed = do
-  r <- sweep s p t doomed
+sweepAndSync c s p t doomed = withGCLock s (sweepAndSyncUnlocked c s p t doomed)
+
+-- | 'sweepAndSync' without the lock. The caller holds it.
+sweepAndSyncUnlocked :: Cache -> Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError (SweepReport, SyncReport))
+sweepAndSyncUnlocked c s p t doomed = do
+  r <- sweepUnlocked s p t doomed
   synced <- Cache.sync c s
   pure $ (,) <$> r <*> first GCCache synced
 
 -- A whole run -----------------------------------------------------------
+
+-- | What 'collect' did.
+data RunReport = RunReport
+  { -- | The objects that the run passed to the sweep: the plan, after
+    -- 'recheck'.
+    planned :: Set Id,
+    -- | What the sweep did.
+    swept :: SweepReport,
+    -- | What the sync of the cache did.
+    synced :: SyncReport
+  }
+  deriving (Eq, Show)
+
+-- | The path of the lock file of GC: @\<root\>/gc.lock@.
+gcLockPath :: Store -> FilePath
+gcLockPath s = storeRoot s </> "gc.lock"
+
+-- | Run an action with the lock of GC, so that only one run sweeps at a time.
+--
+-- The lock is an exclusive @flock@ on 'gcLockPath'. The OS releases it when
+-- the holder ends, so a crash cannot leave it held. The lock file stays on
+-- disk. This is normal.
+--
+-- Like the locks of "Akyuu.Refs" and "Akyuu.Cache", the function does not
+-- wait inside the lock call, because a blocked call would also block the
+-- other Haskell threads of the program. It tries the lock, and if it is
+-- taken, waits 10 ms with 'threadDelay' and tries again, up to 100 times
+-- (about one second). Then it returns 'GCLocked'. A run takes much longer
+-- than that, so a second run gives up and does not wait for the first.
+--
+-- The lock is not re-entrant: do not call 'sweep' or 'sweepAndSync' inside
+-- this function. An 'IOException' from the lock, or from the action, becomes
+-- 'GCIO'.
+withGCLock :: Store -> IO (Either GCError a) -> IO (Either GCError a)
+withGCLock s act = go (100 :: Int)
+  where
+    go 0 = pure (Left GCLocked) -- tried 100 times: give up
+    go k = do
+      got <- tryIO (withTryFileLock (gcLockPath s) Exclusive (const act))
+      case got of
+        Left e -> pure (Left e)
+        Right Nothing -> threadDelay 10000 >> go (k - 1)
+        Right (Just v) -> pure v
 
 -- | Read the inputs and make the plan, for a run at this time. The roots
 -- get these temporary roots. This writes nothing.
@@ -552,6 +622,23 @@ dryRun :: Cache -> Store -> Refs -> Policy -> Set Id -> IO (Either GCError (Set 
 dryRun c s rs p temps = do
   t <- getCurrentTime
   fmap (\(_, _, d) -> d) <$> planAt c s rs p temps t
+
+-- | One whole run of GC now, with these temporary roots.
+--
+-- The steps, under the lock of GC ('withGCLock'):
+--
+-- 1. Read the graph, the ages and the roots, and make the plan.
+-- 2. Look again with 'recheck', and drop what is live now.
+-- 3. 'sweep', then 'Akyuu.Cache.sync'.
+--
+-- Returns 'GCLocked' if another run holds the lock.
+collect :: Cache -> Store -> Refs -> Policy -> Set Id -> IO (Either GCError RunReport)
+collect c s rs p temps = withGCLock s $ runExceptT $ do
+  t <- liftIO getCurrentTime
+  (r, g, doomed) <- ExceptT (planAt c s rs p temps t)
+  doomed' <- ExceptT (recheck s rs p t r g doomed)
+  (rep, syn) <- ExceptT (sweepAndSyncUnlocked c s p t doomed')
+  pure RunReport {planned = doomed', swept = rep, synced = syn}
 
 -- Tombstones -----------------------------------------------------------
 
