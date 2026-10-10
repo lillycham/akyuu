@@ -3,7 +3,7 @@
 Build order, from the bottom up. Each module depends only on the ones above it.
 
 ```
-Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ → GC ✓ → Query ✓ → CLI ✓ → MCP
+Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ → GC ✓ → Query ✓ → CLI ✓ → MCP ✓
 ```
 
 ## Modules
@@ -190,7 +190,37 @@ Not done:
 
 ### MCP server
 
-- [ ] Wrap the same library functions. Do this after the CLI works.
+The server is `Akyuu.MCP`, and `akyuu mcp` runs it. It is a subcommand and not a second executable, so it shares
+the root rule (`--root`, `AKYUU_ROOT`) and the client config needs one binary: `akyuu --root DIR mcp`.
+
+Decided:
+
+- Transport: stdio, one JSON-RPC 2.0 message on each line. Stdout carries only protocol messages. Logs go to stderr.
+- Methods: `initialize`, `ping`, `tools/list`, `tools/call`. A notification gets no answer. A message with no method (a response) is ignored.
+  A batch (a JSON array) gives `-32600`, because MCP 2025-06-18 removed batches.
+- Versions: `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`. `initialize` gives back the version of the client if it is in the list, or else the newest.
+- The server keeps no state. It does not check that `initialize` came first.
+- Tools: `add`, `get`, `supersede`, `search`, `neighbours`, `ref_get`, `ref_set`, `ref_list`. Each one has a JSON schema with `additionalProperties: false`.
+  `gc`, `reindex` and `verify` are not tools: they are jobs for a person or a timer, not for an agent.
+- The text of a tool result is the same as the CLI output (`Akyuu.Render`). An error is the text of `describe`.
+- A failed operation and bad arguments are tool results with `isError: true`, so the model can read the text and try again.
+  An unknown tool and bad `params` are `-32602`. An unknown method is `-32601`. A line that is not JSON is `-32700`.
+- `ref_set` needs `expected` or `create: true`. An agent cannot set a ref without the compare-and-set check. The CLI can (`Unchecked`), for a person.
+- `handleMessage` is pure in the runner of the tools (`Monad m => (ToolCall -> m ToolResult) -> …`). The tests use `Identity` and a fake runner.
+- A tool that throws (a bug) gives an error result, and the server goes on. Async exceptions are not caught.
+- `aeson` comes from Nix (2.2.4.1). It links QuickCheck 2.15.0.1, so the test suite now builds with that QuickCheck, and not 2.19 from Hackage.
+  QuickCheck 2.15 has no `withNumTests`, so `StoreTests`, `RefsTests` and `CacheTests` use `withMaxSuccess`, the older name of the same function.
+  To go back to 2.19, aeson must be built from Hackage. That needs the network and is outside Nix. Lilly should decide.
+
+- [x] Wrap the same library functions. Do this after the CLI works.
+- [x] Tests: the pure handler (initialize, list, calls that work and fail, protocol errors) and `runTool` on a temp store.
+      `test/smoke-mcp.sh` runs `akyuu mcp` over real pipes.
+
+Not done:
+
+- No `structuredContent` or `outputSchema` in tool results. The text is the only content.
+- No resources, prompts, sampling, logging or cancellation. A `notifications/cancelled` is ignored, because each call runs to the end before the next line is read.
+- The server reads one line at a time and answers in order. A slow call (a big search) blocks the next one.
 
 ## Open decisions
 
