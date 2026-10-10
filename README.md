@@ -29,12 +29,13 @@ GC     = sweep (Store \ reachable Roots)
 ## Architecture
 
 Each layer uses only the layers below it. The pure core (green) does no I/O. Refs
-(amber) is the only layer that changes a value in place. Dashed boxes are planned.
+(amber) is the only layer that changes a value in place. The web UI only reads.
 
 ```mermaid
 flowchart TD
   CLI["CLI"]
   MCP["MCP server"]
+  Web["Web UI<br/>read-only, on 127.0.0.1"]
   Ops["Ops<br/>supersede, AkyuuError"]
   Query["Query<br/>search, then withinHops"]
   GC["GC<br/>plan (pure), sweep (IO)"]
@@ -51,6 +52,7 @@ flowchart TD
 
   CLI --> Ops
   MCP --> Ops
+  Web --> Ops
   Ops --> Query
   Ops --> GC
   Query --> Cache
@@ -68,11 +70,9 @@ flowchart TD
   classDef pure fill:#e4f1e8,stroke:#3b7a56,color:#1a2230
   classDef io fill:#e2ebf8,stroke:#3c5f99,color:#1a2230
   classDef mut fill:#fbe9d0,stroke:#b3631a,color:#1a2230
-  classDef planned fill:#ffffff,stroke:#3c5f99,stroke-dasharray:5 4,color:#1a2230
   class Memory,Graph,Id pure
-  class Store,Fs io
+  class Store,Fs,CLI,MCP,Web,Ops,Query,GC,Cache io
   class Refs mut
-  class CLI,MCP,Ops,Query,GC,Cache planned
   style core fill:#f3faf5,stroke:#3b7a56,stroke-dasharray:3 4,color:#1a2230
 ```
 

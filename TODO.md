@@ -3,7 +3,7 @@
 Build order, from the bottom up. Each module depends only on the ones above it.
 
 ```
-Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ → GC ✓ → Query ✓ → CLI ✓ → MCP ✓
+Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ → GC ✓ → Query ✓ → CLI ✓ → MCP ✓ → Web UI ✓
 ```
 
 ## Modules
@@ -236,6 +236,66 @@ Not done:
 - No `structuredContent` or `outputSchema` in tool results. The text is the only content.
 - No resources, prompts, sampling, logging or cancellation. A `notifications/cancelled` is ignored, because each call runs to the end before the next line is read.
 - The server reads one line at a time and answers in order. A slow call (a big search) blocks the next one.
+
+### Web UI
+
+A local, read-only view of a store, for a person who tests it. `akyuu serve [--port N]` serves it live.
+`akyuu viz > out.html` writes the same page with the data inside it, so it needs no server.
+`akyuu seed --demo --root DIR` makes a small store that has one of each case. The modules are `Akyuu.Web.*` and `Akyuu.Seed`.
+
+Decided:
+
+- Read-only. Every endpoint is a `GET`, and any other method gets `405`. There is no write endpoint. Write actions behind `--rw` are a possible later step.
+- The web layer does not call `Cache.sync`, and writes no file. A sync would hide the drift that the health view shows.
+  The graph comes from the cache and the new objects of the store, as in `GC.snapshot`. A test calls every endpoint and checks that no file changes.
+  The search uses the text index of the cache, so it misses a memory that the cache does not have yet. The search view says so.
+- `Akyuu.Web.Api.route` is pure in the runner of the endpoints, like `MCP.handleMessage`. The tests use a pure runner and a real store.
+- Endpoints: `/api/stats`, `/api/graph`, `/api/memory/:id`, `/api/refs`, `/api/search`, `/api/gc/plan`, `/api/gc/explain/:id`, `/api/trash`, `/api/verify`.
+  `/api/memory/:id` takes the start of an id (`Ops.resolveId`). The others take whole ids.
+  Errors: `400` bad input, `404` not there, `410` deleted by GC, `500` the rest. The body is `{"error": …}` with the text of `describe`.
+- Threat model: a local tool with no login. The server binds 127.0.0.1 only, and checks the address after the bind.
+  It refuses a `Host` header that is not `127.0.0.1:PORT` or `localhost:PORT` (`403`), against DNS rebinding. It sends no CORS headers.
+  It serves no file by path: the page is in the binary (`file-embed`). The headers forbid frames, sniffing and outside loads.
+- The server answers one request at a time (an `MVar`). The SQLite connection is shared, and two transactions on one connection cannot run at once.
+- `serve` prints only the address on stdout. The default port is 7420. `--port 0` takes a free port.
+- The page is one HTML file with inline CSS and JavaScript, and hand-written SVG. It loads nothing from the network.
+  It puts store data in the DOM only as text (`textContent`, `setAttribute`), never as HTML. A memory body is untrusted.
+- `viz` puts the data in a `<script type="application/json">` element. The JSON escapes `<`, `>` and `&`, so a body cannot end the element.
+  The export has the whole graph, every memory and `GC.explainAll` for every node. Its search is a plain word match in the page, with no stems.
+- Layout: time runs down. The order is newest first, but a memory is always below each memory that points at it.
+  A memory and the memory that it supersedes share a lane. In a fork, the newest source keeps the lane and the other one branches.
+  This is only for the drawing: the UI shows both heads and does not choose (see "Forks" below).
+- Window: by default `/api/graph` shows the 200 newest heads and the nodes within 2 hops, with `truncated` and the counts.
+  The page starts with the whole graph for a store with up to 1000 memories. It has "show all", a hops and a heads field, and "focus here".
+  The GC drawing shows the whole graph up to 2000 nodes, and the window of the graph tab above that.
+- The page polls `/api/stats` every 2 seconds. It loads the views again when the fingerprint changes: the counts and the newest file time of the store directories and refs.
+- `GC.explain :: Policy -> Observed -> Roots -> Graph -> Id -> Why` lists every reason (ref, pin, temporary root, young, retaining edge) and one shortest chain from a root.
+  A property test checks that an id is in `plan` exactly when `explain` says that it is a node and not live. `GC.explainAll` does all nodes in one walk.
+  The web layer adds which ref generation holds an id (`refHolds`). `GC.young`, `listTrash` and `listTombstones` are new exports.
+- `Cache.summaries` gives the id, kind, agent, created time and first line of each memory. It is in `Akyuu.Cache`, because the cache has these columns and the bodies.
+  `firstLine` reads at most 400 characters and stops at a NUL, because SQLite ends a text at a NUL.
+- `seed --demo` uses the library: `Store.add`, `supersedeFrom`, `setRef`, `pin` and `sweep`. Old objects get a created time and a file time in the past.
+  The prune uses `sweep` with a trash time of 0 and a run time one second after now. `seed` refuses a directory that holds anything but an empty store.
+- New dependencies, all from Nix: `warp` 3.4.9, `wai` 3.2.4, `http-types` 0.12.4, `file-embed` 0.0.16.0, `network` and `streaming-commons`.
+  The test suite also uses `wai` and `http-types`. The build plan only adds packages: no version of an existing package changes. `akyuu.nix` is edited by hand.
+
+- [x] The read model and the JSON API, with tests.
+- [x] `serve`, `viz`, and the graph, refs and search views.
+- [x] The GC and health views, and `GC.explain`.
+- [x] `seed --demo`. The tests use it as the fixture of the GC and health views.
+- [x] A store of 3000 memories: each endpoint answers in less than 0.12 seconds. `viz` makes a file of 4.2 MB in 0.6 seconds.
+
+Not done:
+
+- The page is not checked in a browser. Node (from nixpkgs) checks the syntax, runs the layout on real exports, and runs the page in a small fake DOM.
+  That shows no runtime errors and no use of `innerHTML`. It does not show how the page looks.
+- `test/smoke-web.sh` is not part of `cabal test`. Run it by hand: `nix develop -c bash test/smoke-web.sh`.
+- The fingerprint does not see an `add` of an object that is already there: that only changes the file time of the object.
+- A graph with many standalone memories is tall and narrow: each one gets its own row. The layout does not reduce edge crossings.
+- After the hops, the window has no cap. A memory with thousands of edges can pull them all into the view.
+- One unreadable object stops the graph view, as it stops `GC.snapshot`. The health view still shows it.
+- A memory body with `[` or `]` confuses the marks of a search snippet.
+- `explain` reads the whole snapshot for each request. This is fast enough at 3000 memories.
 
 ## Open decisions
 
