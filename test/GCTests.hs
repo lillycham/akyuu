@@ -253,6 +253,12 @@ explainTests =
           [ validPath g (seedsOf g r ages) i (whyPath (explain pol (obs ages) r g i))
           | i <- universe
           ]
+    , testProperty "explainAll gives explain for every node" $ \(Case g r ages) ->
+        explainAll pol (obs ages) r g === Map.fromSet (explain pol (obs ages) r g) (nodes g)
+    , testCase "explainAll on a chain gives the same paths as explain" $
+        let g = build [(a, []), (b, [(About, a)]), (c, [(DerivedFrom, b)]), (x, [(Refines, a)])]
+         in Map.lookup a (explainAll pol (obs (allOld g)) (roots [c]) g)
+              @?= Just (Why True True [RetainedBy About b] [(c, DerivedFrom), (b, About)])
     , testProperty "a live id has a path exactly when it is not a seed" $ \(Case g r ages) ->
         conjoin
           [ not (null (whyPath w)) === (whyLive w && i `Set.notMember` seedsOf g r ages)

@@ -73,6 +73,7 @@ module Akyuu.GC
     Policy (..),
     defaultPolicy,
     Observed (..),
+    young,
 
     -- * Roots
     Roots (..),
@@ -93,6 +94,7 @@ module Akyuu.GC
     Reason (..),
     Why (..),
     explain,
+    explainAll,
 
     -- * Inputs from disk
     storedTimes,
@@ -411,18 +413,54 @@ data Why = Why
 -- "why is this still here?" then sees all the things that must change before
 -- GC takes it. The path shows one way in which liveness reached the 'Id'.
 explain :: Policy -> Observed -> Roots -> Graph -> Id -> Why
-explain p o r g i =
-  Why
-    { whyIsNode = i `Set.member` ns,
-      whyLive = i `Set.member` live,
-      whyReasons = rootReasons <> [IsYoung | i `Set.member` fresh] <> edgeReasons,
-      whyPath = if i `Set.member` seeds then [] else fromMaybe [] (retainPath seeds g i)
-    }
+explain p o r g i = whyOf lv (pathTo (parentsFrom (lvSeeds lv) g (Just i)) i) i
+  where
+    lv = liveness p o r g
+
+-- | 'explain' for every node of the graph. This function is pure.
+--
+-- It finds the live set and the chains once for the whole graph, so it costs
+-- about as much as one call of 'explain'. A call of 'explain' for each node
+-- would cost that much for each node. For each node @i@, the value is
+-- @explain p o r g i@. A property test checks this.
+explainAll :: Policy -> Observed -> Roots -> Graph -> Map Id Why
+explainAll p o r g = Map.fromSet (\i -> whyOf lv (pathTo parents i) i) (nodes g)
+  where
+    lv = liveness p o r g
+    parents = parentsFrom (lvSeeds lv) g Nothing
+
+-- | The facts that 'explain' needs about the whole graph.
+data Liveness = Liveness
+  { lvRoots :: Roots,
+    lvGraph :: Graph,
+    lvNodes :: Set Id,
+    -- | The young nodes.
+    lvFresh :: Set Id,
+    -- | The roots and the young nodes.
+    lvSeeds :: Set Id,
+    -- | What the seeds reach through retaining edges, as in 'plan'.
+    lvLive :: Set Id
+  }
+
+-- | The live set, with the same rule as 'plan'.
+liveness :: Policy -> Observed -> Roots -> Graph -> Liveness
+liveness p o r g = Liveness r g ns fresh seeds (reachable retains seeds g)
   where
     ns = nodes g
     fresh = Set.filter (young p o) ns
     seeds = allRoots r <> fresh
-    live = reachable retains seeds g
+
+-- | The 'Why' of one 'Id', with a chain that the caller found.
+whyOf :: Liveness -> [(Id, EdgeType)] -> Id -> Why
+whyOf lv path i =
+  Why
+    { whyIsNode = i `Set.member` lvNodes lv,
+      whyLive = i `Set.member` lvLive lv,
+      whyReasons = rootReasons <> [IsYoung | i `Set.member` lvFresh lv] <> edgeReasons,
+      whyPath = if i `Set.member` lvSeeds lv then [] else path
+    }
+  where
+    r = lvRoots lv
     rootReasons =
       [HeldByRef | i `Set.member` rootRefs r]
         <> [HeldByPin | i `Set.member` rootPins r]
@@ -431,24 +469,27 @@ explain p o r g i =
       [ RetainedBy k s
       | k <- [minBound .. maxBound],
         retains k,
-        s <- Set.toAscList (predecessors k i g),
-        s `Set.member` live
+        s <- Set.toAscList (predecessors k i (lvGraph lv)),
+        s `Set.member` lvLive lv
       ]
 
--- | A shortest chain of retaining edges from the seeds to an 'Id'.
+-- | The first parent of each node on the shortest chains of retaining edges
+-- from the seeds. A seed has no parent, and neither has a node that no chain
+-- reaches.
 --
 -- The function walks forward from the seeds, one level at a time, and keeps
 -- the first parent that it finds for each node. Each level goes in ascending
--- order of 'Id' and kind, so the result is always the same. Returns
--- 'Nothing' if no chain reaches the 'Id'.
-retainPath :: Set Id -> Graph -> Id -> Maybe [(Id, EdgeType)]
-retainPath seeds g goal = back [] goal <$> search seeds seeds Map.empty
+-- order of 'Id' and kind, so the result is always the same. With a goal, it
+-- stops after the level that reaches the goal. The parent of the goal, and
+-- of each node before it, is then the same as in a full walk.
+parentsFrom :: Set Id -> Graph -> Maybe Id -> Map Id (Id, EdgeType)
+parentsFrom seeds g goal = go seeds seeds Map.empty
   where
     -- visited, frontier, parent of each node found so far
-    search visited frontier parents
-      | goal `Map.member` parents = Just parents
-      | Set.null frontier = Nothing
-      | otherwise = search (visited <> found) found (parents <> new)
+    go visited frontier parents
+      | maybe False (`Map.member` parents) goal = parents
+      | Set.null frontier = parents
+      | otherwise = go (visited <> found) found (parents <> new)
       where
         found = Map.keysSet new
         new =
@@ -461,9 +502,14 @@ retainPath seeds g goal = back [] goal <$> search seeds seeds Map.empty
               t <- Set.toAscList (successors k s g),
               t `Set.notMember` visited
             ]
-    -- Follow the parents back to a seed, which has no parent.
-    back acc x parents = case Map.lookup x parents of
-      Just (s, k) -> back ((s, k) : acc) s parents
+
+-- | Follow the parents back from an 'Id' to a node with no parent. The
+-- result goes from that node to the 'Id'.
+pathTo :: Map Id (Id, EdgeType) -> Id -> [(Id, EdgeType)]
+pathTo parents = go []
+  where
+    go acc x = case Map.lookup x parents of
+      Just (s, k) -> go ((s, k) : acc) s
       Nothing -> acc
 
 -- Inputs from disk ------------------------------------------------------
