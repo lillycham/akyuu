@@ -32,6 +32,12 @@ library
                  , unix
                  , optparse-applicative
                  , aeson
+                 , file-embed
+                 , http-types
+                 , network
+                 , streaming-commons
+                 , wai
+                 , warp
 
     exposed-modules: Akyuu.Id
                    , Akyuu.Fs
