@@ -46,7 +46,7 @@ SQLite index. It is never the source of truth, so it can be deleted and rebuilt.
 - [x] Smoke-test FTS5 in the Nix build first. Done: `sqlite-simple` (with `direct-sqlite` 2.3.29) gives SQLite 3.45.0 with `ENABLE_FTS5`.
       `create virtual table … using fts5(…, tokenize='porter unicode61')`, `match`, `bm25` and `snippet` all work.
 
-The module and its tests are on `feat/cache`. All 75 Cache tests pass. The hardening for several agents is done, except the lock around `openCache`: see the clean-up list.
+The module and its tests are on `feat/cache`. All 78 Cache tests pass. The hardening for several agents is done.
 
 Decided:
 
@@ -55,7 +55,9 @@ Decided:
 - Tables: `memories`, `edges` (no foreign key on `dst`), and an FTS5 table that keeps a copy of each body.
 - GC calls `sync` after a sweep. It does not call `forget` itself.
 - `ftsQuery` quotes each word, so no input is an FTS5 syntax error. A NUL counts as white space.
-- Errors: `CacheSQL`, `CacheStore`, `CorruptCache`. `Akyuu.Fs.tryAs` catches the SQLite exception.
+- Errors: `CacheSQL`, `CacheIO`, `CacheLocked`, `CacheStore`, `CorruptCache`. `Akyuu.Fs.tryAs` catches the SQLite exception.
+- `openCache` runs under an exclusive `flock` on `cache.sqlite.lock`. It tries without waiting and retries for about 5 seconds, like the lock of Refs.
+- `reindex` reads the whole store first. Then it clears the tables and writes the new rows in one transaction.
 
 To do, in this order:
 
@@ -121,10 +123,11 @@ To do, in this order:
 - [x] Cache: `sync` fails if GC sweeps an object between `Store.list` and `Store.get` (`NotFound`). Skip that object. Add a test.
 - [x] Cache: remove `tryIO` (unused) and the `CacheIO` constructor (nothing builds it), or give it a job.
 - [x] Cache: `cachedIds` has its own `toId`. Use `parseCached`.
-- [ ] Cache: two processes that find a bad cache at the same time can each delete the file that the other made. Decide if a lock around `openCache` is worth it.
+- [x] Cache: two processes that find a bad cache at the same time can each delete the file that the other made. Done: a lock file around `openCache`, with a test that fails without it.
 - [ ] Pick one style for `Akyuu.Id` imports (`qualified` at the front or the back).
 - [ ] Add `-Wprepositive-qualified-module` and `-Wmissing-import-lists` to `shared` in `akyuu.cabal`, and fix what they flag.
 - [ ] `Store.add`: wrap `removeFile tmp` in the cleanup with `ignoreIO`, so a cleanup error cannot hide the real one.
 - [x] Move `ignoreIO` and a generic `tryWith` from `Akyuu.Store` to `Akyuu.Fs`.
 - [ ] Do the same for `orNotFound` once `getRef` shows what it needs.
-- [ ] Add `-threaded` to the test suite, so the race test with `MustBe` can really run threads in parallel.
+- [x] Add `-threaded` to the test suite, so the race test with `MustBe` can really run threads in parallel.
+      Done, with `-N`. Check that the `MustBe` race test now runs threads in parallel: it is not changed yet.
