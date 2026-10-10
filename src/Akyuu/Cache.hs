@@ -32,6 +32,9 @@
 -- The rules of the cache:
 --
 -- * A change is one transaction. A call that fails changes nothing.
+--   A change starts with @BEGIN IMMEDIATE@, so it takes the write lock
+--   before its first read. A deferred transaction that reads and then
+--   writes can fail with @BUSY@, and the busy timeout does not help.
 -- * The cache does not trust itself. If the file is not a database, or its
 --   @PRAGMA user_version@ is not 'schemaVersion', 'openCache' deletes the
 --   file and starts again with an empty cache. There are no migrations.
@@ -73,21 +76,23 @@ import Akyuu.Graph (Edge (..), EdgeType, Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, parse, render)
 import Akyuu.Memory (Memory (..), edgeToHeader)
-import Akyuu.Store (Store, StoreError)
+import Akyuu.Store (Store, StoreError (NotFound))
 import Akyuu.Store qualified as Store
-import Control.Exception (IOException, bracketOnError, onException, try)
-import Control.Monad (forM_, when)
+import Control.Exception (bracketOnError, onException, tryJust)
+import Control.Monad (forM_, guard, when)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, withExceptT)
 import Data.Bifunctor (first)
+import Data.Maybe (catMaybes)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.SQLite.Simple
   ( Connection,
+    Error (ErrorCorrupt, ErrorNotADatabase),
     Only (Only),
     Query (Query),
-    SQLError,
+    SQLError (sqlError),
     close,
     execute,
     execute_,
@@ -96,6 +101,7 @@ import Database.SQLite.Simple
     open,
     query,
     query_,
+    withImmediateTransaction,
     withTransaction,
   )
 import System.Directory (removeFile)
@@ -109,9 +115,6 @@ newtype Cache = Cache Connection
 data CacheError
   = -- | SQLite gave an error.
     CacheSQL SQLError
-  | -- | The disk gave an error, for example when the file cannot be made or
-    -- deleted.
-    CacheIO IOException
   | -- | 'sync' could not read an object of the store. The cache did not change.
     CacheStore StoreError
   | -- | A row of the cache is not what the cache wrote, for example an @id@
@@ -139,15 +142,13 @@ cachePath root = root </> "cache.sqlite"
 -- shows their columns. Each @CREATE@ has @IF NOT EXISTS@, so it is safe to
 -- call this function on a database that has them already.
 --
--- The function also turns on WAL mode and a busy timeout of 5 seconds. The
--- timeout belongs to the connection and is not saved in the file, so each new
--- connection must set it.
+-- The function also turns on WAL mode. 'openConn' sets the busy timeout
+-- before this step.
 --
 -- The user version is the last step. After a crash in the middle, the version
 -- is still 0, and the next 'openCache' throws the half-made file away.
 createSchema :: Connection -> IO ()
 createSchema c = do
-  execute_ c "PRAGMA busy_timeout = 5000"
   execute_ c "CREATE TABLE IF NOT EXISTS edges (src TEXT NOT NULL, kind TEXT NOT NULL, dst TEXT NOT NULL, PRIMARY KEY (src, kind, dst)) WITHOUT ROWID"
   execute_ c "CREATE TABLE IF NOT EXISTS memories (rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, created TEXT NOT NULL, agent TEXT NOT NULL)"
   execute_ c "CREATE VIRTUAL TABLE IF NOT EXISTS bodies USING fts5(body, tokenize = 'porter unicode61')"
@@ -157,22 +158,42 @@ createSchema c = do
 -- | Try to use the cache file that is already there.
 --
 -- Returns the open connection if the file is a database and its user version
--- is 'schemaVersion'. Returns 'Nothing' in every other case: the file does not
--- exist, it is not a database, or it has another version. At the moment any
--- 'SQLError' counts as "not usable".
+-- is 'schemaVersion'. Returns 'Nothing' if the file does not exist, if it is
+-- not a database ('ErrorNotADatabase' or 'ErrorCorrupt'), or if it has
+-- another version.
+--
+-- Any other 'SQLError' goes up to the caller, for example 'ErrorBusy' or
+-- 'ErrorLocked'. A busy file can be a good cache that another agent uses, so
+-- 'openCache' must not delete it.
 --
 -- The function closes the connection in each case that returns 'Nothing', and
 -- also if an error ends it. The caller closes the connection of a 'Just'.
 tryExisting :: FilePath -> IO (Maybe Connection)
 tryExisting path =
   either (const Nothing) id
-    <$> try @SQLError
-      ( bracketOnError (open path) close $ \conn -> do
+    <$> tryJust
+      notADatabase
+      ( bracketOnError (openConn path) close $ \conn -> do
           [Only v] <- query_ conn "PRAGMA user_version" :: IO [Only Int]
           if v == schemaVersion
             then pure (Just conn)
             else close conn >> pure Nothing
       )
+  where
+    notADatabase e = guard (sqlError e `elem` [ErrorNotADatabase, ErrorCorrupt])
+
+-- | Open a connection and set its busy timeout to 5 seconds. Then a call
+-- waits for a lock of another agent, and does not fail at once with
+-- @BUSY@.
+--
+-- The timeout belongs to the connection and is not saved in the file, so each
+-- new connection must set it. It is the first step, so that also the read of
+-- the user version waits.
+openConn :: FilePath -> IO Connection
+openConn path = do
+  conn <- open path
+  execute_ conn "PRAGMA busy_timeout = 5000" `onException` close conn
+  pure conn
 
 -- | Open the cache of a store. Make the file and the tables if they are not
 -- there.
@@ -184,8 +205,9 @@ tryExisting path =
 -- The function also turns on the options for many agents at once: WAL mode
 -- and a busy timeout. See the notes in @TODO.md@.
 --
--- Returns 'CacheIO' or 'CacheSQL' if the file cannot be made, for example if
--- the directory does not exist.
+-- Returns 'CacheSQL' if the file cannot be made, for example if the directory
+-- does not exist. Returns 'CacheSQL' also if the file is busy or locked
+-- after the timeout. The file then stays.
 openCache :: FilePath -> IO (Either CacheError Cache)
 openCache root = tryAs CacheSQL $ do
   let path = cachePath root
@@ -195,7 +217,7 @@ openCache root = tryAs CacheSQL $ do
   where
     fresh path = do
       mapM_ (ignoreIO . removeFile) [path, path ++ "-wal", path ++ "-shm"]
-      open path
+      openConn path
 
 -- | Close the cache. Do not use the 'Cache' after this call.
 closeCache :: Cache -> IO ()
@@ -209,7 +231,7 @@ closeCache (Cache conn) = close conn
 -- If the 'Id' is already in the cache, the function does nothing. An object
 -- never changes, so there is nothing to update. It is one transaction.
 index :: Cache -> Id -> Memory -> IO (Either CacheError ())
-index (Cache c) i m = tryAs CacheSQL $ withTransaction c $ insertMemory c i m
+index (Cache c) i m = tryAs CacheSQL $ withImmediateTransaction c $ insertMemory c i m
 
 -- | Write the three kinds of rows of a memory: the @memories@ row, one
 -- @edges@ row for each edge, and the @bodies@ row. If the 'Id' is already in
@@ -258,7 +280,7 @@ deleteMemory c i = do
 -- targets now, and the graph allows that. If the 'Id' is not in the cache,
 -- the function does nothing. It is one transaction.
 forget :: Cache -> Id -> IO (Either CacheError ())
-forget (Cache c) i = tryAs CacheSQL $ withTransaction c $ deleteMemory c i
+forget (Cache c) i = tryAs CacheSQL $ withImmediateTransaction c $ deleteMemory c i
 
 -- | The 'Id' of every memory in the cache.
 cachedIds :: Cache -> IO (Either CacheError (Set Id))
@@ -300,16 +322,26 @@ diff tgt cur =
 -- All of this is one transaction. If the store cannot be read, or an object
 -- is not a valid memory, the result is 'CacheStore' and the cache does not
 -- change. Call it again after the problem is fixed.
+--
+-- GC can sweep an object after 'Akyuu.Store.list' and before the read. Then
+-- the read gives 'NotFound'. The function skips that object, and it is not in
+-- 'added'. Every other store error stops the function.
 sync :: Cache -> Store -> IO (Either CacheError SyncReport)
 sync cache@(Cache c) st = runExceptT $ do
   ids <- withExceptT CacheStore (ExceptT (Store.list st))
   have <- ExceptT (cachedIds cache)
   let report = diff (Set.fromList ids) have
-  new <- withExceptT CacheStore (traverse (\i -> (,) i <$> ExceptT (Store.get st i)) (added report))
-  ExceptT $ tryAs CacheSQL $ withTransaction c $ do
+  new <- catMaybes <$> withExceptT CacheStore (traverse (ExceptT . fetch) (added report))
+  ExceptT $ tryAs CacheSQL $ withImmediateTransaction c $ do
     forM_ new $ \(i, m) -> insertMemory c i m
     forM_ (removed report) (deleteMemory c)
-  pure report
+  pure report {added = map fst new}
+  where
+    fetch i = do
+      r <- Store.get st i
+      pure $ case r of
+        Left (NotFound _) -> Right Nothing
+        _ -> (\m -> Just (i, m)) <$> r
 
 -- | Delete every row of the three tables. The tables stay.
 --
@@ -325,7 +357,7 @@ clearAll c = do
 -- The report lists every memory of the store in 'added'.
 reindex :: Cache -> Store -> IO (Either CacheError SyncReport)
 reindex cache@(Cache c) s = runExceptT $ do
-  ExceptT $ tryAs CacheSQL (withTransaction c $ clearAll c)
+  ExceptT $ tryAs CacheSQL (withImmediateTransaction c $ clearAll c)
   ExceptT $ sync cache s
 
 -- | Read an 'Id' from the text of a row. Returns 'CorruptCache', with the text,

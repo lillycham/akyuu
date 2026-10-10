@@ -16,10 +16,10 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Database.SQLite.Simple (execute_, withConnection)
+import Database.SQLite.Simple (Error (ErrorBusy), Only (fromOnly), SQLError (sqlError), execute_, query_, withConnection)
 import MemoryTests (genMemory, shrinkMemory)
 import Support (nid, right, withTempDir)
-import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
+import System.Directory (createDirectoryIfMissing, createFileLink, doesFileExist, removeFile)
 import System.FilePath (takeDirectory, (</>))
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -38,6 +38,7 @@ cacheTests =
     , reindexTests
     , searchTests
     , properties
+    , sqliteTests
     ]
 
 -- Test helpers ---------------------------------------------------------
@@ -175,6 +176,27 @@ openTests =
           right =<< index c (nid 1) (mem "works")
           cachedIds c >>= (@?= Right (Set.singleton (nid 1)))
           closeCache c
+    , testCase "keeps a busy file, and returns CacheSQL with ErrorBusy" $
+        -- This test waits for the busy timeout of 5 seconds.
+        withTempDir $ \dir -> do
+          c <- right =<< openCache dir
+          right =<< index c (nid 1) (mem "kept")
+          closeCache c
+          -- In WAL mode a reader does not wait for a writer. So the other
+          -- connection goes back to a rollback journal, then takes the lock.
+          r <- withConnection (cachePath dir) $ \other -> do
+            execute_ other "PRAGMA journal_mode = DELETE"
+            execute_ other "BEGIN EXCLUSIVE"
+            r <- openCache dir
+            execute_ other "ROLLBACK"
+            pure r
+          case r of
+            Left (CacheSQL e) -> sqlError e @?= ErrorBusy
+            Left e -> assertFailure ("unexpected: " ++ show e)
+            Right c' -> closeCache c' >> assertFailure "expected Left"
+          c' <- right =<< openCache dir
+          cachedIds c' >>= (@?= Right (Set.singleton (nid 1)))
+          closeCache c'
     , testCase "returns a Left if the directory does not exist" $
         withTempDir $ \dir -> do
           r <- openCache (dir </> "missing" </> "deeper")
@@ -355,6 +377,17 @@ syncTests =
           r <- sync c s
           assertBool "expected Left" (isLeft r)
           cachedIds c >>= (@?= Right Set.empty)
+    , testCase "skips an object that GC sweeps after the list" $
+        withEnv $ \s c _ -> do
+          ids <- addAll s [mem "stays"]
+          -- A link to a file that is not there: 'list' sees the name, and
+          -- 'get' gives NotFound, as if GC swept the object in between.
+          let path = objectPath s (nid 6)
+          createDirectoryIfMissing True (takeDirectory path)
+          createFileLink (path ++ ".gone") path
+          r <- right =<< sync c s
+          r @?= SyncReport ids []
+          cachedIds c >>= (@?= Right (Set.fromList ids))
     , testCase "works again after the bad object is trashed" $
         withEnv $ \s c _ -> do
           ids <- addAll s [mem "good one"]
@@ -490,6 +523,18 @@ searchTests =
             , "\0"
             ]
         ]
+    ]
+
+-- SQLite ---------------------------------------------------------------
+
+sqliteTests :: TestTree
+sqliteTests =
+  testGroup
+    "SQLite"
+    [ testCase "is built thread-safe (THREADSAFE=1 or 2)" $
+        withConnection ":memory:" $ \conn -> do
+          opts <- map fromOnly <$> (query_ conn "PRAGMA compile_options" :: IO [Only Text])
+          assertBool (show opts) (any (`elem` opts) ["THREADSAFE=1", "THREADSAFE=2"])
     ]
 
 -- Properties -----------------------------------------------------------
