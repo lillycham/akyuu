@@ -14,7 +14,7 @@
 -- Rules of the store:
 --
 -- * An object never changes. 'add' of a memory that is already there does
---   nothing.
+--   not write it again. It only sets the file time (see 'add').
 -- * A write is atomic. The function writes a temporary file in the same
 --   directory as the object, then renames it. A reader sees the whole object
 --   or no object, also after a crash.
@@ -53,8 +53,8 @@ where
 import Akyuu.Fs (tryWith, atomicWrite)
 import Akyuu.Id (Id, hashBytes, hashFile, parse, render, toBytes)
 import Akyuu.Memory (Memory, MemoryParseError, parseMemory, renderMemory)
-import Control.Exception (IOException, try)
-import Control.Monad (filterM, unless)
+import Control.Exception (IOException, try, tryJust)
+import Control.Monad (filterM, guard, unless)
 import Data.Bifunctor (first)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -64,6 +64,7 @@ import Data.Text.Encoding qualified as TE
 import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory, renameFile)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Error (isDoesNotExistError)
+import System.Posix.Files (touchFile)
 
 -- | A store on disk. A value of this type holds only the path of the root
 -- directory, so it is cheap to copy and to pass around.
@@ -117,16 +118,25 @@ objectPath s i = storeRoot s </> "store" </> shard i </> fileName i
 --
 -- The function renders the memory, hashes the bytes, and writes them to a
 -- temporary file in the directory of the object. Then it renames the file to
--- its final name. If the object is already in the store, the function does
--- not write anything and returns the same 'Id'.
+-- its final name.
+--
+-- If the object is already in the store, the function does not write its
+-- bytes. It sets the file time to now and returns the same 'Id'. GC reads
+-- the file time as the time the object came into the store, so an agent that
+-- adds an old object again gets the grace period of "Akyuu.GC". The content
+-- does not change, so an object still never changes.
+--
+-- The touch is the check: if the file is not there (for example, GC moved it
+-- to @trash@ just before), the function writes the object again. There is no
+-- gap between a check and the touch.
 --
 -- Two agents can add the same memory at the same time. Both write the same
 -- bytes, so whichever rename comes last is correct.
 add :: Store -> Memory -> IO (Either StoreError Id)
 add s m = tryIO $ do
   createDirectoryIfMissing True (takeDirectory final)
-  fileExists <- doesFileExist final
-  unless fileExists $ atomicWrite final bytes
+  touched <- tryJust (guard . isDoesNotExistError) (touchFile final)
+  either (const (atomicWrite final bytes)) pure touched
   pure i
   where
     i = hashBytes bytes

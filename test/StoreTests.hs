@@ -19,7 +19,9 @@ import System.Directory
   ( createDirectoryIfMissing
   , doesDirectoryExist
   , doesFileExist
+  , getModificationTime
   , listDirectory
+  , setModificationTime
   )
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import Test.Tasty
@@ -168,6 +170,21 @@ addTests =
           BS.writeFile (objectPath s i) "changed"
           _ <- right =<< add s (mem "a")
           BS.readFile (objectPath s i) >>= (@?= "changed")
+    , testCase "sets the file time to now if the object is there" $
+        withStore $ \s _ -> do
+          i <- right =<< add s (mem "a")
+          let past = posixSecondsToUTCTime 1000000000
+          setModificationTime (objectPath s i) past
+          _ <- right =<< add s (mem "a")
+          t <- getModificationTime (objectPath s i)
+          assertBool "the file time did not move" (t > past)
+          BS.readFile (objectPath s i) >>= (@?= renderMemory (mem "a"))
+    , testCase "writes the object again if it was moved to the trash" $
+        withStore $ \s _ -> do
+          i <- right =<< add s (mem "a")
+          right =<< trash s i
+          _ <- right =<< add s (mem "a")
+          BS.readFile (objectPath s i) >>= (@?= renderMemory (mem "a"))
     , testCase "two different memories are two files" $
         withStore $ \s _ -> do
           i1 <- right =<< add s (mem "a")
