@@ -65,6 +65,17 @@ parseCases =
           @?= Cli
             (Just "/s")
             (Add (MemoryArgs "fact" "claude" [(About, Full (nid 1)), (Refines, Full (nid 2))] (BodyText "hi")))
+    , testCase "serve has a default port, and takes --port 0" $ do
+        c <- parses ["serve"]
+        cliCommand c @?= Serve 7420
+        c0 <- parses ["--root", "/s", "serve", "--port", "0"]
+        cliCommand c0 @?= Serve 0
+    , testCase "serve refuses a port above 65535" $ do
+        (msg, _) <- fails ["serve", "--port", "70000"]
+        assertBool msg ("at most 65535" `isInfixOf` msg)
+    , testCase "viz takes no arguments" $ do
+        c <- parses ["viz"]
+        cliCommand c @?= Viz
     , testCase "add reads stdin by default" $ do
         c <- parses ["add", "--kind", "fact", "--agent", "claude"]
         c @?= Cli Nothing (Add (MemoryArgs "fact" "claude" [] BodyStdin))

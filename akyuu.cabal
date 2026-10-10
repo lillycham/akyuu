@@ -58,6 +58,7 @@ library
                    , Akyuu.Web.Read
                    , Akyuu.Web.Page
                    , Akyuu.Web.Api
+                   , Akyuu.Web.Server
                    , Akyuu.CLI
 
     default-extensions: ImportQualifiedPost
@@ -93,6 +94,8 @@ test-suite akyuu-test
                     , filepath
                     , optparse-applicative
                     , aeson
+                    , http-types
+                    , wai
                     , sqlite-simple
                     , tasty
                     , tasty-hunit

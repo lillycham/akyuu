@@ -18,6 +18,11 @@ import Akyuu.Store qualified as Store
 import Akyuu.Web.Api
 import Akyuu.Web.Model
 import Akyuu.Web.Page
+import Akyuu.Web.Server (application, hostAllowed, toWebRequest)
+import Data.IORef (newIORef, readIORef, writeIORef)
+import Network.HTTP.Types (statusCode)
+import Network.Wai qualified as Wai
+import Network.Wai.Internal (ResponseReceived (..))
 import Control.Monad (forM, forM_)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson qualified as A
@@ -50,7 +55,52 @@ webTests =
     [ routeCases
     , windowCases
     , pageCases
+    , serverCases
     , storeCases
+    ]
+
+-- The server -----------------------------------------------------------
+
+-- Run the WAI application of the server on one request, with a fake
+-- runner, and give the status and the headers.
+waiCall :: Int -> Wai.Request -> IO (Int, [(Text, BS.ByteString)])
+waiCall port req = do
+  out <- newIORef Nothing
+  _ <- application port (pure . runIdentity . fake) req $ \r -> do
+    writeIORef out (Just (statusCode (Wai.responseStatus r), [(T.pack (show k), v) | (k, v) <- Wai.responseHeaders r]))
+    pure ResponseReceived
+  readIORef out >>= maybe (assertFailure "no response") pure
+
+waiReq :: BS.ByteString -> [Text] -> Maybe BS.ByteString -> Wai.Request
+waiReq m p h = Wai.defaultRequest {Wai.requestMethod = m, Wai.pathInfo = p, Wai.requestHeaderHost = h}
+
+serverCases :: TestTree
+serverCases =
+  testGroup
+    "server"
+    [ testCase "hostAllowed takes 127.0.0.1 and localhost with the port only" $ do
+        hostAllowed 7420 (Just "127.0.0.1:7420") @?= True
+        hostAllowed 7420 (Just "localhost:7420") @?= True
+        hostAllowed 7420 (Just "127.0.0.1:7421") @?= False
+        hostAllowed 7420 (Just "evil.example:7420") @?= False
+        hostAllowed 7420 (Just "127.0.0.1") @?= False
+        hostAllowed 7420 (Just "0.0.0.0:7420") @?= False
+        hostAllowed 7420 Nothing @?= False
+    , testCase "a request with a wrong Host gets 403" $ do
+        (s, _) <- waiCall 7420 (waiReq "GET" ["api", "stats"] (Just "evil.example:7420"))
+        s @?= 403
+        (s2, _) <- waiCall 7420 (waiReq "GET" ["api", "stats"] Nothing)
+        s2 @?= 403
+    , testCase "the application routes a good request, and refuses POST" $ do
+        (s, hs) <- waiCall 7420 (waiReq "GET" ["api", "stats"] (Just "127.0.0.1:7420"))
+        s @?= 200
+        lookup "\"Content-Type\"" hs @?= Just "application/json; charset=utf-8"
+        (s2, hs2) <- waiCall 7420 (waiReq "POST" ["api", "stats"] (Just "localhost:7420"))
+        s2 @?= 405
+        lookup "\"Allow\"" hs2 @?= Just "GET"
+    , testCase "toWebRequest keeps the query that WAI parsed, as text" $
+        reqQuery (toWebRequest Wai.defaultRequest {Wai.queryString = [("q", Just "a%20b"), ("all", Nothing)]})
+          @?= [("q", Just "a%20b"), ("all", Nothing)]
     ]
 
 -- Helpers --------------------------------------------------------------

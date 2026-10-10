@@ -39,6 +39,9 @@ import Akyuu.Ops
 import Akyuu.Query (SearchOptions (..), defaultSearchOptions)
 import Akyuu.Refs (Expected (..), Name, Ref (current), mkName)
 import Akyuu.MCP qualified as MCP
+import Akyuu.Web.Page qualified as Page
+import Akyuu.Web.Read qualified as Read
+import Akyuu.Web.Server qualified as Server
 import Akyuu.Render
 import Control.Monad.IO.Class (liftIO)
 import Control.Exception (IOException, try)
@@ -53,7 +56,7 @@ import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Options.Applicative
 import System.Environment (getArgs, getProgName, lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
-import System.IO (hIsTerminalDevice, hPutStrLn, stderr, stdout)
+import System.IO (hFlush, hIsTerminalDevice, hPutStrLn, stderr, stdout)
 
 -- Commands -------------------------------------------------------------
 
@@ -128,6 +131,11 @@ data Command i
   | Verify
   | -- | Serve MCP on stdin and stdout until stdin ends.
     Mcp
+  | -- | Serve the web UI on 127.0.0.1 at this port, until the program is
+    -- stopped. Port 0 is a free port.
+    Serve Int
+  | -- | Print the web UI as one HTML file, with the data of the store in it.
+    Viz
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
 -- Parsing --------------------------------------------------------------
@@ -191,6 +199,8 @@ commandParser =
       <> cmd "reindex" (pure Reindex) "Throw the cache away and read the whole store again."
       <> cmd "verify" (pure Verify) "Check every object, edge and ref of the store."
       <> cmd "mcp" (pure Mcp) "Serve the MCP protocol (JSON-RPC 2.0) on stdin and stdout, until stdin ends."
+      <> cmd "serve" serveP "Serve a read-only web view of the store on 127.0.0.1, and print its address."
+      <> cmd "viz" (pure Viz) "Print a read-only web view of the store as one HTML file. It needs no server."
   where
     cmd n p d = command n (info p (progDesc d))
     addP = Add <$> memoryArgs
@@ -232,6 +242,20 @@ commandParser =
         <*> many (option kindReader (long "follow" <> metavar "KIND" <> help "Follow only this kind of edge. Repeat for more. The default is all kinds."))
     neighboursP = Neighbours <$> argument idReader (metavar "ID")
     gcP = GC <$> switch (long "dry-run" <> help "Only print what a run would collect. Write nothing.")
+    serveP =
+      Serve
+        <$> option
+          portReader
+          ( long "port"
+              <> short 'p'
+              <> metavar "N"
+              <> value Server.defaultPort
+              <> showDefault
+              <> help "The port on 127.0.0.1. 0 means a free port."
+          )
+    portReader = do
+      n <- atLeast 0
+      if n <= 65535 then pure n else readerError "the port must be at most 65535"
 
 cliParser :: Parser Cli
 cliParser =
@@ -351,7 +375,18 @@ runCommand env c = runExceptT $ case c of
   Mcp -> do
     liftIO (MCP.serve env)
     pure (Output BS.empty True False)
+  Serve port -> do
+    liftIO (Server.serve env port announce)
+    pure (Output BS.empty True False)
+  Viz -> do
+    v <- liftIO (Read.readBundle env)
+    pure (Output (Page.vizPage v) True False)
   where
+    -- The address goes to stdout alone, so a script can read it.
+    announce p = do
+      putStrLn ("http://127.0.0.1:" <> show p <> "/")
+      hFlush stdout
+      hPutStrLn stderr "akyuu serve: read-only, on 127.0.0.1 only. Stop it with Ctrl-C."
     expected NoCheck = Unchecked
     expected MustBeNew = MustBeAbsent
     expected (MustBeAt i) = MustBe i
