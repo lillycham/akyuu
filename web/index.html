@@ -411,6 +411,9 @@ const Akyuu = (function () {
   const SVGNS = 'http://www.w3.org/2000/svg';
   const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   const GC_ALL_LIMIT = 2000;
+  // A store up to this size starts with the whole graph. A bigger one starts
+  // with the window of the server: the newest heads and two hops.
+  const SHOW_ALL_LIMIT = 1000;
 
   function el(tag, attrs, children) {
     const e = document.createElement(tag);
@@ -437,6 +440,7 @@ const Akyuu = (function () {
     const d = new Date(t);
     return isNaN(d) ? String(t) : d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
   }
+  function count(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
   function kindFill(kind) { const h = kindHue(kind); return dark ? 'hsl(' + h + ',32%,30%)' : 'hsl(' + h + ',60%,86%)'; }
   function idLink(id, label) {
     return el('span', { class: 'link mono', text: label || shortId(id), title: id, onclick: () => selectNode(id) });
@@ -926,7 +930,7 @@ const Akyuu = (function () {
     $('gc-summary').replaceChildren(
       el('span', { text: 'A run now (' + fmtTime(plan.now) + ') would collect' }),
       el('span', { class: 'pill ' + (doomed.size ? 'bad' : 'good'), text: String(doomed.size) }),
-      el('span', { class: 'muted', text: 'of ' + plan.nodes + ' memories. ' + young.size + ' are young, ' + refRoots.size + ' are held by refs, ' + pins.size + ' are pinned. Policy: keep ' +
+      el('span', { class: 'muted', text: 'of ' + plan.nodes + ' memories. ' + count(young.size, 'is young', 'are young') + ', ' + count(refRoots.size, 'is held by a ref', 'are held by refs') + ', ' + count(pins.size, 'is pinned', 'are pinned') + '. Policy: keep ' +
         plan.policy.keepGenerations + ' older generations, a grace period of ' + ago(plan.policy.gracePeriod * 1000) + ', trash for ' + ago(plan.policy.trashTTL * 1000) + '.' }));
     legend($('gc-legend'), state.gcGraph, [el('span', { text: 'red dashed: in the plan · ◆ held by a ref · ● pinned · ✦ young. Click a node to see why it stays.' })]);
     const rootMark = (id) => [refRoots.has(id) ? '◆' : '', pins.has(id) ? '●' : '', young.has(id) ? '✦' : ''].join('');
@@ -1023,9 +1027,17 @@ const Akyuu = (function () {
     }
   }
 
+  function firstWindow(s) {
+    if (state.stats === null && s && typeof s.memories === 'number') {
+      state.window.all = s.memories <= SHOW_ALL_LIMIT;
+      $('w-all').checked = state.window.all;
+    }
+  }
+
   async function poll() {
     try {
       const s = await state.src.stats();
+      firstWindow(s);
       const changed = !state.stats || s.fingerprint !== state.stats.fingerprint;
       state.stats = s;
       setStatus('live · ' + s.memories + ' memories · ' + s.refs + ' refs · checked ' + new Date().toLocaleTimeString());
@@ -1062,7 +1074,7 @@ const Akyuu = (function () {
       setInterval(poll, 2000);
     } else {
       setStatus('static export, made at ' + fmtTime(state.src.generatedAt));
-      state.src.stats().then(s => { state.stats = s; }).catch(() => {}).then(refreshAll).then(() => switchTab(first));
+      state.src.stats().then(s => { firstWindow(s); state.stats = s; }).catch(() => {}).then(refreshAll).then(() => switchTab(first));
     }
   }
 
