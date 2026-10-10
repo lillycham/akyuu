@@ -8,6 +8,7 @@ import GraphTests (graphTests)
 import MemoryTests (memoryTests)
 import RefsTests (refsTests)
 import StoreTests (storeTests)
+import SupersedeTests (supersedeTests)
 import Control.Exception (IOException, bracket, try)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -22,7 +23,7 @@ import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests]
+main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests]
 
 idTests :: TestTree
 idTests =

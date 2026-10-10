@@ -38,6 +38,7 @@ library
                    , Akyuu.Store
                    , Akyuu.Refs
                    , Akyuu.Cache
+                   , Akyuu.Supersede
 
     default-extensions: ImportQualifiedPost
                       , OverloadedStrings
@@ -54,6 +55,7 @@ test-suite akyuu-test
                     , MemoryTests
                     , RefsTests
                     , StoreTests
+                    , SupersedeTests
                     , Support
     build-depends:    base >=4 && <5
                     , akyuu
