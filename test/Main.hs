@@ -14,6 +14,7 @@ import MCPTests (mcpTests)
 import RefsTests (refsTests)
 import StoreTests (storeTests)
 import SupersedeTests (supersedeTests)
+import WebTests (webTests)
 import Control.Exception (IOException, bracket, try)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -28,7 +29,7 @@ import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, opsTests, cliTests, mcpTests]
+main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, opsTests, cliTests, mcpTests, webTests]
 
 idTests :: TestTree
 idTests =

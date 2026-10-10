@@ -4,6 +4,7 @@ version:            0.1.0.0
 synopsis:           akyuu
 license:            NONE
 build-type:         Simple
+extra-source-files: web/index.html
 
 common shared
     default-language: GHC2021
@@ -55,6 +56,8 @@ library
                    , Akyuu.MCP
                    , Akyuu.Web.Model
                    , Akyuu.Web.Read
+                   , Akyuu.Web.Page
+                   , Akyuu.Web.Api
                    , Akyuu.CLI
 
     default-extensions: ImportQualifiedPost
@@ -78,6 +81,7 @@ test-suite akyuu-test
                     , RefsTests
                     , StoreTests
                     , SupersedeTests
+                    , WebTests
                     , Support
     build-depends:    base >=4 && <5
                     , akyuu
