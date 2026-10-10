@@ -91,6 +91,12 @@ rootCases =
           isLeft r @?= True
           after' <- treeOf root
           after' @?= before
+    , testCase "a .DS_Store of a file manager does not make the root non-empty" $
+        withTempDir $ \dir -> do
+          _ <- right =<< openStore dir
+          writeFile (dir </> ".DS_Store") "x"
+          writeFile (dir </> "store" </> ".DS_Store") "x"
+          checkEmptyRoot dir >>= (@?= Right ())
     , testCase "a directory with another file is refused" $
         withTempDir $ \dir -> do
           writeFile (dir </> "notes.txt") "mine"

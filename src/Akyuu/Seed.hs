@@ -41,7 +41,7 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE, withExceptT)
 import Data.Bifunctor (first)
 import Data.IORef (modifyIORef', newIORef, readIORef)
-import Data.List (isPrefixOf, sortOn)
+import Data.List (isPrefixOf, isSuffixOf, sortOn)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -122,9 +122,9 @@ checkEmptyRoot root = do
       | n `elem` ["store", "trash", "refs", "pins", "tombstones"] = do
           files <- deep (dir </> n)
           pure (map ((n </>)) (filter (not . lockOrTemp) files))
-      | n == "gc.lock" || "cache.sqlite" `isPrefixOf` n = pure []
+      | n == "gc.lock" || n == ".DS_Store" || "cache.sqlite" `isPrefixOf` n = pure []
       | otherwise = pure [n]
-    lockOrTemp f = f == ".lock" || ".tmp" `isPrefixOf` f
+    lockOrTemp f = f == ".lock" || ".tmp" `isPrefixOf` f || ".DS_Store" `isSuffixOf` f
     -- Every file under a directory, by its path from that directory.
     deep d = do
       isDir <- doesDirectoryExist d

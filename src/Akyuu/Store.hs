@@ -61,7 +61,7 @@ import Data.ByteString.Base16 qualified as B16
 import Data.Maybe (mapMaybe)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory, renameFile)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, renameFile)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Error (isDoesNotExistError)
 import System.Posix.Files (touchFile)
@@ -191,13 +191,25 @@ toId n = do
 -- The function reads the names of the files. It does not open them. It
 -- skips a name that is not an 'Id', for example a temporary file that
 -- 'add' has not renamed yet. The order of the result is not defined.
+--
+-- It also skips each entry of @store@ that is not a shard directory: a name
+-- that is not two hex digits, or one that is not a directory. A file manager
+-- can put such files there, for example @.DS_Store@ on macOS. A shard that
+-- vanishes during the read counts as empty.
 list :: Store -> IO (Either StoreError [Id])
 list s = tryIO $ do
-  shards <- listDirectory (root </> "store")
-  names <- concat <$> mapM (\d -> listDirectory (root </> "store" </> d)) shards
+  entries <- listDirectory base
+  shards <- filterM (doesDirectoryExist . (base </>)) (filter isShardName entries)
+  names <- concat <$> mapM (\d -> ifMissing [] (listDirectory (base </> d))) shards
   pure $ mapMaybe toId names
   where
-    root = storeRoot s
+    base = storeRoot s </> "store"
+    ifMissing d act = either (const d) id <$> tryJust (guard . isDoesNotExistError) act
+
+-- | Is this the name of a shard directory: two hex digits, lower case? This
+-- is the form that 'shard' makes.
+isShardName :: FilePath -> Bool
+isShardName n = length n == 2 && all (`elem` ("0123456789abcdef" :: String)) n
 
 -- | Check that the file of an object hashes to its own name. The function
 -- reads the file in chunks, so it uses the same memory for any file size.

@@ -286,6 +286,22 @@ listTests =
           BS.writeFile (dir </> "junk.tmp") "x"
           BS.writeFile (dir </> ".tmp-1234") "x"
           list s >>= (@?= Right [i])
+    , testCase "skips a file in the store directory, such as .DS_Store" $
+        withStore $ \s _ -> do
+          i <- right =<< add s (mem "a")
+          let base = storeRoot s </> "store"
+          BS.writeFile (base </> ".DS_Store") "x"
+          BS.writeFile (base </> "README") "x"
+          BS.writeFile (takeDirectory (objectPath s i) </> ".DS_Store") "x"
+          list s >>= (@?= Right [i])
+    , testCase "skips a directory whose name is not a shard" $
+        withStore $ \s _ -> do
+          i <- right =<< add s (mem "a")
+          let base = storeRoot s </> "store"
+          -- Not two hex digits: too long, upper case, or not hex.
+          mapM_ (\d -> createDirectoryIfMissing True (base </> d) >> BS.writeFile (base </> d </> fileName i) "x")
+            ["notes", "AB", "zz", "a"]
+          list s >>= (@?= Right [i])
     , testCase "does not list an object that is in the trash" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
