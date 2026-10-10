@@ -46,6 +46,7 @@ module Akyuu.Store
 
     -- * Layout
     objectPath,
+    trashPath,
   )
 where
 
@@ -226,6 +227,13 @@ orNotFound i act = do
 fileName :: Id -> FilePath
 fileName i = T.unpack (render i) <> ".md"
 
+-- | The path of an object in the @trash@ directory: @trash/sha256-….md@.
+--
+-- This function is pure: it does not look at the disk. "Akyuu.GC" uses it to
+-- find and delete old files in @trash@.
+trashPath :: Store -> Id -> FilePath
+trashPath s i = storeRoot s </> "trash" </> fileName i
+
 -- | Move an object to the @trash@ directory. GC uses this function to sweep.
 --
 -- The object leaves @store@ but it is not deleted, so a mistake can be
@@ -233,8 +241,10 @@ fileName i = T.unpack (render i) <> ".md"
 -- The deletion of old files in @trash@ is not part of this function.
 trash :: Store -> Id -> IO (Either StoreError ())
 trash s i = do
-  createDirectoryIfMissing True (takeDirectory to)
-  orNotFound i $ renameFile from to
+  made <- tryIO $ createDirectoryIfMissing True (takeDirectory to)
+  case made of
+    Left e -> pure (Left e)
+    Right () -> orNotFound i $ renameFile from to
   where
     from = objectPath s i
-    to = storeRoot s </> "trash" </> fileName i
+    to = trashPath s i
