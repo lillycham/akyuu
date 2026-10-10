@@ -34,7 +34,9 @@ import Akyuu.Memory (renderMemory)
 import Akyuu.Ops
 import Akyuu.Query (SearchOptions (..), defaultSearchOptions)
 import Akyuu.Refs (Expected (..), Name, Ref (current), mkName, nameText)
+import Akyuu.MCP qualified as MCP
 import Akyuu.Render
+import Control.Monad.IO.Class (liftIO)
 import Control.Exception (IOException, try)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT)
 import Data.Bifunctor (first)
@@ -103,6 +105,8 @@ data Command
     GC Bool
   | Reindex
   | Verify
+  | -- | Serve MCP on stdin and stdout until stdin ends.
+    Mcp
   deriving (Eq, Show)
 
 -- Parsing --------------------------------------------------------------
@@ -163,6 +167,7 @@ commandParser =
       <> cmd "gc" gcP "Collect the memories that nothing needs."
       <> cmd "reindex" (pure Reindex) "Throw the cache away and read the whole store again."
       <> cmd "verify" (pure Verify) "Check every object, edge and ref of the store."
+      <> cmd "mcp" (pure Mcp) "Serve the MCP protocol (JSON-RPC 2.0) on stdin and stdout, until stdin ends."
   where
     cmd n p d = command n (info p (progDesc d))
     addP = Add <$> memoryArgs
@@ -256,7 +261,8 @@ newMemory a = do
   b <- ExceptT (readBody (argBody a))
   pure NewMemory {newKind = argKind a, newAgent = argAgent a, newEdges = argEdges a, newBody = b}
 
--- | Run one command against an open store.
+-- | Run one command against an open store. 'Mcp' takes over stdin and
+-- stdout until stdin ends, and then prints nothing more.
 runCommand :: Env -> Command -> IO (Either AkyuuError Output)
 runCommand env c = runExceptT $ case c of
   Add a -> do
@@ -284,6 +290,9 @@ runCommand env c = runExceptT $ case c of
   Verify -> do
     r <- ExceptT (verifyStore env)
     pure (Output (encodeUtf8 (T.unlines (verifyLines r))) (verifyOk r))
+  Mcp -> do
+    liftIO (MCP.serve env)
+    pure (Output BS.empty True)
 
 -- | The program: parse the arguments, find the store, run the command.
 main :: IO ()

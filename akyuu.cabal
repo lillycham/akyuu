@@ -46,6 +46,7 @@ library
                    , Akyuu.Error
                    , Akyuu.Ops
                    , Akyuu.Render
+                   , Akyuu.MCP
                    , Akyuu.CLI
 
     default-extensions: ImportQualifiedPost
@@ -64,6 +65,7 @@ test-suite akyuu-test
                     , MemoryTests
                     , OpsTests
                     , CLITests
+                    , MCPTests
                     , QueryTests
                     , RefsTests
                     , StoreTests
@@ -78,6 +80,7 @@ test-suite akyuu-test
                     , filelock
                     , filepath
                     , optparse-applicative
+                    , aeson
                     , sqlite-simple
                     , tasty
                     , tasty-hunit
