@@ -400,7 +400,51 @@ const Akyuu = (function () {
     return Math.round(s / 86400) + ' days';
   }
 
-  const pure = { shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago };
+  // The size of a node and of the grid.
+  const NODE_W = 210, NODE_H = 36, ROW_H = 60, LEFT = 96, TOP = 28;
+
+  // The ref tags of one node, in two rows: the current values, and the older
+  // generations. At most MAX_GHOSTS older ones are drawn. Then a "+N" tag
+  // follows, and its title names the rest.
+  const TAG_H = 15, TAG_GAP = 4, MAX_GHOSTS = 2, COL_GAP = 40;
+  const tagWidth = (label) => 8 + label.length * 6.2;
+  const rowWidth = (row) => row.reduce((s, t) => s + tagWidth(t.label) + TAG_GAP, 0);
+  function tagRows(list) {
+    const cur = [], old = [];
+    for (const m of list) {
+      if (m.gen === 0) cur.push({ label: m.name, ghost: false, title: 'ref ' + m.name + ' (current)' });
+      else old.push({ label: m.name + '~' + m.gen, ghost: true, title: 'ref ' + m.name + ', generation ' + m.gen + (m.kept ? ' (GC keeps it)' : ' (GC does not keep it)') });
+    }
+    if (old.length > MAX_GHOSTS) {
+      const rest = old.slice(MAX_GHOSTS);
+      old.length = MAX_GHOSTS;
+      old.push({ label: '+' + rest.length, ghost: true, title: 'more older generations: ' + rest.map(t => t.label).join(', ') });
+    }
+    return [cur, old];
+  }
+
+  // The x position of each column, and the tags of each node.
+  //
+  // The tags sit to the right of their node. Each column is as wide as its
+  // widest tags, so a tag never reaches the memories of the next column.
+  // This function is pure: the tests call it with no document.
+  function columnGeometry(graph, lay, marks) {
+    const tagsOf = new Map();
+    const colW = new Array(lay.columns).fill(NODE_W + COL_GAP);
+    for (const n of graph.nodes) {
+      const rows = tagRows(marks.get(n.id) || []);
+      tagsOf.set(n.id, rows);
+      const w = Math.max(rowWidth(rows[0]), rowWidth(rows[1]));
+      const p = lay.pos.get(n.id);
+      if (w > 0 && p) colW[p.col] = Math.max(colW[p.col], NODE_W + 6 + w + COL_GAP);
+    }
+    const colX = [];
+    let acc = LEFT;
+    for (let c = 0; c < lay.columns; c++) { colX.push(acc); acc += colW[c]; }
+    return { colX: colX, width: acc + COL_GAP, tagsOf: tagsOf };
+  }
+
+  const pure = { shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, NODE_W, COL_GAP };
   if (typeof document === 'undefined') return pure;
 
   // ---------------------------------------------------------------------
@@ -550,7 +594,6 @@ const Akyuu = (function () {
 
   // ---- the graph drawing ---------------------------------------------------
 
-  const NODE_W = 210, NODE_H = 36, COL_W = 250, ROW_H = 60, LEFT = 96, TOP = 28;
   const EDGE_VAR = { supersedes: 'sup', about: 'about', 'derived-from': 'derived', refines: 'refines' };
 
   function drawGraph(container, graph, opts) {
@@ -561,7 +604,8 @@ const Akyuu = (function () {
       return;
     }
     const lay = layout(graph);
-    const width = LEFT + lay.columns * COL_W + 220;
+    const marks = opts.marks || new Map();
+    const { colX, width, tagsOf } = columnGeometry(graph, lay, marks);
     const height = TOP + lay.rows * ROW_H + 30;
     const root = svg('svg', { class: 'graph', width: width, height: height, viewBox: '0 0 ' + width + ' ' + height });
     const defs = svg('defs');
@@ -572,7 +616,7 @@ const Akyuu = (function () {
     }
     root.appendChild(defs);
     const byId = new Map(graph.nodes.map(n => [n.id, n]));
-    const xy = (id) => { const p = lay.pos.get(id); return { x: LEFT + p.col * COL_W, y: TOP + p.row * ROW_H }; };
+    const xy = (id) => { const p = lay.pos.get(id); return { x: colX[p.col], y: TOP + p.row * ROW_H }; };
 
     // The time axis: a label where the day changes.
     let lastDay = null;
@@ -605,7 +649,6 @@ const Akyuu = (function () {
       edgeLayer.appendChild(p);
     }
 
-    const marks = opts.marks || new Map();
     const seeds = new Set(opts.seeds || []);
     for (const id of lay.order) {
       const n = byId.get(id);
@@ -631,18 +674,20 @@ const Akyuu = (function () {
       g.appendChild(svg('text', { x: 10, y: 29, text: bottom }));
       g.appendChild(svg('title', { text: id + '\n' + (n.line || n.status) }));
       if (opts.doomed && opts.doomed.has(id)) g.appendChild(svg('rect', { class: 'doomed', x: -3, y: -3, width: NODE_W + 6, height: NODE_H + 6, rx: 9 }));
-      // Ref names: the current value solid, the older values as ghosts.
-      let tx = NODE_W + 6;
-      for (const m of (marks.get(id) || []).slice(0, 4)) {
-        const label = m.gen === 0 ? m.name : m.name + '~' + m.gen;
-        const w = 8 + label.length * 6.2;
-        const tag = svg('g', { class: 'reftag' + (m.gen === 0 ? '' : ' ghost'), transform: 'translate(' + tx + ',' + (m.gen === 0 ? 2 : 19) + ')' });
-        tag.appendChild(svg('rect', { width: w, height: 15, rx: 3 }));
-        tag.appendChild(svg('text', { x: 4, y: 11, text: label }));
-        tag.appendChild(svg('title', { text: m.gen === 0 ? 'ref ' + m.name + ' (current)' : 'ref ' + m.name + ', generation ' + m.gen + (m.kept ? ' (GC keeps it)' : ' (GC does not keep it)') }));
-        g.appendChild(tag);
-        tx += w + 4;
-      }
+      // Ref names: the current values solid in the first row, the older
+      // values as ghosts in the second row.
+      tagsOf.get(id).forEach((row, r) => {
+        let tx = NODE_W + 6;
+        for (const t of row) {
+          const w = tagWidth(t.label);
+          const tag = svg('g', { class: 'reftag' + (t.ghost ? ' ghost' : ''), transform: 'translate(' + tx + ',' + (r === 0 ? 2 : 19) + ')' });
+          tag.appendChild(svg('rect', { width: w, height: TAG_H, rx: 3 }));
+          tag.appendChild(svg('text', { x: 4, y: 11, text: t.label }));
+          tag.appendChild(svg('title', { text: t.title }));
+          g.appendChild(tag);
+          tx += w + TAG_GAP;
+        }
+      });
       if (opts.rootMark) {
         const t = opts.rootMark(id);
         if (t) g.appendChild(svg('text', { class: 'rootmark', x: NODE_W - 4, y: -4, 'text-anchor': 'end', text: t }));
