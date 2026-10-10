@@ -2,10 +2,1074 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
 <title>akyuu</title>
+<style>
+:root {
+  --bg: #f7f7f5; --fg: #1d2129; --muted: #6b7280; --line: #d6d6d1; --card: #ffffff;
+  --accent: #2f5fb3; --warn: #b3261e; --ok: #2e7d4f; --grey: #c9cbcf; --grey-fg: #4b5058;
+  --sup: #3b3f46; --about: #2f6fd6; --derived: #2e8b57; --refines: #8e44ad;
+  --hit: #f2c94c; --planned: #d93025; --sel: #111827;
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171b; --fg: #e6e6e3; --muted: #9aa0aa; --line: #34373e; --card: #1e2127;
+    --accent: #7aa2f7; --warn: #f28b82; --ok: #81c995; --grey: #3a3d44; --grey-fg: #b8bcc4;
+    --sup: #c9ccd2; --about: #7aa2f7; --derived: #81c995; --refines: #c58af9;
+    --hit: #e0b84a; --planned: #f28b82; --sel: #f5f5f5;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); height: 100vh; display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 16px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--card); }
+header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+nav button { background: none; border: 1px solid transparent; color: var(--fg); padding: 5px 10px; border-radius: 6px; cursor: pointer; font: inherit; }
+nav button[aria-selected="true"] { border-color: var(--line); background: var(--bg); font-weight: 600; }
+#status { margin-left: auto; color: var(--muted); font-size: 12px; }
+#status.bad { color: var(--warn); }
+main { flex: 1; display: flex; min-height: 0; }
+.view { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: auto; }
+.view[hidden] { display: none; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.toolbar label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.toolbar select, .toolbar input, .toolbar button, .panel button {
+  font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 3px 7px; }
+.toolbar input[type=number] { width: 4.5em; }
+button { cursor: pointer; }
+.chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 12px; padding: 1px 4px 1px 9px; background: var(--card); }
+.chip button { border: none; background: none; padding: 0 4px; }
+.notice { padding: 6px 14px; color: var(--muted); font-size: 13px; }
+.notice.warn { color: var(--warn); }
+.canvas { flex: 1; overflow: auto; position: relative; }
+svg.graph { display: block; }
+svg.graph text { font: 12px system-ui, sans-serif; fill: var(--fg); }
+svg.graph .date { fill: var(--muted); font-size: 11px; }
+svg.graph .node { cursor: pointer; }
+svg.graph .node rect.box { stroke: var(--line); stroke-width: 1; }
+svg.graph .node.superseded rect.box { fill: var(--grey); }
+svg.graph .node.superseded text { fill: var(--grey-fg); }
+svg.graph .node.missing rect.box, svg.graph .node.pruned rect.box { fill: none; stroke-dasharray: 5 4; stroke-width: 1.5; }
+svg.graph .node.missing rect.box { stroke: var(--warn); }
+svg.graph .node.pruned rect.box { stroke: var(--muted); }
+svg.graph .node.cacheonly rect.box { stroke: var(--warn); stroke-width: 2; }
+svg.graph .node.dim { opacity: .18; }
+svg.graph .node.selected rect.box { stroke: var(--sel); stroke-width: 2.5; }
+svg.graph .node.seed rect.box { stroke: var(--accent); stroke-width: 2; }
+svg.graph .halo { fill: none; stroke: var(--hit); stroke-width: 6; opacity: .8; }
+svg.graph .doomed { fill: none; stroke: var(--planned); stroke-width: 2.5; stroke-dasharray: 3 3; }
+svg.graph .edge { fill: none; }
+svg.graph .edge.supersedes { stroke: var(--sup); stroke-width: 2.6; }
+svg.graph .edge.about { stroke: var(--about); stroke-width: 1.2; stroke-dasharray: 6 4; }
+svg.graph .edge.derived-from { stroke: var(--derived); stroke-width: 1.2; stroke-dasharray: 2 3; }
+svg.graph .edge.refines { stroke: var(--refines); stroke-width: 1.2; }
+svg.graph .edge.dim { opacity: .12; }
+svg.graph .reftag rect { fill: var(--card); stroke: var(--accent); }
+svg.graph .reftag text { fill: var(--accent); font-size: 11px; }
+svg.graph .reftag.ghost rect { stroke-dasharray: 3 2; stroke: var(--muted); fill: none; }
+svg.graph .reftag.ghost text { fill: var(--muted); }
+svg.graph .rootmark { font-size: 11px; fill: var(--accent); }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 4px 14px 8px; color: var(--muted); font-size: 12px; }
+.legend svg { vertical-align: middle; display: inline-block; }
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line); vertical-align: middle; margin-right: 3px; }
+aside.panel { width: 380px; flex: none; border-left: 1px solid var(--line); background: var(--card); overflow: auto; padding: 12px 14px; }
+aside.panel[hidden] { display: none; }
+.panel h2 { font-size: 14px; margin: 8px 0 6px; word-break: break-all; }
+.panel .close { float: right; }
+.panel table { border-collapse: collapse; margin: 6px 0; width: 100%; }
+.panel td { padding: 2px 6px 2px 0; vertical-align: top; }
+.panel td:first-child { color: var(--muted); white-space: nowrap; }
+pre.body { white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; max-height: 45vh; overflow: auto; font: 12.5px/1.45 ui-monospace, Menlo, monospace; }
+.mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.link { color: var(--accent); cursor: pointer; }
+.link:hover { text-decoration: underline; }
+.pill { display: inline-block; border-radius: 9px; padding: 0 7px; margin: 0 3px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); }
+.pill.good { color: var(--ok); border-color: var(--ok); }
+.pill.bad { color: var(--warn); border-color: var(--warn); }
+.pad { padding: 10px 14px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; padding: 12px 14px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.card h3 { margin: 0 0 6px; font-size: 14px; }
+ol.timeline { list-style: none; margin: 0; padding: 0 0 0 12px; border-left: 2px solid var(--line); }
+ol.timeline li { margin: 0 0 6px; padding-left: 8px; position: relative; }
+ol.timeline li::before { content: ""; position: absolute; left: -19px; top: 6px; width: 10px; height: 10px; border-radius: 50%; background: var(--card); border: 2px solid var(--accent); }
+ol.timeline li.notkept::before { border-color: var(--muted); border-style: dashed; }
+ul.plain, ol.plain { list-style: none; margin: 4px 0; padding: 0; }
+ul.plain li, ol.plain li { margin: 2px 0; word-break: break-word; }
+.hits li { margin: 0 0 10px; }
+mark { background: var(--hit); color: #111; border-radius: 2px; padding: 0 1px; }
+.muted { color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; padding: 12px 14px; }
+table.list { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+table.list td, table.list th { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+.split .canvas { min-height: 320px; max-height: 65vh; }
+</style>
 </head>
 <body>
-<p>The page comes in the next step.</p>
+<header>
+  <h1>akyuu</h1>
+  <nav id="tabs" role="tablist">
+    <button data-tab="graph" aria-selected="true">Graph</button>
+    <button data-tab="refs">Refs</button>
+    <button data-tab="search">Search</button>
+    <button data-tab="gc">GC</button>
+    <button data-tab="health">Health</button>
+  </nav>
+  <span id="status">loading</span>
+</header>
+<main>
+  <section class="view" id="view-graph">
+    <div class="toolbar">
+      <label>kind <select id="f-kind"></select></label>
+      <label>agent <select id="f-agent"></select></label>
+      <label>ref <select id="f-ref"></select></label>
+      <label title="Edges away from the start nodes">hops <input id="w-hops" type="number" min="0" max="10" value="2"></label>
+      <label title="How many of the newest heads to start from">heads <input id="w-limit" type="number" min="1" max="100000" value="200"></label>
+      <label><input id="w-all" type="checkbox"> show all</label>
+      <span id="w-focus"></span>
+    </div>
+    <div class="notice" id="graph-notice"></div>
+    <div class="legend" id="legend"></div>
+    <div class="canvas" id="graph-canvas"></div>
+  </section>
+  <section class="view" id="view-refs" hidden>
+    <div class="notice" id="refs-notice"></div>
+    <div class="cards" id="refs-list"></div>
+  </section>
+  <section class="view" id="view-search" hidden>
+    <form class="toolbar" id="search-form">
+      <input id="s-q" type="search" placeholder="words to find" size="36" autocomplete="off">
+      <label>limit <input id="s-limit" type="number" min="1" max="100" value="10"></label>
+      <label>hops <input id="s-hops" type="number" min="0" max="5" value="1"></label>
+      <button type="submit">Search</button>
+      <button type="button" id="s-show">Show hits in the graph</button>
+    </form>
+    <div class="notice" id="search-notice"></div>
+    <div class="pad" id="search-results"></div>
+  </section>
+  <section class="view" id="view-gc" hidden>
+    <div class="toolbar" id="gc-summary"></div>
+    <div class="notice" id="gc-notice"></div>
+    <div class="legend" id="gc-legend"></div>
+    <div class="split">
+      <div class="canvas" id="gc-canvas"></div>
+      <div class="grid2" id="gc-lists"></div>
+    </div>
+  </section>
+  <section class="view" id="view-health" hidden>
+    <div class="toolbar"><button id="h-run" type="button">Run verify again</button><span class="muted" id="h-note"></span></div>
+    <div class="grid2" id="health"></div>
+  </section>
+  <aside class="panel" id="panel" hidden></aside>
+</main>
 <!--AKYUU-DATA-->
+<script>
+'use strict';
+const Akyuu = (function () {
+  // ---------------------------------------------------------------------
+  // Pure helpers. They use no DOM, so node can run them for a check.
+  // ---------------------------------------------------------------------
+
+  // The first 12 hex digits of an id, for labels.
+  function shortId(id) {
+    return typeof id === 'string' && id.indexOf('sha256-') === 0 ? id.slice(7, 19) : String(id);
+  }
+
+  function hashText(t) {
+    let h = 2166136261;
+    for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  }
+
+  // A colour for each kind of memory, always the same for the same kind.
+  function kindHue(kind) { return kind == null ? 0 : (hashText(kind) % 360); }
+
+  function timeOf(t) {
+    if (t == null) return null;
+    const n = Date.parse(t);
+    return isNaN(n) ? null : n;
+  }
+
+  // Newest first by created time, then by id. A node with no time goes last.
+  function newestFirst(a, b) {
+    const ta = timeOf(a.created), tb = timeOf(b.created);
+    if (ta !== tb) {
+      if (ta == null) return 1;
+      if (tb == null) return -1;
+      return tb - ta;
+    }
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  }
+
+  // The window of a whole graph, as /api/graph makes it. The static export
+  // has the whole graph and uses this to show the same window.
+  function windowGraph(full, opts) {
+    const o = Object.assign({ focus: null, hops: 2, limit: 200, all: false }, opts || {});
+    const windowInfo = { focus: o.focus, hops: o.hops, limit: o.limit, all: !!o.all };
+    const total = { nodes: full.nodes.length, edges: full.edges.length };
+    if (o.all) {
+      return { nodes: full.nodes, edges: full.edges, truncated: false, total: total,
+               shown: total, seeds: [], window: windowInfo };
+    }
+    const adj = new Map();
+    for (const n of full.nodes) adj.set(n.id, []);
+    for (const e of full.edges) {
+      if (adj.has(e.src)) adj.get(e.src).push(e.dst);
+      if (adj.has(e.dst)) adj.get(e.dst).push(e.src);
+    }
+    let seeds;
+    if (o.focus) {
+      seeds = [o.focus];
+    } else {
+      seeds = full.nodes.filter(n => n.status === 'head').sort(newestFirst).slice(0, o.limit).map(n => n.id);
+    }
+    const shown = new Set(seeds);
+    let frontier = seeds.slice();
+    for (let h = 0; h < o.hops && frontier.length; h++) {
+      const next = [];
+      for (const id of frontier) {
+        for (const x of adj.get(id) || []) {
+          if (!shown.has(x)) { shown.add(x); next.push(x); }
+        }
+      }
+      frontier = next;
+    }
+    const nodes = full.nodes.filter(n => shown.has(n.id));
+    const edges = full.edges.filter(e => shown.has(e.src) && shown.has(e.dst));
+    return { nodes: nodes, edges: edges,
+             truncated: nodes.length < total.nodes || edges.length < total.edges,
+             total: total, shown: { nodes: nodes.length, edges: edges.length },
+             seeds: seeds, window: windowInfo };
+  }
+
+  // A small binary heap, for the order of the layout.
+  function Heap(less) { this.a = []; this.less = less; }
+  Heap.prototype.push = function (x) {
+    const a = this.a; a.push(x); let i = a.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (!this.less(a[i], a[p])) break; [a[i], a[p]] = [a[p], a[i]]; i = p; }
+  };
+  Heap.prototype.pop = function () {
+    const a = this.a; const top = a[0]; const last = a.pop();
+    if (a.length) {
+      a[0] = last; let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < a.length && this.less(a[l], a[m])) m = l;
+        if (r < a.length && this.less(a[r], a[m])) m = r;
+        if (m === i) break; [a[i], a[m]] = [a[m], a[i]]; i = m;
+      }
+    }
+    return top;
+  };
+  Heap.prototype.size = function () { return this.a.length; };
+
+  // The layered layout. Edges point from a newer memory to an older one, so
+  // the graph is a DAG and needs no force layout:
+  //
+  // 1. Order: newest first, but a node always comes after every node that
+  //    points at it (Kahn's algorithm, with the created time as priority).
+  // 2. Chains: a memory and the memory that it supersedes share a lane. In a
+  //    fork the first (newest) source keeps the lane, and the other one gets
+  //    its own: the fork is a branch.
+  // 3. Columns: the chains are packed into columns. Two chains share a
+  //    column when their spans in the order do not overlap.
+  // 4. Rows: go down the order. A node starts a new row if its column is
+  //    taken in the current row, or if it has an edge to a node in it. So
+  //    time runs down and every edge points down.
+  function layout(graph) {
+    const byId = new Map();
+    for (const n of graph.nodes) byId.set(n.id, n);
+    const ins = new Map(), outs = new Map();
+    for (const n of graph.nodes) { ins.set(n.id, []); outs.set(n.id, []); }
+    for (const e of graph.edges) {
+      if (!byId.has(e.src) || !byId.has(e.dst) || e.src === e.dst) continue;
+      outs.get(e.src).push(e);
+      ins.get(e.dst).push(e);
+    }
+    // 1. order
+    const waiting = new Map();
+    for (const n of graph.nodes) waiting.set(n.id, new Set(ins.get(n.id).map(e => e.src)).size);
+    const heap = new Heap((a, b) => newestFirst(a, b) < 0);
+    for (const n of graph.nodes) if (waiting.get(n.id) === 0) heap.push(n);
+    const order = [];
+    const placed = new Set();
+    while (heap.size()) {
+      const n = heap.pop();
+      if (placed.has(n.id)) continue;
+      placed.add(n.id); order.push(n);
+      const seen = new Set();
+      for (const e of outs.get(n.id)) {
+        if (seen.has(e.dst)) continue;
+        seen.add(e.dst);
+        const w = waiting.get(e.dst) - 1;
+        waiting.set(e.dst, w);
+        if (w === 0) heap.push(byId.get(e.dst));
+      }
+    }
+    if (order.length < graph.nodes.length) {
+      // A cycle cannot happen with content addresses, but do not lose nodes.
+      for (const n of graph.nodes.slice().sort(newestFirst)) if (!placed.has(n.id)) { placed.add(n.id); order.push(n); }
+    }
+    const seq = new Map();
+    order.forEach((n, i) => seq.set(n.id, i));
+    // 2. chains
+    const chainOf = new Map();
+    const chains = [];
+    for (const n of order) {
+      if (!chainOf.has(n.id)) { chainOf.set(n.id, chains.length); chains.push([n.id]); }
+      const c = chainOf.get(n.id);
+      const olds = outs.get(n.id).filter(e => e.kind === 'supersedes' && !chainOf.has(e.dst))
+        .map(e => e.dst).sort((a, b) => seq.get(a) - seq.get(b));
+      if (olds.length) { chainOf.set(olds[0], c); chains[c].push(olds[0]); }
+    }
+    // 3. columns
+    const spans = chains.map((ids, c) => {
+      let from = Infinity, to = -Infinity;
+      for (const id of ids) { const s = seq.get(id); if (s < from) from = s; if (s > to) to = s; }
+      return { c: c, from: from, to: to };
+    }).sort((a, b) => a.from - b.from || a.c - b.c);
+    const colEnd = [];
+    const colOfChain = new Map();
+    for (const sp of spans) {
+      let col = colEnd.findIndex(end => end < sp.from);
+      if (col < 0) { col = colEnd.length; colEnd.push(sp.to); } else colEnd[col] = sp.to;
+      colOfChain.set(sp.c, col);
+    }
+    // 4. rows
+    const pos = new Map();
+    let row = 0, usedCols = new Set(), inRow = new Set();
+    for (const n of order) {
+      const col = colOfChain.get(chainOf.get(n.id));
+      const linked = ins.get(n.id).some(e => inRow.has(e.src));
+      if (usedCols.has(col) || linked) { row++; usedCols = new Set(); inRow = new Set(); }
+      usedCols.add(col); inRow.add(n.id);
+      pos.set(n.id, { col: col, row: row, seq: seq.get(n.id) });
+    }
+    return { pos: pos, order: order.map(n => n.id), columns: Math.max(colEnd.length, 1),
+             rows: order.length ? row + 1 : 0, chains: chains };
+  }
+
+  // Search the bodies of the static export: every word must be in the body,
+  // case does not matter. The snippet marks the words with [ and ], like the
+  // text index of the server. Current memories come first.
+  function staticSearch(memories, q, limit) {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const hits = [];
+    if (!words.length) return { query: q, matches: [], context: [] };
+    for (const id of Object.keys(memories)) {
+      const m = memories[id];
+      if (!m || typeof m.body !== 'string') continue;
+      const low = m.body.toLowerCase();
+      if (!words.every(w => low.indexOf(w) >= 0)) continue;
+      const first = Math.min.apply(null, words.map(w => low.indexOf(w)));
+      const from = Math.max(0, first - 40), to = Math.min(m.body.length, first + 80);
+      let snip = m.body.slice(from, to);
+      for (const w of words) {
+        const re = new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        snip = snip.replace(re, s => '[' + s + ']');
+      }
+      const supersededBy = (m.edges || []).filter(e => e.dir === 'in' && e.kind === 'supersedes').map(e => e.id);
+      hits.push({ id: id, snippet: (from > 0 ? '...' : '') + snip.replace(/\s+/g, ' ') + (to < m.body.length ? '...' : ''),
+                  supersededBy: supersededBy, created: m.created });
+    }
+    hits.sort((a, b) => (a.supersededBy.length > 0) - (b.supersededBy.length > 0) || newestFirst(a, b));
+    return { query: q, matches: hits.slice(0, limit).map(h => ({ id: h.id, snippet: h.snippet, supersededBy: h.supersededBy })), context: [] };
+  }
+
+  // Split a snippet at [ and ] into plain and marked parts.
+  function snippetParts(s) {
+    const parts = [];
+    const re = /\[([^\]]*)\]/g;
+    let last = 0, m;
+    while ((m = re.exec(s)) !== null) {
+      if (m.index > last) parts.push({ text: s.slice(last, m.index), mark: false });
+      parts.push({ text: m[1], mark: true });
+      last = re.lastIndex;
+    }
+    if (last < s.length) parts.push({ text: s.slice(last), mark: false });
+    return parts;
+  }
+
+  function ago(ms) {
+    const s = Math.round(ms / 1000);
+    if (s < 90) return s + ' s';
+    if (s < 5400) return Math.round(s / 60) + ' min';
+    if (s < 172800) return Math.round(s / 3600) + ' h';
+    return Math.round(s / 86400) + ' days';
+  }
+
+  const pure = { shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago };
+  if (typeof document === 'undefined') return pure;
+
+  // ---------------------------------------------------------------------
+  // The page. Data from the store goes into the DOM only as text
+  // (textContent, setAttribute), never as HTML: a memory body is untrusted.
+  // ---------------------------------------------------------------------
+
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const GC_ALL_LIMIT = 2000;
+
+  function el(tag, attrs, children) {
+    const e = document.createElement(tag);
+    for (const k in attrs || {}) {
+      if (k === 'text') e.textContent = attrs[k];
+      else if (k === 'onclick') e.addEventListener('click', attrs[k]);
+      else if (k === 'class') e.className = attrs[k];
+      else e.setAttribute(k, attrs[k]);
+    }
+    for (const c of children || []) if (c != null) e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    return e;
+  }
+  function svg(tag, attrs, children) {
+    const e = document.createElementNS(SVGNS, tag);
+    for (const k in attrs || {}) {
+      if (k === 'text') e.textContent = attrs[k];
+      else e.setAttribute(k, attrs[k]);
+    }
+    for (const c of children || []) if (c != null) e.appendChild(c);
+    return e;
+  }
+  function fmtTime(t) {
+    if (!t) return '';
+    const d = new Date(t);
+    return isNaN(d) ? String(t) : d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
+  }
+  function kindFill(kind) { const h = kindHue(kind); return dark ? 'hsl(' + h + ',32%,30%)' : 'hsl(' + h + ',60%,86%)'; }
+  function idLink(id, label) {
+    return el('span', { class: 'link mono', text: label || shortId(id), title: id, onclick: () => selectNode(id) });
+  }
+
+  // ---- data sources -----------------------------------------------------
+
+  function liveSource() {
+    async function get(path, params) {
+      const qs = params ? '?' + new URLSearchParams(params).toString() : '';
+      const r = await fetch(path + qs, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+      let j = null;
+      try { j = await r.json(); } catch (e) { j = null; }
+      if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+      return j;
+    }
+    return {
+      live: true,
+      stats: () => get('/api/stats'),
+      graph: (w) => {
+        const p = { hops: String(w.hops), limit: String(w.limit) };
+        if (w.focus) p.focus = w.focus;
+        if (w.all) p.all = '1';
+        return get('/api/graph', p);
+      },
+      memory: (id) => get('/api/memory/' + encodeURIComponent(id)),
+      refs: () => get('/api/refs'),
+      search: (q, limit, hops) => get('/api/search', { q: q, limit: String(limit), hops: String(hops) }),
+      plan: () => get('/api/gc/plan'),
+      explain: (id) => get('/api/gc/explain/' + encodeURIComponent(id)),
+      trash: () => get('/api/trash'),
+      verify: () => get('/api/verify'),
+    };
+  }
+
+  function staticSource(data) {
+    const part = (v) => {
+      if (v && typeof v === 'object' && typeof v.error === 'string' && Object.keys(v).length === 1) throw new Error(v.error);
+      return v;
+    };
+    const found = (v, what) => { if (v == null) throw new Error(what + ' is not in this export.'); return v; };
+    return {
+      live: false,
+      generatedAt: data.generatedAt,
+      stats: async () => part(data.stats),
+      graph: async (w) => windowGraph(part(data.graph), w),
+      memory: async (id) => found(part(data.memories)[id], 'This memory'),
+      refs: async () => part(data.refs),
+      search: async (q, limit) => staticSearch(part(data.memories), q, limit),
+      plan: async () => part(data.plan),
+      explain: async (id) => found(part(data.explain)[id], 'The GC explanation of this id'),
+      trash: async () => part(data.trash),
+      verify: async () => part(data.verify),
+    };
+  }
+
+  // ---- state ------------------------------------------------------------
+
+  const state = {
+    src: null,
+    tab: 'graph',
+    stats: null,
+    graph: null,
+    gcGraph: null,
+    refs: null,
+    plan: null,
+    trash: null,
+    window: { focus: null, hops: 2, limit: 200, all: false },
+    filter: { kind: '', agent: '', ref: '' },
+    selected: null,
+    hits: new Set(),
+    lastSearch: null,
+    verifyFingerprint: null,
+  };
+
+  const $ = (id) => document.getElementById(id);
+
+  function setStatus(text, bad) {
+    const s = $('status');
+    s.textContent = text;
+    s.className = bad ? 'bad' : '';
+  }
+
+  // id -> [{name, gen, kept}]: the refs that point at each id now or before.
+  function refMarks() {
+    const marks = new Map();
+    const refs = state.refs && state.refs.refs ? state.refs.refs : [];
+    const kept = state.refs ? state.refs.kept : 0;
+    for (const r of refs) {
+      if (r.error) continue;
+      [r.current].concat(r.history || []).forEach((id, gen) => {
+        if (!marks.has(id)) marks.set(id, []);
+        marks.get(id).push({ name: r.name, gen: gen, kept: gen <= kept });
+      });
+    }
+    return marks;
+  }
+
+  function nodeInfo(id) {
+    for (const g of [state.graph, state.gcGraph]) {
+      if (!g) continue;
+      const n = g.nodes.find(x => x.id === id);
+      if (n) return n;
+    }
+    return null;
+  }
+
+  // ---- the graph drawing ---------------------------------------------------
+
+  const NODE_W = 210, NODE_H = 36, COL_W = 250, ROW_H = 60, LEFT = 96, TOP = 28;
+  const EDGE_VAR = { supersedes: 'sup', about: 'about', 'derived-from': 'derived', refines: 'refines' };
+
+  function drawGraph(container, graph, opts) {
+    const keep = { left: container.scrollLeft, top: container.scrollTop };
+    container.replaceChildren();
+    if (!graph || !graph.nodes.length) {
+      container.appendChild(el('p', { class: 'pad muted', text: 'Nothing to draw: the store has no memories, or the window is empty.' }));
+      return;
+    }
+    const lay = layout(graph);
+    const width = LEFT + lay.columns * COL_W + 220;
+    const height = TOP + lay.rows * ROW_H + 30;
+    const root = svg('svg', { class: 'graph', width: width, height: height, viewBox: '0 0 ' + width + ' ' + height });
+    const defs = svg('defs');
+    for (const k of Object.keys(EDGE_VAR)) {
+      const m = svg('marker', { id: 'arrow-' + k, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' });
+      m.appendChild(svg('path', { d: 'M0,0 L10,5 L0,10 z', style: 'fill: var(--' + EDGE_VAR[k] + '); stroke: none' }));
+      defs.appendChild(m);
+    }
+    root.appendChild(defs);
+    const byId = new Map(graph.nodes.map(n => [n.id, n]));
+    const xy = (id) => { const p = lay.pos.get(id); return { x: LEFT + p.col * COL_W, y: TOP + p.row * ROW_H }; };
+
+    // The time axis: a label where the day changes.
+    let lastDay = null;
+    const rowsSeen = new Set();
+    for (const id of lay.order) {
+      const p = lay.pos.get(id);
+      if (rowsSeen.has(p.row)) continue;
+      rowsSeen.add(p.row);
+      const n = byId.get(id);
+      const day = n.created ? String(n.created).slice(0, 10) : null;
+      if (day && day !== lastDay) {
+        root.appendChild(svg('text', { class: 'date', x: 8, y: TOP + p.row * ROW_H + NODE_H / 2 + 4, text: day }));
+        lastDay = day;
+      }
+    }
+
+    const dimmed = (n) => opts.dim ? !!opts.dim(n) : false;
+    const edgeLayer = svg('g');
+    root.appendChild(edgeLayer);
+    for (const e of graph.edges) {
+      if (!lay.pos.has(e.src) || !lay.pos.has(e.dst)) continue;
+      const a = xy(e.src), b = xy(e.dst);
+      const sx = a.x + NODE_W / 2, sy = a.y + NODE_H, tx = b.x + NODE_W / 2, ty = b.y;
+      let d;
+      if (Math.abs(sx - tx) < 1) d = 'M' + sx + ',' + sy + ' L' + tx + ',' + (ty - 1);
+      else { const my = (ty - sy) / 2; d = 'M' + sx + ',' + sy + ' C' + sx + ',' + (sy + my) + ' ' + tx + ',' + (ty - my) + ' ' + tx + ',' + (ty - 1); }
+      const dim = dimmed(byId.get(e.src)) && dimmed(byId.get(e.dst));
+      const p = svg('path', { d: d, class: 'edge ' + e.kind + (dim ? ' dim' : ''), 'marker-end': 'url(#arrow-' + e.kind + ')' });
+      p.appendChild(svg('title', { text: e.kind + ': ' + shortId(e.src) + ' → ' + shortId(e.dst) }));
+      edgeLayer.appendChild(p);
+    }
+
+    const marks = opts.marks || new Map();
+    const seeds = new Set(opts.seeds || []);
+    for (const id of lay.order) {
+      const n = byId.get(id);
+      const { x, y } = xy(id);
+      const cls = ['node', n.status];
+      if (n.inStore === false && n.status !== 'missing' && n.status !== 'pruned') cls.push('cacheonly');
+      if (dimmed(n)) cls.push('dim');
+      if (state.selected === id) cls.push('selected');
+      if (seeds.has(id) && state.window.focus) cls.push('seed');
+      const g = svg('g', { class: cls.join(' '), transform: 'translate(' + x + ',' + y + ')', 'data-id': id });
+      if (opts.halo && opts.halo.has(id)) g.appendChild(svg('rect', { class: 'halo', x: -5, y: -5, width: NODE_W + 10, height: NODE_H + 10, rx: 10 }));
+      const box = svg('rect', { class: 'box', width: NODE_W, height: NODE_H, rx: 7 });
+      if (n.status === 'head') box.setAttribute('style', 'fill: ' + kindFill(n.kind));
+      g.appendChild(box);
+      if (n.status === 'superseded') g.appendChild(svg('rect', { x: 0, y: 0, width: 5, height: NODE_H, rx: 2, style: 'fill: ' + kindFill(n.kind) }));
+      let top, bottom;
+      if (n.status === 'missing') { top = 'missing target'; bottom = shortId(id); }
+      else if (n.status === 'pruned') { top = 'pruned ' + fmtTime(n.prunedAt).slice(0, 10); bottom = shortId(id); }
+      else { top = (n.kind || '?') + ' · ' + (n.agent || '?') + ' · ' + shortId(id).slice(0, 8); bottom = n.line || '(empty first line)'; }
+      if (bottom.length > 30) bottom = bottom.slice(0, 29) + '…';
+      if (top.length > 34) top = top.slice(0, 33) + '…';
+      g.appendChild(svg('text', { x: 10, y: 14, style: 'font-size: 10.5px; opacity: .75', text: top }));
+      g.appendChild(svg('text', { x: 10, y: 29, text: bottom }));
+      g.appendChild(svg('title', { text: id + '\n' + (n.line || n.status) }));
+      if (opts.doomed && opts.doomed.has(id)) g.appendChild(svg('rect', { class: 'doomed', x: -3, y: -3, width: NODE_W + 6, height: NODE_H + 6, rx: 9 }));
+      // Ref names: the current value solid, the older values as ghosts.
+      let tx = NODE_W + 6;
+      for (const m of (marks.get(id) || []).slice(0, 4)) {
+        const label = m.gen === 0 ? m.name : m.name + '~' + m.gen;
+        const w = 8 + label.length * 6.2;
+        const tag = svg('g', { class: 'reftag' + (m.gen === 0 ? '' : ' ghost'), transform: 'translate(' + tx + ',' + (m.gen === 0 ? 2 : 19) + ')' });
+        tag.appendChild(svg('rect', { width: w, height: 15, rx: 3 }));
+        tag.appendChild(svg('text', { x: 4, y: 11, text: label }));
+        tag.appendChild(svg('title', { text: m.gen === 0 ? 'ref ' + m.name + ' (current)' : 'ref ' + m.name + ', generation ' + m.gen + (m.kept ? ' (GC keeps it)' : ' (GC does not keep it)') }));
+        g.appendChild(tag);
+        tx += w + 4;
+      }
+      if (opts.rootMark) {
+        const t = opts.rootMark(id);
+        if (t) g.appendChild(svg('text', { class: 'rootmark', x: NODE_W - 4, y: -4, 'text-anchor': 'end', text: t }));
+      }
+      g.addEventListener('click', () => (opts.onClick || selectNode)(id));
+      root.appendChild(g);
+    }
+    container.appendChild(root);
+    if (opts.scrollTo && lay.pos.has(opts.scrollTo)) {
+      const p = xy(opts.scrollTo);
+      container.scrollTo({ left: Math.max(0, p.x - 80), top: Math.max(0, p.y - 120) });
+    } else {
+      container.scrollLeft = keep.left;
+      container.scrollTop = keep.top;
+    }
+  }
+
+  function legend(container, graph, extra) {
+    container.replaceChildren();
+    const kinds = graph ? Array.from(new Set(graph.nodes.map(n => n.kind).filter(Boolean))).sort() : [];
+    for (const k of kinds) container.appendChild(el('span', {}, [el('span', { class: 'swatch', style: 'background:' + kindFill(k) }), k]));
+    for (const k of Object.keys(EDGE_VAR)) {
+      const s = svg('svg', { class: 'graph', width: 34, height: 10 });
+      s.appendChild(svg('path', { d: 'M2,5 L32,5', class: 'edge ' + k }));
+      container.appendChild(el('span', {}, [s, ' ' + k]));
+    }
+    container.appendChild(el('span', { text: 'grey: superseded · dashed: pruned or missing target · red outline: only in the cache · tags: refs (dashed: an older value)' }));
+    for (const x of extra || []) container.appendChild(x);
+  }
+
+  // ---- the graph view -------------------------------------------------------
+
+  function fillSelect(sel, values, current) {
+    sel.replaceChildren(el('option', { value: '', text: '(all)' }));
+    for (const v of values) {
+      const o = el('option', { value: v, text: v });
+      if (v === current) o.selected = true;
+      sel.appendChild(o);
+    }
+  }
+
+  function refChain(name) {
+    const r = (state.refs && state.refs.refs || []).find(x => x.name === name);
+    return r && !r.error ? new Set([r.current].concat(r.history || [])) : new Set();
+  }
+
+  function renderGraph(scrollTo) {
+    const g = state.graph;
+    const notice = $('graph-notice');
+    if (!g) return;
+    notice.className = 'notice';
+    const kinds = Array.from(new Set(g.nodes.map(n => n.kind).filter(Boolean))).sort();
+    const agents = Array.from(new Set(g.nodes.map(n => n.agent).filter(Boolean))).sort();
+    const refNames = (state.refs && state.refs.refs || []).map(r => r.name);
+    fillSelect($('f-kind'), kinds, state.filter.kind);
+    fillSelect($('f-agent'), agents, state.filter.agent);
+    fillSelect($('f-ref'), refNames, state.filter.ref);
+    const focus = $('w-focus');
+    focus.replaceChildren();
+    if (state.window.focus) {
+      focus.appendChild(el('span', { class: 'chip' }, ['focus ', idLink(state.window.focus),
+        el('button', { title: 'Clear the focus', text: '×', onclick: () => { state.window.focus = null; loadGraph(); } })]));
+    }
+    const shown = g.shown || { nodes: g.nodes.length, edges: g.edges.length };
+    let text = 'Showing ' + shown.nodes + ' of ' + g.total.nodes + ' nodes and ' + shown.edges + ' of ' + g.total.edges + ' edges';
+    if (g.window && !g.window.all) text += g.window.focus ? ', within ' + g.window.hops + ' hops of the focus.' : ', from the ' + g.window.limit + ' newest heads and ' + g.window.hops + ' hops.';
+    else text += '.';
+    if (g.truncated) text += ' Some nodes are not shown: use "show all", or focus on a node.';
+    notice.textContent = text;
+    const chain = state.filter.ref ? refChain(state.filter.ref) : null;
+    const dim = (n) => (state.filter.kind && n.kind !== state.filter.kind) ||
+      (state.filter.agent && n.agent !== state.filter.agent) || (chain && !chain.has(n.id));
+    const anyFilter = state.filter.kind || state.filter.agent || state.filter.ref;
+    drawGraph($('graph-canvas'), g, { marks: refMarks(), seeds: g.seeds, halo: state.hits, dim: anyFilter ? dim : null, scrollTo: scrollTo });
+    legend($('legend'), g, state.hits.size ? [el('span', {}, [el('span', { class: 'swatch', style: 'background: var(--hit)' }), 'search hit'])] : []);
+  }
+
+  async function loadGraph() {
+    try {
+      state.graph = await state.src.graph(state.window);
+      renderGraph(state.window.focus);
+    } catch (e) {
+      $('graph-notice').className = 'notice warn';
+      $('graph-notice').textContent = 'The graph could not be read: ' + e.message;
+    }
+  }
+
+  // ---- the side panel ---------------------------------------------------------
+
+  function panel() { const p = $('panel'); p.hidden = false; p.replaceChildren(); return p; }
+  function closePanel() { $('panel').hidden = true; state.selected = null; redrawCurrent(); }
+
+  function selectNode(id) {
+    state.selected = id;
+    if (state.tab === 'gc') showExplain(id); else showMemory(id);
+    redrawCurrent();
+  }
+
+  function panelHeader(p, title, id) {
+    p.appendChild(el('button', { class: 'close', text: 'Close', onclick: closePanel }));
+    p.appendChild(el('h2', { text: title }));
+    if (id) p.appendChild(el('div', { class: 'mono muted', text: id }));
+  }
+
+  async function showMemory(id) {
+    const p = panel();
+    panelHeader(p, 'Memory ' + shortId(id), id);
+    p.appendChild(el('p', { class: 'muted', text: 'loading' }));
+    let m;
+    try { m = await state.src.memory(id); } catch (e) {
+      if (state.selected !== id) return;
+      const q = panel();
+      panelHeader(q, 'Not a stored memory', id);
+      const n = nodeInfo(id);
+      if (n && n.status === 'pruned') q.appendChild(el('p', { text: 'GC deleted this memory at ' + fmtTime(n.prunedAt) + '. A newer memory still has an edge to it.' }));
+      else if (n && n.status === 'missing') q.appendChild(el('p', { text: 'An edge points here, but the store has no such object and no tombstone. Verify reports this as missing.' }));
+      q.appendChild(el('p', { class: 'muted', text: e.message }));
+      q.appendChild(actions(id));
+      return;
+    }
+    if (state.selected !== id) return;
+    const q = panel();
+    panelHeader(q, m.kind + ' by ' + m.agent, m.id);
+    const pill = el('span', { class: 'pill' + (m.status === 'head' ? ' good' : ''), text: m.status === 'head' ? 'current' : 'superseded' });
+    const refsText = m.refs.length ? m.refs.map(r => r.name + (r.generation ? ' (generation ' + r.generation + ')' : ' (current)')).join(', ') : 'none';
+    const rows = [
+      ['status', pill],
+      ['created', fmtTime(m.created)],
+      ['in store since', m.storedAt ? fmtTime(m.storedAt) : '?'],
+      ['refs', refsText],
+    ];
+    const t = el('table');
+    for (const [k, v] of rows) t.appendChild(el('tr', {}, [el('td', { text: k }), el('td', {}, [v])]));
+    q.appendChild(t);
+    q.appendChild(actions(id));
+    q.appendChild(el('pre', { class: 'body', text: m.body }));
+    q.appendChild(el('h2', { text: 'Edges' }));
+    if (!m.edges.length) q.appendChild(el('p', { class: 'muted', text: 'This memory has no edges.' }));
+    const ul = el('ul', { class: 'plain' });
+    for (const e of m.edges) {
+      const n = nodeInfo(e.id);
+      ul.appendChild(el('li', {}, [
+        el('span', { class: 'muted', text: e.dir === 'out' ? 'this ' + e.kind + ' ' : e.kind + ' this: ' }),
+        idLink(e.id), n && n.line ? el('span', { class: 'muted', text: ' ' + n.line.slice(0, 50) }) : null,
+        n && (n.status === 'missing' || n.status === 'pruned') ? el('span', { class: 'pill bad', text: n.status }) : null]));
+    }
+    q.appendChild(ul);
+  }
+
+  function actions(id) {
+    return el('p', {}, [
+      el('button', { text: 'Focus the graph here', onclick: () => { state.window.focus = id; state.window.all = false; $('w-all').checked = false; switchTab('graph'); loadGraph(); } }),
+      ' ',
+      el('button', { text: 'Why is this alive?', onclick: () => showExplain(id) }),
+    ]);
+  }
+
+  async function showExplain(id) {
+    const p = panel();
+    panelHeader(p, 'GC: ' + shortId(id), id);
+    let w;
+    try { w = await state.src.explain(id); } catch (e) {
+      p.appendChild(el('p', { text: e.message }));
+      return;
+    }
+    const verdict = !w.isNode ? 'This is not a memory in the graph.' : w.live ? 'GC keeps it.' : 'Nothing keeps it: the next GC run moves it to trash.';
+    p.appendChild(el('p', {}, [el('span', { class: 'pill ' + (w.live ? 'good' : 'bad'), text: w.live ? 'live' : 'garbage' }), ' ' + verdict]));
+    if (w.storedAt) p.appendChild(el('p', { class: 'muted', text: 'In the store since ' + fmtTime(w.storedAt) }));
+    p.appendChild(el('h2', { text: w.reasons.length ? 'Why it stays' : 'No reason to stay' }));
+    const ul = el('ul', { class: 'plain' });
+    for (const r of w.reasons) {
+      let item = null;
+      if (r.reason === 'ref') item = el('li', { text: 'A ref holds it: ' + (r.refs.length ? r.refs.map(x => x.name + (x.generation ? ' (generation ' + x.generation + ')' : ' (current)')).join(', ') : 'a ref value') + '.' });
+      else if (r.reason === 'pin') item = el('li', { text: 'It is pinned.' });
+      else if (r.reason === 'temp') item = el('li', { text: 'It is a temporary root of the run.' });
+      else if (r.reason === 'young') item = el('li', { text: 'It is young: ' + (r.ageSeconds == null ? 'its age is not known' : 'it came into the store ' + ago(r.ageSeconds * 1000) + ' ago') + ', and the grace period is ' + ago(r.gracePeriod * 1000) + '.' });
+      else if (r.reason === 'edge') item = el('li', {}, ['The live memory ', idLink(r.from), ' has an ' + r.kind + ' edge to it.']);
+      if (item) ul.appendChild(item);
+    }
+    p.appendChild(ul);
+    if (w.path.length) {
+      p.appendChild(el('h2', { text: 'One chain from a root' }));
+      const ol = el('ol', { class: 'plain' });
+      for (const s of w.path) ol.appendChild(el('li', {}, [idLink(s.id), el('span', { class: 'muted', text: ' — ' + s.kind + ' →' })]));
+      ol.appendChild(el('li', {}, [idLink(id), el('span', { class: 'muted', text: ' (this one)' })]));
+      p.appendChild(ol);
+    }
+    p.appendChild(el('p', {}, [el('button', { text: 'Show the memory', onclick: () => showMemory(id) })]));
+  }
+
+  // ---- refs ------------------------------------------------------------------------
+
+  function renderRefs() {
+    const box = $('refs-list');
+    box.replaceChildren();
+    if (!state.refs) return;
+    $('refs-notice').textContent = 'Each ref, newest value first. GC keeps the current value and ' + state.refs.kept + ' older generations.';
+    if (!state.refs.refs.length) box.appendChild(el('p', { class: 'muted', text: 'There are no refs.' }));
+    for (const r of state.refs.refs) {
+      const card = el('div', { class: 'card' }, [el('h3', { text: r.name })]);
+      if (r.error) { card.appendChild(el('p', { class: 'pill bad', text: r.error })); box.appendChild(card); continue; }
+      const ol = el('ol', { class: 'timeline' });
+      [r.current].concat(r.history).forEach((id, gen) => {
+        const n = nodeInfo(id);
+        const kept = gen <= state.refs.kept;
+        ol.appendChild(el('li', { class: kept ? '' : 'notkept' }, [
+          el('span', { class: 'muted', text: gen === 0 ? 'current ' : 'generation ' + gen + ' ' }),
+          idLink(id),
+          n ? el('span', { text: ' ' + (n.line || '').slice(0, 60) }) : null,
+          n && n.status !== 'head' && n.status !== 'superseded' ? el('span', { class: 'pill bad', text: n.status }) : null,
+          kept ? null : el('span', { class: 'pill', text: 'GC does not keep it' })]));
+      });
+      card.appendChild(ol);
+      box.appendChild(card);
+    }
+  }
+
+  // ---- search ----------------------------------------------------------------------
+
+  async function runSearch(ev) {
+    if (ev) ev.preventDefault();
+    const q = $('s-q').value.trim();
+    const out = $('search-results');
+    if (!q) return;
+    out.replaceChildren(el('p', { class: 'muted', text: 'searching' }));
+    let r;
+    try { r = await state.src.search(q, Number($('s-limit').value) || 10, Number($('s-hops').value) || 0); }
+    catch (e) { out.replaceChildren(el('p', { class: 'pill bad', text: e.message })); return; }
+    state.lastSearch = r;
+    state.hits = new Set(r.matches.map(m => m.id));
+    out.replaceChildren();
+    if (!r.matches.length) out.appendChild(el('p', { class: 'muted', text: 'No matches.' }));
+    const ul = el('ul', { class: 'plain hits' });
+    for (const m of r.matches) {
+      const snip = el('div');
+      for (const part of snippetParts(m.snippet)) snip.appendChild(part.mark ? el('mark', { text: part.text }) : document.createTextNode(part.text));
+      const li = el('li', {}, [idLink(m.id), m.supersededBy.length ? el('span', { class: 'pill', text: 'old version' }) : el('span', { class: 'pill good', text: 'current' }), snip]);
+      for (const s of m.supersededBy) li.appendChild(el('div', { class: 'muted' }, ['superseded by ', idLink(s)]));
+      ul.appendChild(li);
+    }
+    out.appendChild(ul);
+    if (r.context && r.context.length) {
+      out.appendChild(el('h3', { text: 'Near the hits (' + r.context.length + ')' }));
+      const c = el('ul', { class: 'plain' });
+      for (const id of r.context) c.appendChild(el('li', {}, [idLink(id)]));
+      out.appendChild(c);
+    }
+  }
+
+  function searchNotice() {
+    const n = $('search-notice');
+    n.className = 'notice';
+    if (!state.src.live) { n.textContent = 'This is a static export: the page searches the bodies itself. It needs every word, and it does not match word stems.'; return; }
+    const s = state.stats;
+    if (s && s.cached !== s.memories) {
+      n.className = 'notice warn';
+      n.textContent = 'The text index (the cache) has ' + s.cached + ' memories, and the store has ' + s.memories + '. This view does not sync the cache. Run akyuu search or akyuu reindex to bring it up to date. See Health.';
+    } else n.textContent = 'Search uses the text index of the cache. Current memories come before old versions.';
+  }
+
+  // ---- GC ----------------------------------------------------------------------------
+
+  async function loadGC() {
+    try {
+      const [plan, trash] = await Promise.all([state.src.plan(), state.src.trash()]);
+      state.plan = plan;
+      state.trash = trash;
+      const total = state.graph ? state.graph.total.nodes : 0;
+      if (state.graph && (state.graph.window.all || total > GC_ALL_LIMIT)) state.gcGraph = state.graph;
+      else state.gcGraph = await state.src.graph({ focus: null, hops: 0, limit: 1, all: true });
+      $('gc-notice').textContent = state.gcGraph === state.graph && state.graph && !state.graph.window.all
+        ? 'The store is big, so the drawing shows the window of the Graph tab. The lists below have every planned memory.' : '';
+      renderGC();
+    } catch (e) {
+      $('gc-summary').replaceChildren(el('span', { class: 'pill bad', text: 'The GC data could not be read: ' + e.message }));
+    }
+  }
+
+  function renderGC() {
+    const plan = state.plan, trash = state.trash;
+    if (!plan) return;
+    const doomed = new Set(plan.planned);
+    const young = new Set(plan.young);
+    const refRoots = new Set(plan.roots.refs), pins = new Set(plan.roots.pins);
+    $('gc-summary').replaceChildren(
+      el('span', { text: 'A run now (' + fmtTime(plan.now) + ') would collect' }),
+      el('span', { class: 'pill ' + (doomed.size ? 'bad' : 'good'), text: String(doomed.size) }),
+      el('span', { class: 'muted', text: 'of ' + plan.nodes + ' memories. ' + young.size + ' are young, ' + refRoots.size + ' are held by refs, ' + pins.size + ' are pinned. Policy: keep ' +
+        plan.policy.keepGenerations + ' older generations, a grace period of ' + ago(plan.policy.gracePeriod * 1000) + ', trash for ' + ago(plan.policy.trashTTL * 1000) + '.' }));
+    legend($('gc-legend'), state.gcGraph, [el('span', { text: 'red dashed: in the plan · ◆ held by a ref · ● pinned · ✦ young. Click a node to see why it stays.' })]);
+    const rootMark = (id) => [refRoots.has(id) ? '◆' : '', pins.has(id) ? '●' : '', young.has(id) ? '✦' : ''].join('');
+    drawGraph($('gc-canvas'), state.gcGraph, { marks: refMarks(), doomed: doomed, rootMark: rootMark, onClick: (id) => { state.selected = id; showExplain(id); renderGC(); } });
+    const lists = $('gc-lists');
+    lists.replaceChildren();
+    const card = (title, rows, empty, head) => {
+      const c = el('div', { class: 'card' }, [el('h3', { text: title + ' (' + rows.length + ')' })]);
+      if (!rows.length) { c.appendChild(el('p', { class: 'muted', text: empty })); return c; }
+      const t = el('table', { class: 'list' });
+      if (head) t.appendChild(el('tr', {}, head.map(h => el('th', { text: h }))));
+      for (const r of rows) t.appendChild(el('tr', {}, r.map(x => el('td', {}, [x]))));
+      c.appendChild(t);
+      return c;
+    };
+    const shortSpan = (id) => el('span', { class: 'mono', text: shortId(id), title: id });
+    lists.appendChild(card('In the plan', plan.planned.map(id => [idLink(id), (nodeInfo(id) || {}).line || '']), 'A run now collects nothing.'));
+    if (trash) {
+      lists.appendChild(card('Trash', trash.trash.map(t => [shortSpan(t.id), fmtTime(t.movedAt), fmtTime(t.deleteAfter)]), 'The trash is empty.', ['id', 'moved', 'deleted after']));
+      lists.appendChild(card('Tombstones', trash.tombstones.map(t => [shortSpan(t.id), fmtTime(t.prunedAt)]), 'GC has deleted nothing yet.', ['id', 'pruned']));
+      lists.appendChild(card('Pins', trash.pins.map(t => [idLink(t.id), t.inStore ? 'in the store' : el('span', { class: 'pill bad', text: 'not in the store' })]), 'Nothing is pinned.'));
+    }
+  }
+
+  // ---- health ------------------------------------------------------------------------
+
+  async function loadHealth() {
+    const box = $('health');
+    box.replaceChildren(el('p', { class: 'pad muted', text: 'Verify reads and hashes every object. This can take a while on a big store.' }));
+    let v;
+    try { v = await state.src.verify(); } catch (e) { box.replaceChildren(el('p', { class: 'pill bad', text: e.message })); return; }
+    state.verifyFingerprint = state.stats ? state.stats.fingerprint : '';
+    $('h-note').textContent = state.src.live ? ' Verified at ' + new Date().toLocaleTimeString() + '.' : ' From the export.';
+    box.replaceChildren();
+    const list = (title, items, render, emptyText, bad) => {
+      const c = el('div', { class: 'card' }, [el('h3', {}, [title + ' ', el('span', { class: 'pill ' + (items.length ? (bad ? 'bad' : '') : 'good'), text: String(items.length) })])]);
+      if (!items.length) c.appendChild(el('p', { class: 'muted', text: emptyText }));
+      const ul = el('ul', { class: 'plain' });
+      for (const x of items.slice(0, 200)) ul.appendChild(el('li', {}, render(x)));
+      if (items.length > 200) ul.appendChild(el('li', { class: 'muted', text: '… and ' + (items.length - 200) + ' more' }));
+      c.appendChild(ul);
+      return c;
+    };
+    const s = state.stats || {};
+    const num = (x) => (x == null ? '?' : String(x));
+    box.appendChild(el('div', { class: 'card' }, [
+      el('h3', {}, ['Verify ', el('span', { class: 'pill ' + (v.ok ? 'good' : 'bad'), text: v.ok ? 'ok' : 'problems found' })]),
+      el('p', { text: 'Checked ' + v.checked + ' objects. The store has ' + v.counts.stored + ' objects and the cache ' + v.counts.cached + ' memories. Refs: ' + num(s.refs) +
+        ', pins: ' + num(s.pins) + ', trash: ' + num(s.trash) + ', tombstones: ' + num(s.tombstones) + '.' })]));
+    box.appendChild(el('div', { class: 'card' }, [
+      el('h3', {}, ['Cache and store ', el('span', { class: 'pill ' + (v.drift.inSync ? 'good' : 'bad'), text: v.drift.inSync ? 'in sync' : 'drift' })]),
+      el('p', { class: 'muted', text: v.drift.inSync ? 'The cache has exactly the memories of the store.' :
+        'The cache does not match the store. akyuu search, gc and reindex bring it up to date. This view does not.' })]));
+    const ids = (x) => [idLink(x)];
+    box.appendChild(list('Only in the store, not in the cache', v.drift.storeOnly, ids, 'None.', true));
+    box.appendChild(list('Only in the cache, not in the store', v.drift.cacheOnly, ids, 'None.', true));
+    box.appendChild(list('Corrupt objects', v.corrupt, ids, 'None: every object hashes to its name.', true));
+    box.appendChild(list('Unreadable objects', v.unreadable, (x) => [idLink(x.id), ' ' + x.why], 'None.', true));
+    box.appendChild(list('Missing edge targets', v.missing, ids, 'None.', true));
+    box.appendChild(list('Pruned edge targets (this is normal)', v.pruned, ids, 'None.', false));
+    box.appendChild(list('Bad refs', v.badRefs, (x) => [x.name + ': ' + x.why], 'None.', true));
+    box.appendChild(list('Refs to a missing object', v.refsToMissing, (x) => [x.name + ' → ', idLink(x.id)], 'None.', true));
+  }
+
+  // ---- tabs, polling, start ------------------------------------------------------------
+
+  const TABS = ['graph', 'refs', 'search', 'gc', 'health'];
+
+  function switchTab(tab) {
+    state.tab = tab;
+    for (const b of document.querySelectorAll('#tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === tab));
+    for (const v of document.querySelectorAll('.view')) v.hidden = v.id !== 'view-' + tab;
+    if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab);
+    if (tab === 'gc') loadGC();
+    if (tab === 'health' && state.verifyFingerprint === null) loadHealth();
+    if (tab === 'search') searchNotice();
+    if (tab === 'refs') renderRefs();
+    if (tab === 'graph') renderGraph();
+  }
+
+  function redrawCurrent() {
+    if (state.tab === 'graph') renderGraph();
+    else if (state.tab === 'gc') renderGC();
+  }
+
+  async function refreshAll() {
+    try { state.refs = await state.src.refs(); } catch (e) { state.refs = { kept: 0, refs: [] }; }
+    await loadGraph();
+    if (state.tab === 'refs') renderRefs();
+    if (state.tab === 'gc') await loadGC();
+    if (state.tab === 'search') searchNotice();
+    if (state.tab === 'health' && state.verifyFingerprint !== null && state.verifyFingerprint !== (state.stats && state.stats.fingerprint)) {
+      $('h-note').textContent = ' The store changed after this report. Run verify again to see the change.';
+    }
+  }
+
+  async function poll() {
+    try {
+      const s = await state.src.stats();
+      const changed = !state.stats || s.fingerprint !== state.stats.fingerprint;
+      state.stats = s;
+      setStatus('live · ' + s.memories + ' memories · ' + s.refs + ' refs · checked ' + new Date().toLocaleTimeString());
+      if (changed) await refreshAll();
+    } catch (e) {
+      setStatus('the server is not reachable: ' + e.message, true);
+    }
+  }
+
+  function init() {
+    const dataEl = document.getElementById('akyuu-data');
+    state.src = dataEl ? staticSource(JSON.parse(dataEl.textContent)) : liveSource();
+    for (const b of document.querySelectorAll('#tabs button')) b.addEventListener('click', () => switchTab(b.dataset.tab));
+    $('f-kind').addEventListener('change', (e) => { state.filter.kind = e.target.value; renderGraph(); });
+    $('f-agent').addEventListener('change', (e) => { state.filter.agent = e.target.value; renderGraph(); });
+    $('f-ref').addEventListener('change', (e) => { state.filter.ref = e.target.value; renderGraph(); });
+    const num = (id, lo, hi, d) => { const n = Math.round(Number($(id).value)); return isNaN(n) ? d : Math.min(hi, Math.max(lo, n)); };
+    $('w-hops').addEventListener('change', () => { state.window.hops = num('w-hops', 0, 10, 2); loadGraph(); });
+    $('w-limit').addEventListener('change', () => { state.window.limit = num('w-limit', 1, 100000, 200); loadGraph(); });
+    $('w-all').addEventListener('change', (e) => { state.window.all = e.target.checked; loadGraph(); });
+    $('search-form').addEventListener('submit', runSearch);
+    $('s-show').addEventListener('click', () => {
+      const first = state.lastSearch && state.lastSearch.matches[0];
+      switchTab('graph');
+      if (first && !(state.graph && state.graph.nodes.some(n => n.id === first.id))) { state.window.focus = first.id; loadGraph(); }
+      else if (first) renderGraph(first.id);
+    });
+    $('h-run').addEventListener('click', loadHealth);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
+    const start = (location.hash || '#graph').slice(1);
+    const first = TABS.indexOf(start) >= 0 ? start : 'graph';
+    if (state.src.live) {
+      poll().then(() => switchTab(first));
+      setInterval(poll, 2000);
+    } else {
+      setStatus('static export, made at ' + fmtTime(state.src.generatedAt));
+      state.src.stats().then(s => { state.stats = s; }).catch(() => {}).then(refreshAll).then(() => switchTab(first));
+    }
+  }
+
+  return Object.assign({ init: init }, pure);
+})();
+if (typeof document !== 'undefined') Akyuu.init();
+if (typeof module !== 'undefined') module.exports = Akyuu;
+</script>
 </body>
 </html>
