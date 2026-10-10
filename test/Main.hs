@@ -13,6 +13,7 @@ import CLITests (cliTests)
 import MCPTests (mcpTests)
 import RefsTests (refsTests)
 import StoreTests (storeTests)
+import SeedTests (seedTests)
 import SupersedeTests (supersedeTests)
 import WebTests (webTests)
 import Control.Exception (IOException, bracket, try)
@@ -29,7 +30,7 @@ import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, opsTests, cliTests, mcpTests, webTests]
+main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, opsTests, cliTests, mcpTests, webTests, seedTests]
 
 idTests :: TestTree
 idTests =

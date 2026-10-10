@@ -54,6 +54,7 @@ library
                    , Akyuu.Ops
                    , Akyuu.Render
                    , Akyuu.MCP
+                   , Akyuu.Seed
                    , Akyuu.Web.Model
                    , Akyuu.Web.Read
                    , Akyuu.Web.Page
@@ -81,6 +82,7 @@ test-suite akyuu-test
                     , QueryTests
                     , RefsTests
                     , StoreTests
+                    , SeedTests
                     , SupersedeTests
                     , WebTests
                     , Support

@@ -42,6 +42,8 @@ import Akyuu.MCP qualified as MCP
 import Akyuu.Web.Page qualified as Page
 import Akyuu.Web.Read qualified as Read
 import Akyuu.Web.Server qualified as Server
+import Akyuu.Seed qualified as Seed
+import Data.Time (getCurrentTime)
 import Akyuu.Render
 import Control.Monad.IO.Class (liftIO)
 import Control.Exception (IOException, try)
@@ -136,6 +138,8 @@ data Command i
     Serve Int
   | -- | Print the web UI as one HTML file, with the data of the store in it.
     Viz
+  | -- | Make the demo store (@seed --demo@), in this directory or the root.
+    Seed (Maybe FilePath)
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
 -- Parsing --------------------------------------------------------------
@@ -201,6 +205,7 @@ commandParser =
       <> cmd "mcp" (pure Mcp) "Serve the MCP protocol (JSON-RPC 2.0) on stdin and stdout, until stdin ends."
       <> cmd "serve" serveP "Serve a read-only web view of the store on 127.0.0.1, and print its address."
       <> cmd "viz" (pure Viz) "Print a read-only web view of the store as one HTML file. It needs no server."
+      <> cmd "seed" seedP "Make a demo store in an empty directory, to try the web view."
   where
     cmd n p d = command n (info p (progDesc d))
     addP = Add <$> memoryArgs
@@ -242,6 +247,9 @@ commandParser =
         <*> many (option kindReader (long "follow" <> metavar "KIND" <> help "Follow only this kind of edge. Repeat for more. The default is all kinds."))
     neighboursP = Neighbours <$> argument idReader (metavar "ID")
     gcP = GC <$> switch (long "dry-run" <> help "Only print what a run would collect. Write nothing.")
+    seedP =
+      flag' () (long "demo" <> help "Make the demo store. This is the only kind of seed.")
+        *> (Seed <$> optional (strOption (long "root" <> metavar "DIR" <> help "The directory of the new store. It must not hold a store with data.")))
     serveP =
       Serve
         <$> option
@@ -381,6 +389,8 @@ runCommand env c = runExceptT $ case c of
   Viz -> do
     v <- liftIO (Read.readBundle env)
     pure (Output (Page.vizPage v) True False)
+  -- 'main' runs seed before it opens a store, so this case is not used.
+  Seed _ -> ExceptT (pure (Left (BadInput "seed makes its own store. It does not run on an open one.")))
   where
     -- The address goes to stdout alone, so a script can read it.
     announce p = do
@@ -399,13 +409,21 @@ main = do
   case parseCli args of
     Success cli -> do
       envRoot <- lookupEnv "AKYUU_ROOT"
-      case resolveRoot (cliRoot cli) envRoot of
+      let seedRoot = case cliCommand cli of
+            Seed r -> r
+            _ -> Nothing
+      case resolveRoot (maybe (cliRoot cli) Just seedRoot) envRoot of
         Left e -> failWith 2 e
         Right root -> do
-          r <-
-            withEnv root $ \env -> runExceptT $ do
-              c <- ExceptT (resolveCommand env (cliCommand cli))
-              ExceptT (runCommand env c)
+          r <- case cliCommand cli of
+            -- seed makes the store, so it runs before withEnv.
+            Seed _ -> do
+              now <- getCurrentTime
+              fmap (ok . Seed.demoLines root) <$> Seed.seedDemo root now
+            _ ->
+              withEnv root $ \env -> runExceptT $ do
+                c <- ExceptT (resolveCommand env (cliCommand cli))
+                ExceptT (runCommand env c)
           case r of
             Left e -> failWith 1 e
             Right o -> do
