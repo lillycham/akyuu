@@ -3,7 +3,7 @@
 Build order, from the bottom up. Each module depends only on the ones above it.
 
 ```
-Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ → GC ✓ → Query → CLI → MCP
+Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ → GC ✓ → Query ✓ → CLI → MCP
 ```
 
 ## Modules
@@ -132,8 +132,18 @@ Not done:
 
 ### Query
 
-- [ ] `search`: FTS hit, then `withinHops` to widen it to a neighbourhood.
-- [ ] Show `neighbours` with the direction (`Out` or `In`) and the kind.
+Decided:
+
+- The pure part is `searchResult :: SearchOptions -> Graph -> [Hit] -> SearchResult` and `neighbourList :: Id -> Graph -> [Neighbour]`.
+  `search` and `neighbours` only read the cache and call them.
+- The results are data (`SearchResult`, `Match`, `Neighbour`). Query makes no text. The CLI and the MCP server render the same values.
+- `SearchOptions` holds the limit, the hops (default 1) and the kinds to follow as a `Set EdgeType`, so it has `Eq` and `Show`.
+- The context is the neighbourhood minus the hits. It can hold a dangling target.
+- Each `Match` holds `matchSupersededBy`: the memories with a `Supersedes` edge to it. Two or more is a fork. Query does not choose (see "Forks" below).
+- Query does not call `Cache.sync`. The caller decides when the cache must match the store.
+
+- [x] `search`: FTS hit, then `withinHops` to widen it to a neighbourhood.
+- [x] Show `neighbours` with the direction (`Out` or `In`) and the kind. `Out` edges come first.
 - [ ] Later: ranking, and embeddings as a derived index keyed by `Id`. They cache perfectly because objects never change.
 
 ### CLI (`app/Main.hs`)
