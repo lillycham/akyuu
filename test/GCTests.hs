@@ -4,7 +4,7 @@ module GCTests (gcTests) where
 
 import Akyuu.Cache (Cache, cachedIds, closeCache, openCache)
 import Akyuu.GC
-import Akyuu.Graph (Edge (..), EdgeType (..), Graph, nodes, reachable, singleton)
+import Akyuu.Graph (Edge (..), EdgeType (..), Graph, nodes, reachable, singleton, successors)
 import Akyuu.Id (Id)
 import Akyuu.Memory (Memory (..))
 import Akyuu.Refs (Expected (..), RefError (CorruptRef), Refs, mkName, openRefs, refPath, setRef)
@@ -36,7 +36,9 @@ gcTests =
     [ retainsTests
     , planTests
     , properties
+    , explainTests
     , tombstoneTests
+    , listingTests
     , pinTests
     , rootTests
     , sweepTests
@@ -203,6 +205,78 @@ properties =
          in planOld r g === nodes g `Set.difference` live
     ]
 
+-- explain --------------------------------------------------------------
+
+explainTests :: TestTree
+explainTests =
+  testGroup
+    "explain"
+    [ testCase "a superseded memory with no root is not live, and has no reasons" $
+        explain pol (obs (allOld pair)) (roots [b]) pair a @?= Why True False [] []
+    , testCase "a ref root is held by the ref, with an empty path" $
+        explain pol (obs (allOld pair)) (roots [b]) pair b @?= Why True True [HeldByRef] []
+    , testCase "lists every reason, roots first and edges last" $
+        let g = build [(a, []), (b, [(About, a)]), (c, [(Refines, a), (Supersedes, a)])]
+            r = (roots [a, b, c]) {rootPins = Set.singleton a, rootTemps = Set.singleton a}
+            ages = Map.fromList [(a, fresh), (b, old), (c, old)]
+         in whyReasons (explain pol (obs ages) r g a)
+              @?= [HeldByRef, HeldByPin, HeldByTemp, IsYoung, RetainedBy About b, RetainedBy Refines c]
+    , testCase "the path is the shortest chain of retaining edges from a root" $
+        let g = build [(a, []), (b, [(About, a)]), (c, [(DerivedFrom, b)]), (x, [(Refines, a)])]
+         in whyPath (explain pol (obs (allOld g)) (roots [c, x]) g a) @?= [(x, Refines)]
+    , testCase "a longer path goes from the root to the id, in order" $
+        let g = build [(a, []), (b, [(About, a)]), (c, [(DerivedFrom, b)])]
+         in whyPath (explain pol (obs (allOld g)) (roots [c]) g a) @?= [(c, DerivedFrom), (b, About)]
+    , testCase "a young node is a reason, and the start of a path" $
+        let g = build [(a, []), (b, [(About, a)])]
+            ages = Map.fromList [(a, old), (b, fresh)]
+         in ( whyReasons (explain pol (obs ages) noRoots g b)
+            , whyPath (explain pol (obs ages) noRoots g a)
+            )
+              @?= ([IsYoung], [(b, About)])
+    , testCase "an id that is not a node is never young" $
+        explain pol (obs Map.empty) noRoots pair x @?= Why False False [] []
+    , testProperty "an id is in plan exactly when it is a node and not live" $ \(Case g r ages) ->
+        conjoin
+          [ (i `Set.member` plan pol (obs ages) r g) === (whyIsNode w && not (whyLive w))
+          | i <- universe
+          , let w = explain pol (obs ages) r g i
+          ]
+    , testProperty "a node is live exactly when it has a reason" $ \(Case g r ages) ->
+        conjoin
+          [ whyLive w === not (null (whyReasons w))
+          | i <- Set.toList (nodes g)
+          , let w = explain pol (obs ages) r g i
+          ]
+    , testProperty "the path starts at a seed and follows retaining edges to the id" $ \(Case g r ages) ->
+        conjoin
+          [ validPath g (seedsOf g r ages) i (whyPath (explain pol (obs ages) r g i))
+          | i <- universe
+          ]
+    , testProperty "a live id has a path exactly when it is not a seed" $ \(Case g r ages) ->
+        conjoin
+          [ not (null (whyPath w)) === (whyLive w && i `Set.notMember` seedsOf g r ages)
+          | i <- universe
+          , let w = explain pol (obs ages) r g i
+          ]
+    ]
+
+-- The seeds of liveness: the roots, and each node that is not old.
+seedsOf :: Graph -> Roots -> Map Id UTCTime -> Set Id
+seedsOf g r ages = allRoots r <> Set.filter (\n -> Map.lookup n ages /= Just old) (nodes g)
+
+-- A path is valid if it is empty, or if its first memory is a seed, each
+-- step is a retaining edge of the graph, and the last step reaches the id.
+validPath :: Graph -> Set Id -> Id -> [(Id, EdgeType)] -> Property
+validPath _ _ _ [] = property True
+validPath g seeds i steps@((s0, _) : _) =
+  counterexample (show steps) $
+    s0 `Set.member` seeds
+      && and
+        [ retains k && t `Set.member` successors k s g
+        | ((s, k), t) <- zip steps (map fst (drop 1 steps) <> [i])
+        ]
+
 -- Tombstones -----------------------------------------------------------
 
 tombstoneTests :: TestTree
@@ -237,6 +311,39 @@ tombstoneTests =
           createDirectoryIfMissing True (dir </> "tombstones")
           BS.writeFile (tombstonePath s a) "junk"
           lookupTombstone s a >>= (@?= Left (CorruptTombstone a (BadTombstone "junk")))
+    ]
+
+-- Listings -------------------------------------------------------------
+
+listingTests :: TestTree
+listingTests =
+  testGroup
+    "listTrash and listTombstones"
+    [ testCase "no directories mean empty lists" $
+        withEnv $ \s _ _ _ -> do
+          listTombstones s >>= (@?= Right [])
+          listTrash s >>= (@?= Right [])
+    , testCase "listTrash gives each object with the time of the move" $
+        withEnv $ \s rs cache _ -> do
+          (i, _) <- supersededPair s rs
+          t <- later
+          _ <- gcOnce s rs cache zeroGen t
+          listTrash s >>= (@?= Right [(i, t)])
+    , testCase "listTombstones gives each tombstone, sorted, and skips other names" $
+        withEnv $ \s rs cache dir -> do
+          (i, _) <- supersededPair s rs
+          t <- later
+          _ <- gcOnce s rs cache zeroGen t
+          let t2 = addUTCTime (trashTTL zeroGen + 60) t
+          _ <- right =<< sweep s zeroGen t2 Set.empty
+          BS.writeFile (dir </> "tombstones" </> ".tmp1") "x"
+          listTombstones s >>= (@?= Right [(i, Tombstone t2)])
+          listTrash s >>= (@?= Right [])
+    , testCase "listTombstones fails on a bad tombstone" $
+        withEnv $ \s _ _ dir -> do
+          createDirectoryIfMissing True (dir </> "tombstones")
+          BS.writeFile (tombstonePath s a) "junk"
+          listTombstones s >>= (@?= Left (CorruptTombstone a (BadTombstone "junk")))
     ]
 
 -- Pins -----------------------------------------------------------------

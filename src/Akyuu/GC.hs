@@ -89,6 +89,11 @@ module Akyuu.GC
     -- * The plan
     plan,
 
+    -- * Why an object stays
+    Reason (..),
+    Why (..),
+    explain,
+
     -- * Inputs from disk
     storedTimes,
     extendGraph,
@@ -117,13 +122,17 @@ module Akyuu.GC
     parseTombstone,
     tombstonePath,
     lookupTombstone,
+    listTombstones,
+
+    -- * Trash
+    listTrash,
   )
 where
 
 import Akyuu.Cache (Cache, CacheError, SyncReport)
 import Akyuu.Cache qualified as Cache
 import Akyuu.Fs (atomicWrite, tryWith)
-import Akyuu.Graph (EdgeType (..), Graph, nodes, reachable, singleton)
+import Akyuu.Graph (EdgeType (..), Graph, nodes, predecessors, reachable, singleton, successors)
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memEdges))
@@ -348,6 +357,114 @@ plan p o r g = ns `Set.difference` live
     ns = nodes g
     fresh = Set.filter (young p o) ns
     live = reachable retains (allRoots r <> fresh) g
+
+-- Why an object stays ---------------------------------------------------
+
+-- | One reason why GC keeps an object.
+--
+-- The order of the constructors is the order in which 'explain' lists the
+-- reasons: the roots first, then the age, then the edges.
+data Reason
+  = -- | A ref holds it: the current value, or a generation that
+    -- 'keepGenerations' keeps. 'Roots' does not say which ref. A caller that
+    -- needs the name can look in the refs.
+    HeldByRef
+  | -- | A pin holds it.
+    HeldByPin
+  | -- | A temporary root of the run holds it.
+    HeldByTemp
+  | -- | It is a node that is younger than 'gracePeriod', or whose age is not
+    -- known.
+    IsYoung
+  | -- | A live memory has a retaining edge of this kind to it. The 'Id' is
+    -- that memory.
+    RetainedBy EdgeType Id
+  deriving (Eq, Ord, Show)
+
+-- | What 'explain' found out about one 'Id'. This is plain data.
+data Why = Why
+  { -- | 'True' if the 'Id' is a node of the graph. 'plan' never returns an
+    -- 'Id' that is not a node.
+    whyIsNode :: Bool,
+    -- | 'True' if the 'Id' is live: a root, a young node, or the target of a
+    -- retaining edge from a live memory.
+    whyLive :: Bool,
+    -- | Every reason why the 'Id' is live, in the order of 'Reason'. For a
+    -- node, the list is empty exactly when the node is not live.
+    whyReasons :: [Reason],
+    -- | One shortest chain of retaining edges to the 'Id'. Each step is a
+    -- memory and the kind of its edge to the next memory, or to the 'Id'
+    -- after the last step. The first memory is a root or a young node.
+    -- The list is empty if the 'Id' is a root or a young node itself, and
+    -- if it is not live.
+    whyPath :: [(Id, EdgeType)]
+  }
+  deriving (Eq, Show)
+
+-- | Why GC keeps an object, or why not. This function is pure.
+--
+-- It uses the same rule as 'plan', so the two agree: an 'Id' is in the
+-- result of 'plan' exactly when 'whyIsNode' is 'True' and 'whyLive' is
+-- 'False'. A property test checks this.
+--
+-- The function lists every reason, not only the first. A person who asks
+-- "why is this still here?" then sees all the things that must change before
+-- GC takes it. The path shows one way in which liveness reached the 'Id'.
+explain :: Policy -> Observed -> Roots -> Graph -> Id -> Why
+explain p o r g i =
+  Why
+    { whyIsNode = i `Set.member` ns,
+      whyLive = i `Set.member` live,
+      whyReasons = rootReasons <> [IsYoung | i `Set.member` fresh] <> edgeReasons,
+      whyPath = if i `Set.member` seeds then [] else fromMaybe [] (retainPath seeds g i)
+    }
+  where
+    ns = nodes g
+    fresh = Set.filter (young p o) ns
+    seeds = allRoots r <> fresh
+    live = reachable retains seeds g
+    rootReasons =
+      [HeldByRef | i `Set.member` rootRefs r]
+        <> [HeldByPin | i `Set.member` rootPins r]
+        <> [HeldByTemp | i `Set.member` rootTemps r]
+    edgeReasons =
+      [ RetainedBy k s
+      | k <- [minBound .. maxBound],
+        retains k,
+        s <- Set.toAscList (predecessors k i g),
+        s `Set.member` live
+      ]
+
+-- | A shortest chain of retaining edges from the seeds to an 'Id'.
+--
+-- The function walks forward from the seeds, one level at a time, and keeps
+-- the first parent that it finds for each node. Each level goes in ascending
+-- order of 'Id' and kind, so the result is always the same. Returns
+-- 'Nothing' if no chain reaches the 'Id'.
+retainPath :: Set Id -> Graph -> Id -> Maybe [(Id, EdgeType)]
+retainPath seeds g goal = back [] goal <$> search seeds seeds Map.empty
+  where
+    -- visited, frontier, parent of each node found so far
+    search visited frontier parents
+      | goal `Map.member` parents = Just parents
+      | Set.null frontier = Nothing
+      | otherwise = search (visited <> found) found (parents <> new)
+      where
+        found = Map.keysSet new
+        new =
+          Map.fromListWith
+            (\_ firstSeen -> firstSeen)
+            [ (t, (s, k))
+            | s <- Set.toAscList frontier,
+              k <- [minBound .. maxBound],
+              retains k,
+              t <- Set.toAscList (successors k s g),
+              t `Set.notMember` visited
+            ]
+    -- Follow the parents back to a seed, which has no parent.
+    back acc x parents = case Map.lookup x parents of
+      Just (s, k) -> back ((s, k) : acc) s parents
+      Nothing -> acc
 
 -- Inputs from disk ------------------------------------------------------
 
@@ -716,3 +833,33 @@ lookupTombstone :: Store -> Id -> IO (Either GCError (Maybe Tombstone))
 lookupTombstone s i = do
   r <- tryIO $ ifMissing Nothing (Just <$> BS.readFile (tombstonePath s i))
   pure $ r >>= traverse (first (CorruptTombstone i) . parseTombstone)
+
+-- | All the tombstones, sorted by 'Id'. If there is no @tombstones@
+-- directory, there are none. The function skips each name that is not an
+-- 'Id', for example a temporary file of 'atomicWrite'.
+--
+-- A tombstone that is not valid is an error for the whole list
+-- ('CorruptTombstone'), like a damaged ref in a list of refs. A person then
+-- sees that something is wrong, and not only a shorter list.
+listTombstones :: Store -> IO (Either GCError [(Id, Tombstone)])
+listTombstones s = do
+  names <- tryIO $ ifMissing [] (listDirectory (tombstonesDir s))
+  case names of
+    Left e -> pure (Left e)
+    Right ns -> runExceptT $ do
+      let ids = Set.toAscList (Set.fromList (mapMaybe (either (const Nothing) Just . Id.parse . T.pack) ns))
+      catMaybes <$> traverse (\i -> fmap ((,) i) <$> ExceptT (lookupTombstone s i)) ids
+
+-- Trash ----------------------------------------------------------------
+
+-- | The objects in @trash@, sorted by 'Id', each with the time that phase 1
+-- of 'sweep' moved it there (the file time, which 'sweep' sets). Phase 2
+-- deletes a file when this time is more than 'trashTTL' ago.
+--
+-- If there is no @trash@ directory, the list is empty. A name that is not an
+-- object is skipped. A file that phase 2 deletes during the call is skipped.
+listTrash :: Store -> IO (Either GCError [(Id, UTCTime)])
+listTrash s = tryIO $ do
+  names <- ifMissing [] (listDirectory (storeRoot s </> "trash"))
+  let ids = Set.toAscList (Set.fromList (mapMaybe trashId names))
+  catMaybes <$> traverse (\i -> ifMissing Nothing (Just . (i,) <$> getModificationTime (trashPath s i))) ids
