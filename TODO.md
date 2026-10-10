@@ -141,6 +141,10 @@ Decided:
 - The context is the neighbourhood minus the hits. It can hold a dangling target.
 - Each `Match` holds `matchSupersededBy`: the memories with a `Supersedes` edge to it. Two or more is a fork. Query does not choose (see "Forks" below).
 - Query does not call `Cache.sync`. The caller decides when the cache must match the store.
+- `search` puts the current memories before the old versions (`headsFirst`). An old version is a hit that a memory supersedes.
+  The order inside each group does not change. The text index does not know the graph, so `search` reads `4 * limit` hits, orders them,
+  and keeps `limit`. An old version stays in the result if there are not enough current memories to fill it.
+  A person who asks for 1 hit then gets the current memory. A fork lists both newer memories in `matchSupersededBy`, as before.
 
 - [x] `search`: FTS hit, then `withinHops` to widen it to a neighbourhood.
 - [x] Show `neighbours` with the direction (`Out` or `In`) and the kind. `Out` edges come first.
@@ -165,8 +169,19 @@ Decided:
   `Akyuu.Memory` does not change. The open decision about `mkMemory` stays open (see below).
 - `buildMemory` cuts the `created` time to whole seconds, because `renderMemory` keeps whole seconds only.
 - `search` and `neighbours` call `Cache.sync` first. On a cache that is up to date, `sync` reads only file names.
-- `get` uses `getVerified`, so it checks the hash. `get ID` prints the stored file exactly, with no line feed added.
+- `get` uses `getVerified`, so it checks the hash. `get ID` prints the stored file exactly, to a pipe or a file.
+  If stdout is a terminal, it adds one line feed when the body does not end with one (`terminalBytes`, `Output.outEndLine`).
+  The prompt of the shell then does not end up on the last line of the body, and scripts still get the exact bytes.
   An `Id` that GC deleted gives "GC deleted it at …" from its tombstone.
+- An id on the command line can be the start of one (`IdSpec`, `Ops.parseIdSpec`). `sha256-` is optional, the case does not matter,
+  and at least 4 hex digits are needed. A whole id (`sha256-` and 64 digits) is used as it is, with no look at the store.
+  A prefix is matched against the memories in the store now (`Ops.resolveId`). No match gives `NoSuchPrefix`.
+  More than one match gives `AmbiguousPrefix`, with the first five. This holds for every id argument: `get`, `neighbours`, `ref set`,
+  `--expect` and the edge options. The MCP server does not take prefixes: an agent gets whole ids from the tools.
+  A prefix of a memory that GC deleted finds nothing, because the file is gone.
+- `Command` has a type parameter for the ids. The parser gives `Command IdSpec`, `resolveCommand` gives `Command Id`, and `runCommand` runs that.
+- `ref list` prints the name, two spaces and the id of each ref (`Ops.listRefValues`, `Render.refListLines`). The MCP tool `ref_list` does the same.
+  A damaged ref is an error for the whole list, like `ref get`.
 - `ref set NAME ID` is `Unchecked` by default, as for a person who sets a ref by hand. `--new` is `MustBeAbsent`. `--expect ID` is `MustBe`.
   `Ops.setRefTo` checks that the `Id` is in the store first, so no ref points at nothing. `Akyuu.Refs` still does not look at the store.
 - `supersede NAME` reads the ref. `supersede NAME --expect ID` uses `supersedeFrom`.
