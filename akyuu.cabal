@@ -53,6 +53,8 @@ library
                    , Akyuu.Ops
                    , Akyuu.Render
                    , Akyuu.MCP
+                   , Akyuu.Web.Model
+                   , Akyuu.Web.Read
                    , Akyuu.CLI
 
     default-extensions: ImportQualifiedPost
