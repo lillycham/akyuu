@@ -7,8 +7,10 @@ import Akyuu.Graph (Edge (..), EdgeType (..), Graph, dangling, nodes)
 import Akyuu.Id (Id)
 import Akyuu.Memory
 import Akyuu.Store
+import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (bracket)
-import Control.Monad (forM_)
+import Control.Monad (forM, forM_)
 import Data.ByteString qualified as BS
 import Data.Either (isLeft, isRight)
 import Data.List (isInfixOf, nub, sort)
@@ -197,6 +199,49 @@ openTests =
           c' <- right =<< openCache dir
           cachedIds c' >>= (@?= Right (Set.singleton (nid 1)))
           closeCache c'
+    , testCase "waits for a lock that another connection then releases" $
+        -- Needs the threaded runtime: SQLite sleeps in a safe foreign call,
+        -- and the other thread must run during that sleep.
+        withTempDir $ \dir -> do
+          c <- right =<< openCache dir
+          right =<< index c (nid 1) (mem "kept")
+          closeCache c
+          held <- newEmptyMVar
+          released <- newEmptyMVar
+          _ <- forkIO $ do
+            withConnection (cachePath dir) $ \other -> do
+              execute_ other "PRAGMA journal_mode = DELETE"
+              execute_ other "BEGIN EXCLUSIVE"
+              putMVar held ()
+              threadDelay 1000000
+              execute_ other "ROLLBACK"
+            putMVar released ()
+          takeMVar held
+          c' <- right =<< openCache dir
+          takeMVar released
+          cachedIds c' >>= (@?= Right (Set.singleton (nid 1)))
+          closeCache c'
+    , testCase "keeps every row if several callers open a bad file at once" $
+        -- The threads start together and the test repeats, because the race
+        -- window is small.
+        forM_ [1 .. 25 :: Int] $ \_ -> withTempDir $ \dir -> do
+          BS.writeFile (cachePath dir) "this is not a database"
+          let n = 8
+          gate <- newEmptyMVar
+          dones <- forM [1 .. n] $ \k -> do
+            done <- newEmptyMVar
+            _ <- forkIO $ do
+              readMVar gate
+              c <- right =<< openCache dir
+              right =<< index c (nid k) (mem (T.pack (show k)))
+              closeCache c
+              putMVar done ()
+            pure done
+          putMVar gate ()
+          mapM_ takeMVar dones
+          c <- right =<< openCache dir
+          cachedIds c >>= (@?= Right (Set.fromList (map nid [1 .. n])))
+          closeCache c
     , testCase "returns a Left if the directory does not exist" $
         withTempDir $ \dir -> do
           r <- openCache (dir </> "missing" </> "deeper")
@@ -418,6 +463,15 @@ reindexTests =
           _ <- right =<< reindex c s
           ids <- right =<< cachedIds c
           assertBool "the ghost is still there" (nid 77 `Set.notMember` ids)
+    , testCase "changes nothing if it fails" $
+        withEnv $ \s c _ -> do
+          _ <- addAll s [mem "good one"]
+          _ <- right =<< sync c s
+          before <- right =<< cachedIds c
+          plant s (nid 5) "this is not a memory"
+          r <- reindex c s
+          assertBool "expected Left" (isLeft r)
+          cachedIds c >>= (@?= Right before)
     , testCase "gives the same graph as before" $
         withEnv $ \s c _ -> do
           let ms = [mem "a", memWith "b" [Edge About (nid 1)]]

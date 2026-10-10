@@ -78,7 +78,8 @@ import Akyuu.Id (Id, parse, render)
 import Akyuu.Memory (Memory (..), edgeToHeader)
 import Akyuu.Store (Store, StoreError (NotFound))
 import Akyuu.Store qualified as Store
-import Control.Exception (bracketOnError, onException, tryJust)
+import Control.Concurrent (threadDelay)
+import Control.Exception (IOException, bracketOnError, onException, tryJust)
 import Control.Monad (forM_, guard, when)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, withExceptT)
 import Data.Bifunctor (first)
@@ -105,6 +106,7 @@ import Database.SQLite.Simple
     withTransaction,
   )
 import System.Directory (removeFile)
+import System.FileLock (SharedExclusive (Exclusive), withTryFileLock)
 import System.FilePath ((</>))
 
 -- | An open cache. The value holds the connection to the database, so
@@ -115,6 +117,11 @@ newtype Cache = Cache Connection
 data CacheError
   = -- | SQLite gave an error.
     CacheSQL SQLError
+  | -- | The disk gave an error. 'openCache' returns this if the lock file
+    -- cannot be made, for example if the directory does not exist.
+    CacheIO IOException
+  | -- | Another process held the lock of 'openCache' for more than 5 seconds.
+    CacheLocked
   | -- | 'sync' could not read an object of the store. The cache did not change.
     CacheStore StoreError
   | -- | A row of the cache is not what the cache wrote, for example an @id@
@@ -205,11 +212,19 @@ openConn path = do
 -- The function also turns on the options for many agents at once: WAL mode
 -- and a busy timeout. See the notes in @TODO.md@.
 --
--- Returns 'CacheSQL' if the file cannot be made, for example if the directory
--- does not exist. Returns 'CacheSQL' also if the file is busy or locked
--- after the timeout. The file then stays.
+-- The whole call runs under a lock file, @cache.sqlite.lock@ (see
+-- 'withOpenLock'). Two processes that find a bad file at the same time then
+-- cannot delete the file that the other one made. The lock is released when
+-- the call returns. It does not guard later use of the 'Cache'. SQLite has
+-- its own locks for that.
+--
+-- Returns 'CacheIO' if the lock file cannot be made, for example if the
+-- directory does not exist. Returns 'CacheLocked' if another process holds
+-- the lock for more than 5 seconds. Returns 'CacheSQL' if SQLite gives an
+-- error, also if the file is busy or locked after the timeout. The file then
+-- stays.
 openCache :: FilePath -> IO (Either CacheError Cache)
-openCache root = tryAs CacheSQL $ do
+openCache root = withOpenLock root $ tryAs CacheSQL $ do
   let path = cachePath root
   conn <- maybe (fresh path) pure =<< tryExisting path
   (createSchema conn) `onException` close conn
@@ -218,6 +233,31 @@ openCache root = tryAs CacheSQL $ do
     fresh path = do
       mapM_ (ignoreIO . removeFile) [path, path ++ "-wal", path ++ "-shm"]
       openConn path
+
+-- | Run an action with the lock of 'openCache'.
+--
+-- The lock is an exclusive @flock@ on @cache.sqlite.lock@, next to the cache
+-- file. The OS releases it when the holder ends, so a crash cannot leave it
+-- held. The lock file stays on disk. This is normal.
+--
+-- Like the lock of "Akyuu.Refs", the function does not wait inside the lock
+-- call, because a blocked call would also block the other Haskell threads of
+-- the program. It tries the lock, and if it is taken, waits 10 ms with
+-- 'threadDelay' and tries again, up to 500 times (about 5 seconds, like the
+-- busy timeout). Then it returns 'CacheLocked'.
+--
+-- An 'IOException' from the lock, or from the action, becomes 'CacheIO'.
+withOpenLock :: FilePath -> IO (Either CacheError a) -> IO (Either CacheError a)
+withOpenLock root act = go (500 :: Int)
+  where
+    lock = cachePath root ++ ".lock"
+    go 0 = pure (Left CacheLocked) -- tried 500 times: give up
+    go k = do
+      got <- tryAs CacheIO (withTryFileLock lock Exclusive (const act))
+      case got of
+        Left e -> pure (Left e)
+        Right Nothing -> threadDelay 10000 >> go (k - 1)
+        Right (Just v) -> pure v
 
 -- | Close the cache. Do not use the 'Cache' after this call.
 closeCache :: Cache -> IO ()
@@ -331,11 +371,17 @@ sync cache@(Cache c) st = runExceptT $ do
   ids <- withExceptT CacheStore (ExceptT (Store.list st))
   have <- ExceptT (cachedIds cache)
   let report = diff (Set.fromList ids) have
-  new <- catMaybes <$> withExceptT CacheStore (traverse (ExceptT . fetch) (added report))
+  new <- fetchAll st (added report)
   ExceptT $ tryAs CacheSQL $ withImmediateTransaction c $ do
     forM_ new $ \(i, m) -> insertMemory c i m
     forM_ (removed report) (deleteMemory c)
   pure report {added = map fst new}
+
+-- | Read these objects from the store. An object that is not there any more
+-- (GC swept it) is left out of the result. Every other store error becomes
+-- 'CacheStore'.
+fetchAll :: Store -> [Id] -> ExceptT CacheError IO [(Id, Memory)]
+fetchAll st ids = withExceptT CacheStore $ catMaybes <$> traverse (ExceptT . fetch) ids
   where
     fetch i = do
       r <- Store.get st i
@@ -345,20 +391,29 @@ sync cache@(Cache c) st = runExceptT $ do
 
 -- | Delete every row of the three tables. The tables stay.
 --
--- This function does not start a transaction. 'reindex' puts it in one.
+-- This function does not start a transaction. 'reindex' puts it in the same
+-- one as the new rows.
 clearAll :: Connection -> IO ()
 clearAll c = do
   execute_ c "DELETE FROM bodies;"
   execute_ c "DELETE FROM edges;"
   execute_ c "DELETE FROM memories;"
 
--- | Throw away everything in the cache, then 'sync'. Use it if the cache
--- might be wrong, for example after a change in the code that reads memories.
--- The report lists every memory of the store in 'added'.
+-- | Throw away everything in the cache, and read the whole store again. Use
+-- it if the cache might be wrong, for example after a change in the code that
+-- reads memories. The report lists every memory of the store in 'added'.
+--
+-- The function reads every object first. Then it clears the tables and
+-- writes the new rows in one transaction. If the store cannot be read, or the
+-- write fails, the cache does not change.
 reindex :: Cache -> Store -> IO (Either CacheError SyncReport)
-reindex cache@(Cache c) s = runExceptT $ do
-  ExceptT $ tryAs CacheSQL (withImmediateTransaction c $ clearAll c)
-  ExceptT $ sync cache s
+reindex (Cache c) s = runExceptT $ do
+  ids <- withExceptT CacheStore (ExceptT (Store.list s))
+  new <- fetchAll s ids
+  ExceptT $ tryAs CacheSQL $ withImmediateTransaction c $ do
+    clearAll c
+    forM_ new $ \(i, m) -> insertMemory c i m
+  pure SyncReport {added = map fst new, removed = []}
 
 -- | Read an 'Id' from the text of a row. Returns 'CorruptCache', with the text,
 -- if the text is not an 'Id': the cache wrote something else.
