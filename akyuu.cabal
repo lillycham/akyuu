@@ -30,6 +30,7 @@ library
                  , filelock
                  , transformers
                  , unix
+                 , optparse-applicative
 
     exposed-modules: Akyuu.Id
                    , Akyuu.Fs
@@ -44,6 +45,7 @@ library
                    , Akyuu.Error
                    , Akyuu.Ops
                    , Akyuu.Render
+                   , Akyuu.CLI
 
     default-extensions: ImportQualifiedPost
                       , OverloadedStrings
@@ -60,6 +62,7 @@ test-suite akyuu-test
                     , GraphTests
                     , MemoryTests
                     , OpsTests
+                    , CLITests
                     , QueryTests
                     , RefsTests
                     , StoreTests
@@ -73,6 +76,7 @@ test-suite akyuu-test
                     , directory
                     , filelock
                     , filepath
+                    , optparse-applicative
                     , sqlite-simple
                     , tasty
                     , tasty-hunit
