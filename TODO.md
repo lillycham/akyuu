@@ -3,7 +3,7 @@
 Build order, from the bottom up. Each module depends only on the ones above it.
 
 ```
-Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ → GC → Query → CLI → MCP
+Id ✓ → Graph ✓ → Memory ✓ → Store ✓ → Refs ✓ → Cache ✓ → GC ✓ → Query → CLI → MCP
 ```
 
 ## Modules
@@ -73,13 +73,43 @@ To do, in this order:
 
 ### `Akyuu.GC`
 
-- [ ] `plan :: Policy -> Roots -> Graph -> Set Id`: pure, so a dry run is free.
-- [ ] `retains :: EdgeType -> Bool`: `Supersedes` does not keep the old memory alive. The other kinds do.
-- [ ] Policy: keep the last N generations of a ref, and a grace period for new objects.
-- [ ] `sweep`: two phases. Move to `trash/`, then delete after a TTL. Leave a tombstone, so a dangling link says "pruned".
-- [ ] Roots: refs, pins, temp roots.
+The module and its tests are on `feat/gc`. The suite has 400 tests, and all pass.
+
+Decided:
+
+- Liveness flows along an edge, from the source (newer) to the target (older). A live memory keeps a target alive if `retains` is true for the kind.
+  It never flows backwards: a live old memory does not keep a newer memory that is `About` it.
+- `plan` returns `nodes g` minus the live set. It never returns a root, a young object, or an `Id` that is not a node.
+- Age is the modification time of the object file, not the `created` header. An agent writes `created`, and it can be old or wrong.
+  The time comes into `plan` as data: `Observed` has `now` and `storedAt :: Map Id UTCTime`. An object with no known age, or a time in the future, is young.
+- A young object is a root, so what it retains stays too. A new memory that points at an old one before its ref is set keeps its target.
+- `Policy` holds the settings: `keepGenerations`, `gracePeriod` and `trashTTL`. `defaultPolicy`: 5 generations, one hour, seven days.
+  `Observed` holds the facts of one run: `now` and `storedAt`. `sweep` and `sweepAndSync` take the time of the run as a `UTCTime`.
+- `Roots` has one `Set Id` each for refs, pins and temp roots. `readRoots` reads the refs (`retained keepGenerations`) and the pins. Temp roots are set by the caller, and are not on disk.
+  A corrupt ref stops GC (`GCRefs`): GC must not guess what it keeps.
+- Pins are files in `pins/`, one empty file per pin, named by the `Id` (`pins/sha256-…`). `pin`, `unpin`, `listPins`.
+- `snapshot` runs `Cache.sync`, then `Cache.loadGraph`, then `storedTimes`. The sync comes first, so the graph has every object.
+- `sweep` phase 1 calls `Store.trash`, then sets the file time of the trash file to the time of the run, because a rename keeps the old time.
+  Phase 2 deletes trash files older than `trashTTL`, and writes the tombstone first. If the object is back in the store, it writes no tombstone.
+- A tombstone is `tombstones/sha256-…` with one line: `pruned: 2026-10-10T12:00:00Z`. `lookupTombstone` reads it.
+- `sweepAndSync` runs `sweep`, then `Cache.sync`, also if the sweep failed. GC does not call `forget`.
+- `Store` now exports `trashPath`, and `trash` returns `StoreIO` if it cannot make the `trash` directory (it threw before).
+
+- [x] `plan :: Policy -> Observed -> Roots -> Graph -> Set Id`: pure, so a dry run is free.
+- [x] `retains :: EdgeType -> Bool`: `Supersedes` does not keep the old memory alive. The other kinds do.
+- [x] Policy: keep the last N generations of a ref, and a grace period for new objects.
+- [x] `sweep`: two phases. Move to `trash/`, then delete after a TTL. Leave a tombstone, so a dangling link says "pruned".
+- [x] Roots: refs, pins, temp roots.
 - [ ] Run it from outside (launchd or cron) with `akyuu gc`. No daemon.
-- [ ] Tests: a superseded memory is collected, a retained one is not, a root survives, a dry run changes nothing.
+- [x] Tests: a superseded memory is collected, a retained one is not, a root survives, a dry run changes nothing.
+      Also: a young object survives, the sweep is two-phase, a tombstone is left, and properties of `plan`.
+
+Not done:
+
+- No lock around a GC run. Two runs at once should be safe, because each phase skips a missing file. No test checks it.
+- An agent that links a new memory to an old, unrooted memory after `snapshot` can lose the target. The link then says "pruned".
+- `Store.add` of an object that is already there does not touch its file time. A re-added old object has no grace period. Use a temp root or a pin for it.
+- Temp roots on disk, for an agent in another process.
 
 ### Query
 
@@ -109,7 +139,8 @@ To do, in this order:
       Add it through the FFI if the gap matters.
 - [x] **Stale lock.** Done: the lock is an OS file lock (`flock`, from `filelock`) on `refs/.lock`. The OS releases it when the process ends.
       The lock file stays on disk. This is normal.
-- [ ] **Dangling targets in `reachable`.** The result can include them. Decide whether GC may rely on that.
+- [x] **Dangling targets in `reachable`.** The result can include them. Decided: GC does not rely on it either way.
+      `plan` takes the live set away from `nodes g`, so a dangling target in the live set has no effect. A test and a property check this.
 - [ ] **Automatic supersession.** Today an agent says so explicitly. A consolidation pass that finds superseded memories is a separate layer that emits `supersede` operations.
 
 ## Clean-up
