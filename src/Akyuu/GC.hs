@@ -6,7 +6,8 @@
 -- it is free and it cannot change the store.
 --
 -- The I/O part reads the inputs ('readRoots', 'snapshot') and does the work
--- ('sweep', 'sweepAndSync').
+-- ('sweep', 'sweepAndSync'). 'dryRun' is a whole run up to the plan, and
+-- it writes nothing.
 --
 -- = Which way liveness flows
 --
@@ -32,7 +33,27 @@
 -- (for example an object that an agent added after the graph was read) is
 -- never collected. The edges of a node come from an immutable object, so a
 -- node's edges are always right. The graph must hold every object that is old
--- enough to collect, so 'snapshot' syncs the cache before it reads the graph.
+-- enough to collect, so 'snapshot' adds the objects that the cache does not
+-- have yet.
+--
+-- = The window that is not closed
+--
+-- GC and the agents do not share a lock, so an agent can change the store
+-- during a run. 'recheck' looks again just before a sweep, and
+-- 'sweep' checks the file time of each object just before it moves it. This
+-- makes the window small, but it does not close it. Let @O@ be an old object
+-- in the plan. It goes to @trash@ although something now needs it, if one of
+-- these happens:
+--
+-- * Between the 'Akyuu.Store.list' of 'recheck' and the move of @O@, an agent
+--   writes a new memory with a retaining edge to @O@ (or to a memory that
+--   retains @O@), or moves a ref to @O@, or pins @O@.
+-- * Between the check of the file time of @O@ in 'sweep' and its move, an
+--   agent adds @O@ again. 'Akyuu.Store.add' then returns, and the object
+--   is in @trash@ just after.
+--
+-- In each case @O@ stays in @trash@ for 'trashTTL', so it can be put back by
+-- hand. After that, a link to it says "pruned".
 --
 -- Functions return @IO (Either GCError a)@. A caller never has to catch an
 -- exception from this module.
@@ -62,7 +83,9 @@ module Akyuu.GC
 
     -- * Inputs from disk
     storedTimes,
+    extendGraph,
     snapshot,
+    recheck,
 
     -- * Errors
     GCError (..),
@@ -71,6 +94,9 @@ module Akyuu.GC
     SweepReport (..),
     sweep,
     sweepAndSync,
+
+    -- * A dry run
+    dryRun,
 
     -- * Tombstones
     Tombstone (..),
@@ -85,9 +111,10 @@ where
 import Akyuu.Cache (Cache, CacheError, SyncReport)
 import Akyuu.Cache qualified as Cache
 import Akyuu.Fs (atomicWrite, tryWith)
-import Akyuu.Graph (EdgeType (..), Graph, nodes, reachable)
+import Akyuu.Graph (EdgeType (..), Graph, nodes, reachable, singleton)
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
+import Akyuu.Memory (Memory (memEdges))
 import Akyuu.Refs (RefError (NoSuchRef), Refs, getRef, listRefs, retained)
 import Akyuu.Store (Store, StoreError (NotFound), objectPath, storeRoot, trashPath)
 import Akyuu.Store qualified as Store
@@ -97,6 +124,7 @@ import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, withExceptT)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
+import Data.Foldable (toList)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
@@ -111,6 +139,7 @@ import Data.Time
     defaultTimeLocale,
     diffUTCTime,
     formatTime,
+    getCurrentTime,
     nominalDay,
     parseTimeM,
   )
@@ -316,32 +345,84 @@ plan p o r g = ns `Set.difference` live
 -- period is about that. A rename to @trash@ keeps the file time, so 'sweep'
 -- sets it again.
 --
--- Note: 'Akyuu.Store.add' does not write an object that is already there,
--- so it does not change the file time.
+-- 'Akyuu.Store.add' of an object that is already there sets its file time to
+-- now. So an agent that adds an old object again gets the grace period too.
 --
 -- An object that is gone between 'Akyuu.Store.list' and the read is skipped.
 storedTimes :: Store -> IO (Either GCError (Map Id UTCTime))
 storedTimes s = runExceptT $ do
   ids <- withExceptT GCStore (ExceptT (Store.list s))
-  ExceptT $ tryIO $ Map.fromList . catMaybes <$> traverse age ids
+  ExceptT (timesOf s ids)
+
+-- | The file times of these objects. A missing object is left out, so it
+-- counts as young.
+timesOf :: (Foldable f) => Store -> f Id -> IO (Either GCError (Map Id UTCTime))
+timesOf s ids = tryIO $ Map.fromList . catMaybes <$> traverse age (toList ids)
   where
     age i = ifMissing Nothing (Just . (i,) <$> getModificationTime (objectPath s i))
 
--- | Read the graph and the ages that 'plan' needs.
+-- | Add to a graph each object of the store that is not a node of it yet.
 --
--- The steps are: 'Akyuu.Cache.sync', then 'Akyuu.Cache.loadGraph', then
--- 'storedTimes'. The sync comes first, so that the graph holds every object
--- of the store. An object that comes after the sync is not in the graph, so
--- 'plan' cannot collect it.
+-- The function lists the store and reads only the new objects, so it is
+-- cheap when few objects are new. An object that is gone before the read is
+-- skipped. Any other store error stops it: GC cannot know the edges of an
+-- object that it cannot read, so it must not guess.
+extendGraph :: Store -> Graph -> IO (Either GCError Graph)
+extendGraph s g = runExceptT $ do
+  ids <- withExceptT GCStore (ExceptT (Store.list s))
+  new <- catMaybes <$> traverse (ExceptT . fetch) (filter (`Set.notMember` nodes g) ids)
+  pure (g <> foldMap (\(i, m) -> singleton i (Set.toList (memEdges m))) new)
+  where
+    fetch i = do
+      r <- Store.get s i
+      pure $ case r of
+        Left (NotFound _) -> Right Nothing
+        Left e -> Left (GCStore e)
+        Right m -> Right (Just (i, m))
+
+-- | Read the graph and the ages that 'plan' needs. This function writes
+-- nothing: not the store, and not the cache.
 --
--- This changes the cache, but not the store. The cache is not the truth, so
--- a dry run can call this function.
+-- The steps are: 'Akyuu.Cache.loadGraph', then 'extendGraph' with the
+-- objects that the cache does not have yet, then 'storedTimes'. So the graph
+-- holds every object of the store, also if the cache is out of date. An
+-- object that comes later is not in the graph, so 'plan' cannot collect it.
+--
+-- The cache can also hold a memory that is no longer in the store. It has no
+-- file time, so it counts as young: 'plan' does not return it, and it keeps
+-- what it retains. This is safe. 'sweepAndSync' brings the cache up to date.
 snapshot :: Cache -> Store -> IO (Either GCError (Graph, Map Id UTCTime))
 snapshot c s = runExceptT $ do
-  _ <- withExceptT GCCache (ExceptT (Cache.sync c s))
-  g <- withExceptT GCCache (ExceptT (Cache.loadGraph c))
+  cached <- withExceptT GCCache (ExceptT (Cache.loadGraph c))
+  g <- ExceptT (extendGraph s cached)
   ages <- ExceptT (storedTimes s)
   pure (g, ages)
+
+-- | Plan again, just before a sweep, with what changed since the snapshot.
+-- The result is a subset of the old plan.
+--
+-- The function adds the new objects of the store to the graph
+-- ('extendGraph'), reads the refs and pins again and adds them to the old
+-- roots, and reads the file times of the planned objects only. Then it calls
+-- 'plan' again. Every other node has no file time here, so it counts as
+-- young. That is safe: it was live in the first plan, so what it retains was
+-- live too.
+--
+-- This drops an object that an agent added again, pinned, pointed a ref at,
+-- or linked from a new memory, since the snapshot. It costs one
+-- 'Akyuu.Store.list', a read of each new object, and one file time for each
+-- planned object.
+recheck :: Store -> Refs -> Policy -> UTCTime -> Roots -> Graph -> Set Id -> IO (Either GCError (Set Id))
+recheck s rs p t r g doomed = runExceptT $ do
+  g' <- ExceptT (extendGraph s g)
+  fresh <- ExceptT (readRoots p rs s)
+  ages <- ExceptT (timesOf s doomed)
+  let r' =
+        r
+          { rootRefs = rootRefs r <> rootRefs fresh,
+            rootPins = rootPins r <> rootPins fresh
+          }
+  pure (doomed `Set.intersection` plan p (Observed t ages) r' g')
 
 -- Errors ---------------------------------------------------------------
 
@@ -378,6 +459,10 @@ data SweepReport = SweepReport
 -- A rename keeps the old file time, so without this step phase 2 could
 -- delete the object at once. An object that is not in the store is skipped.
 --
+-- Just before it moves an object, phase 1 reads its file time again. If the
+-- object is younger than 'gracePeriod' now (an agent added it again since the
+-- plan), it is skipped. See the module header for the gap that is left.
+--
 -- Phase 2 deletes each file in @trash@ whose file time is more than
 -- 'trashTTL' before the time of the run. This includes files of earlier runs.
 -- Before it
@@ -401,11 +486,17 @@ sweep s p t doomed = runExceptT $ do
   pure SweepReport {trashed = moved, deleted = gone}
   where
     moveOne i = do
-      r <- Store.trash s i
-      case r of
-        Left (NotFound _) -> pure (Right Nothing)
-        Left e -> pure (Left (GCStore e))
-        Right () -> tryIO (Just i <$ setModificationTime (trashPath s i) t)
+      stamp <- tryIO $ ifMissing Nothing (Just <$> getModificationTime (objectPath s i))
+      case stamp of
+        Left e -> pure (Left e)
+        Right Nothing -> pure (Right Nothing) -- not in the store
+        Right (Just m) | diffUTCTime t m < gracePeriod p -> pure (Right Nothing) -- young again
+        Right (Just _) -> do
+          r <- Store.trash s i
+          case r of
+            Left (NotFound _) -> pure (Right Nothing)
+            Left e -> pure (Left (GCStore e))
+            Right () -> tryIO (Just i <$ setModificationTime (trashPath s i) t)
 
 -- | Phase 2 of 'sweep': delete the old files in @trash@, and leave a
 -- tombstone for each one. Returns the 'Id' of each deleted file.
@@ -442,6 +533,25 @@ sweepAndSync c s p t doomed = do
   r <- sweep s p t doomed
   synced <- Cache.sync c s
   pure $ (,) <$> r <*> first GCCache synced
+
+-- A whole run -----------------------------------------------------------
+
+-- | Read the inputs and make the plan, for a run at this time. The roots
+-- get these temporary roots. This writes nothing.
+planAt :: Cache -> Store -> Refs -> Policy -> Set Id -> UTCTime -> IO (Either GCError (Roots, Graph, Set Id))
+planAt c s rs p temps t = runExceptT $ do
+  (g, ages) <- ExceptT (snapshot c s)
+  r <- ExceptT (readRoots p rs s)
+  let roots = r {rootTemps = temps}
+  pure (roots, g, plan p (Observed t ages) roots g)
+
+-- | The plan of a run now, with these temporary roots. This writes nothing:
+-- not the store, not the cache, and not the lock. Use it for
+-- @akyuu gc --dry-run@.
+dryRun :: Cache -> Store -> Refs -> Policy -> Set Id -> IO (Either GCError (Set Id))
+dryRun c s rs p temps = do
+  t <- getCurrentTime
+  fmap (\(_, _, d) -> d) <$> planAt c s rs p temps t
 
 -- Tombstones -----------------------------------------------------------
 
