@@ -73,7 +73,7 @@ To do, in this order:
 
 ### `Akyuu.GC`
 
-The module and its tests are on `feat/gc`. The suite has 400 tests, and all pass.
+The module and its tests are on `feat/gc`. The suite has 426 tests, and all pass.
 
 Decided:
 
@@ -88,9 +88,20 @@ Decided:
 - `Roots` has one `Set Id` each for refs, pins and temp roots. `readRoots` reads the refs (`retained keepGenerations`) and the pins. Temp roots are set by the caller, and are not on disk.
   A corrupt ref stops GC (`GCRefs`): GC must not guess what it keeps.
 - Pins are files in `pins/`, one empty file per pin, named by the `Id` (`pins/sha256-…`). `pin`, `unpin`, `listPins`.
-- `snapshot` runs `Cache.sync`, then `Cache.loadGraph`, then `storedTimes`. The sync comes first, so the graph has every object.
-- `sweep` phase 1 calls `Store.trash`, then sets the file time of the trash file to the time of the run, because a rename keeps the old time.
+- `snapshot` writes nothing. It runs `Cache.loadGraph`, then `extendGraph` (it reads only the objects that the cache does not have), then `storedTimes`.
+  So the graph has every object, also if the cache is out of date. A memory that is in the cache but not in the store has no file time, so it counts as young. This is safe.
+- `dryRun` is `snapshot`, `readRoots` and `plan`. It writes nothing: not the store, not the cache, not the lock. A test checks the files and `cachedIds`.
+- `Store.add` of an object that is already there sets its file time to now (`touchFile`), and does not write the bytes. A re-added old object gets the grace period.
+  The touch is the check: if the file is gone (GC moved it), `add` writes it again. The content does not change, so an object still never changes.
+  This is safer than a fix in GC only, because GC cannot see an `add` that wrote nothing.
+- `collect` is one whole run, under the lock: plan, then `recheck`, then `sweep` and `Cache.sync`. It returns a `RunReport`.
+- `recheck` plans again just before the sweep. It adds the new objects of the store to the graph, reads the refs and pins again, and reads the file times of the planned objects only.
+  It drops an object that is now pinned, under a ref, added again, or linked from a new memory.
+- `sweep` phase 1 reads the file time of each object again just before the move, and skips an object that is young now.
+  Then it calls `Store.trash`, and sets the file time of the trash file to the time of the run, because a rename keeps the old time.
   Phase 2 deletes trash files older than `trashTTL`, and writes the tombstone first. If the object is back in the store, it writes no tombstone.
+- One run at a time: `collect`, `sweep` and `sweepAndSync` take an exclusive `flock` on `<root>/gc.lock`. It tries without waiting, like the locks of Refs and Cache.
+  It retries for about one second, then returns `GCLocked`, and the run changes nothing. A second run does not wait for the first. The lock is not re-entrant.
 - A tombstone is `tombstones/sha256-…` with one line: `pruned: 2026-10-10T12:00:00Z`. `lookupTombstone` reads it.
 - `sweepAndSync` runs `sweep`, then `Cache.sync`, also if the sweep failed. GC does not call `forget`.
 - `Store` now exports `trashPath`, and `trash` returns `StoreIO` if it cannot make the `trash` directory (it threw before).
@@ -103,12 +114,20 @@ Decided:
 - [ ] Run it from outside (launchd or cron) with `akyuu gc`. No daemon.
 - [x] Tests: a superseded memory is collected, a retained one is not, a root survives, a dry run changes nothing.
       Also: a young object survives, the sweep is two-phase, a tombstone is left, and properties of `plan`.
+- [x] A re-added old object gets the grace period (`Store.add` touches the file).
+- [x] A lock around a run (`gc.lock`, `GCLocked`). Tests: a run returns `GCLocked` while another thread holds the lock, and two runs at once trash each object once.
+- [x] A dry run writes nothing, also not the cache.
+- [x] Make the race window small: `recheck` before the sweep, and a new file time check before each move.
 
 Not done:
 
-- No lock around a GC run. Two runs at once should be safe, because each phase skips a missing file. No test checks it.
-- An agent that links a new memory to an old, unrooted memory after `snapshot` can lose the target. The link then says "pruned".
-- `Store.add` of an object that is already there does not touch its file time. A re-added old object has no grace period. Use a temp root or a pin for it.
+- The race window is small, but it is not closed. GC and the agents share no lock. An old, unrooted object `O` in the plan still goes to `trash` in two cases:
+  - Between the `Store.list` of `recheck` and the move of `O`, an agent writes a memory with a retaining edge to `O`, moves a ref to `O`, or pins `O`.
+  - Between the file time check of `O` in `sweep` and its move, an agent adds `O` again.
+  In both cases `O` stays in `trash` for `trashTTL`, so a person can put it back. After that, a link to it says "pruned".
+  To close it, `add`, `setRef` and `pin` would have to take a shared lock that GC takes exclusively.
+- The test of two runs at once does not prove that the lock excludes. Without the lock, it would also pass, because `Store.trash` skips a missing file.
+  The `GCLocked` test proves the exclusion.
 - Temp roots on disk, for an agent in another process.
 
 ### Query
