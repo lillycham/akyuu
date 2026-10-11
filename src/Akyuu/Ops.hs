@@ -50,19 +50,19 @@ where
 
 import Akyuu.Cache (Cache, SyncReport, closeCache, openCache)
 import Akyuu.Cache qualified as Cache
-import Akyuu.Error (AkyuuError (..), fromSupersede)
+import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), fromSupersede)
 import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (Edge, Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (..), MemoryParseError)
+import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind), MemoryParseError)
 import Akyuu.Query (Neighbour, SearchOptions, SearchResult)
 import Akyuu.Query qualified as Query
-import Akyuu.Refs (Expected, Name, Ref (..), RefError, Refs, openRefs)
+import Akyuu.Refs (Expected, Name, Ref (current), RefError, Refs, openRefs)
 import Akyuu.Refs qualified as Refs
-import Akyuu.Store (Store, StoreError (..), openStore)
+import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound), openStore)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersede, supersedeFrom)
 import Control.Exception (finally)

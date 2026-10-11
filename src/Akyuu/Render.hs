@@ -25,16 +25,16 @@ module Akyuu.Render
   )
 where
 
-import Akyuu.Cache (SyncReport (..), snippetClose, snippetOpen)
+import Akyuu.Cache (SyncReport (added, removed), snippetClose, snippetOpen)
 import Akyuu.Error (describe, describeParse)
 import Akyuu.Error qualified as Error
-import Akyuu.GC (RunReport (..), SweepReport (..))
-import Akyuu.Graph (Dir (..), EdgeType)
+import Akyuu.GC (RunReport (swept), SweepReport (deleted, trashed))
+import Akyuu.Graph (Dir (In, Out), EdgeType)
 import Akyuu.Id (Id, render)
 import Akyuu.Memory (Memory, edgeToHeader, renderMemory)
-import Akyuu.Ops (VerifyReport (..), verifyOk)
-import Akyuu.Query (Match (..), Neighbour (..), SearchResult (..))
-import Akyuu.Refs (Name, Ref (..), nameText)
+import Akyuu.Ops (VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
+import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, matches))
+import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Data.List (sort)
 import Data.Set (Set)
 import Data.Set qualified as Set

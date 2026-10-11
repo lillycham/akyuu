@@ -30,22 +30,22 @@ module Akyuu.CLI
   )
 where
 
-import Akyuu.Error (AkyuuError (..), describe)
-import Akyuu.GC (Policy (..), defaultPolicy)
-import Akyuu.Graph (Edge (..), EdgeType (..))
+import Akyuu.Error (AkyuuError (BadInput, BadName), describe)
+import Akyuu.GC (Policy (Policy, gracePeriod, keepGenerations, trashTTL), defaultPolicy)
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops
-import Akyuu.Query (SearchOptions (..), defaultSearchOptions)
-import Akyuu.Refs (Expected (..), Name, Ref (current), mkName)
+import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, dryRunGC, getMemory, listPinned, listRefValues, neighboursOf, parseDuration, parseIdSpec, pinMemory, readRef, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, verifyOk, verifyStore, withEnv)
+import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
+import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName)
 import Akyuu.MCP qualified as MCP
 import Akyuu.Web.Page qualified as Page
 import Akyuu.Web.Read qualified as Read
 import Akyuu.Web.Server qualified as Server
 import Akyuu.Seed qualified as Seed
 import Data.Time (getCurrentTime)
-import Akyuu.Render
+import Akyuu.Render (edgeName, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, runLines, searchLines, syncLines, unpinLines, verifyLines)
 import Control.Monad.IO.Class (liftIO)
 import Control.Exception (IOException, try)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT)
@@ -56,9 +56,9 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
-import Options.Applicative
+import Options.Applicative ((<**>), Alternative ((<|>), many, some), CompletionResult (execCompletion), Parser, ParserInfo, ParserResult (CompletionInvoked, Failure, Success), ReadM, argument, auto, command, defaultPrefs, eitherReader, execParserPure, flag', footer, fullDesc, help, helper, hsubparser, info, long, metavar, option, optional, progDesc, readerError, renderFailure, short, showDefault, showDefaultWith, strArgument, strOption, switch, value)
 import System.Environment (getArgs, getProgName, lookupEnv)
-import System.Exit (ExitCode (..), exitWith)
+import System.Exit (ExitCode (ExitFailure, ExitSuccess), exitWith)
 import System.IO (hFlush, hIsTerminalDevice, hPutStrLn, stderr, stdout)
 
 -- Commands -------------------------------------------------------------

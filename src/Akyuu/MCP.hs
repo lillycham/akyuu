@@ -35,17 +35,17 @@ module Akyuu.MCP
   )
 where
 
-import Akyuu.Error (AkyuuError (..), describe)
-import Akyuu.Graph (Edge (..), EdgeType (..))
+import Akyuu.Error (AkyuuError (BadId, BadName), describe)
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops
-import Akyuu.Query (SearchOptions (..), defaultSearchOptions)
-import Akyuu.Refs (Expected (..), Name, Ref (current), mkName)
-import Akyuu.Render
+import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, getMemory, listRefValues, neighboursOf, readRef, searchMemories, setRefTo, supersedeMemory)
+import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
+import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName)
+import Akyuu.Render (edgeName, memoryText, neighbourLines, refLines, refListLines, searchLines)
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (unless)
-import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson ((.=), Value (Array, Bool, Null, Number, Object, String), object)
 import Data.Aeson qualified as A
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap (KeyMap)

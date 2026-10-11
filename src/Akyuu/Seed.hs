@@ -25,13 +25,13 @@ module Akyuu.Seed
 where
 
 import Akyuu.Cache qualified as Cache
-import Akyuu.Error (AkyuuError (..), fromSupersede)
-import Akyuu.GC (Policy (..), defaultPolicy)
+import Akyuu.Error (AkyuuError (BadInput, BadName, CacheFailed, GCFailed, RefFailed, StoreFailed), fromSupersede)
+import Akyuu.GC (Policy (trashTTL), defaultPolicy)
 import Akyuu.GC qualified as GC
-import Akyuu.Graph (Edge (..), EdgeType (..))
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id, hashBytes, render)
-import Akyuu.Ops (Env (..), NewMemory (..), buildMemory, withEnv)
-import Akyuu.Refs (Expected (..), Name, mkName)
+import Akyuu.Ops (Env (envCache, envRefs, envStore), NewMemory (NewMemory), buildMemory, withEnv)
+import Akyuu.Refs (Expected (MustBeAbsent), Name, mkName)
 import Akyuu.Refs qualified as Refs
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersedeFrom)
