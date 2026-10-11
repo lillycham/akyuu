@@ -359,7 +359,9 @@ Not done:
 - [x] Cache: two processes that find a bad cache at the same time can each delete the file that the other made. Done: a lock file around `openCache`, with a test that fails without it.
 - [x] Pick one style for `Akyuu.Id` imports (`qualified` at the front or the back). The back (ImportQualifiedPost): every import in `src`, `app` and `test` already used it, so no file changed.
       `-Wprepositive-qualified-module` (see below) keeps it so.
-- [ ] Add `-Wprepositive-qualified-module` and `-Wmissing-import-lists` to `shared` in `akyuu.cabal`, and fix what they flag.
+- [x] Add `-Wprepositive-qualified-module` and `-Wmissing-import-lists` to `shared` in `akyuu.cabal`, and fix what they flag.
+      The second flag also warns for `T (..)`, so every `T (..)` import item is now a list of the constructors and fields that the module uses.
+      Both flags apply to the library, the executable and the tests.
 - [x] `Store.add`: wrap `removeFile tmp` in the cleanup with `ignoreIO`, so a cleanup error cannot hide the real one. Already true: `add` has no cleanup of its own now.
       `Fs.atomicWrite` removes the temporary file with `ignoreIO`, and `add` calls it.
 - [x] Move `ignoreIO` and a generic `tryWith` from `Akyuu.Store` to `Akyuu.Fs`.
