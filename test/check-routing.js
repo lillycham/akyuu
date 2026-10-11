@@ -315,6 +315,23 @@ function run(label, g, limitMs) {
   console.log('  crossings: old ' + old.crossings + ' -> routed, columns in time order ' + xNo + ' -> columns ordered ' + xYes);
   console.log('  height: +' + Math.round(rowsTall) + ' px over the 60 px grid, width ' + Math.round(withOrder.geo.width) + ' px; widest gutter ' + Math.max(0, ...withOrder.plan.gutterTracks) + ' tracks; layout + routing ' + ms.toFixed(1) + ' ms' + (limitMs ? ' (limit ' + limitMs + ')' : ''));
   let bad = c.bad + c0.bad + ch.bad;
+  // compact layouts: the chains stacked in at most K columns
+  for (const K of [3, 5, 8]) {
+    if (K >= withOrder.lay.columns) continue;
+    const cb = build(g, { maxColumns: K }, marks);
+    const cc = checkRoutes(g, cb, label + ' (compact ' + K + ')');
+    bad += cc.bad;
+    const h = cb.R.height;
+    console.log('  compact ' + K + ': ' + cb.lay.columns + ' columns x ' + cb.lay.rows + ' rows, ' + Math.round(cb.geo.width) + ' x ' + Math.round(h) + ' px (by time: ' +
+      Math.round(withOrder.geo.width) + ' x ' + Math.round(withOrder.R.height) + '), ' + cb.ms.toFixed(1) + ' ms');
+    // a chain stays whole: each memory and the one that it supersedes are in one column
+    for (const e of g.edges) {
+      if (e.kind !== 'supersedes') continue;
+      const a = cb.lay.pos.get(e.src), b = cb.lay.pos.get(e.dst);
+      if (a && b && lay0.chains.some(ch => ch.indexOf(e.src) >= 0 && ch.indexOf(e.dst) >= 0) && a.col !== b.col) { console.log('  FAIL compact ' + K + ': a chain changes column'); bad++; break; }
+    }
+    if (cb.lay.columns > Math.max(K, 1) + 4) { console.log('  NOTE compact ' + K + ': ' + cb.lay.columns + ' columns, because chains point at each other'); }
+  }
   if (limitMs && ms > limitMs) { console.log('  FAIL too slow'); bad++; }
   problems += bad;
   results.push({ label, old: old.crossings, xNo, xYes, through: c.through });

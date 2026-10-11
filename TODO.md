@@ -286,6 +286,12 @@ Decided:
 - Ports: the edges at the bottom or the top of a node are sorted by the x of the place where they go, spread along the box (at most 12 px apart, fewer when there are many, inside the box).
   A straight edge has its port at the middle of the box on both ends, so it stays straight.
 - Column order: after the rows, the columns are ordered with barycenter sweeps and neighbour swaps, to make the edges short. Chains stay in their column.
+- Compact layout: the by-time layout gives one column to each chain that is alive at once, and most chains start at the top, so a store of many short
+  chains is wide and short (17 columns by 14 rows on 57 memories). `layout(graph, {maxColumns: K})` stacks the chains in at most K columns (`packChains`):
+  a chain moves down as a whole, below the chain above it and below every node that points at it. Chains that point at each other are pinned and keep
+  their own column. If the result has more than K columns, the by-time layout is used. The page tries fewer and fewer columns and keeps the layout that fits
+  the canvas at the largest scale (`chooseLayout`). The toolbar has a "layout" select: compact or by time. Graphs of more than 800 nodes stay by time.
+  Not done: chains that cross-link densely (the synthetic graphs of the routing check) do not compact, because they are pinned.
 - Highlight: the edges of the hovered or selected node are bold, the others faint, and the boxes at the other ends get a frame. The kind styles and the filter dim stay.
 - The routing is in pure functions (`planRoutes`, `columnGeometry`, `routeEdges`, `roundedPath`), exported for the node checks.
 - Window: by default `/api/graph` shows the 200 newest heads and the nodes within 2 hops, with `truncated` and the counts.

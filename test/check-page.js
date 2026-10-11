@@ -195,7 +195,7 @@ function makeDom() {
     },
     addEventListener: () => {},
   };
-  const ids = ['status', 'f-kind', 'f-agent', 'f-ref', 'w-hops', 'w-limit', 'w-all', 'w-focus', 'graph-notice', 'legend', 'graph-canvas',
+  const ids = ['status', 'f-kind', 'f-agent', 'f-ref', 'f-layout', 'w-hops', 'w-limit', 'w-all', 'w-focus', 'graph-notice', 'legend', 'graph-canvas',
     'refs-notice', 'refs-list', 'search-form', 's-q', 's-limit', 's-hops', 's-show', 'search-notice', 'search-results',
     'gc-summary', 'gc-notice', 'gc-legend', 'gc-canvas', 'gc-lists', 'h-run', 'h-note', 'health', 'panel',
     'c-kind', 'c-level', 'c-run', 'c-note', 'c-summary', 'check-list', 'check-badge'];

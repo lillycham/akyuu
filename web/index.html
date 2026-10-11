@@ -144,6 +144,7 @@ table.list td, table.list th { text-align: left; padding: 3px 6px; border-bottom
       <label title="How many of the newest heads to start from">heads <input id="w-limit" type="number" min="1" max="100000" value="200"></label>
       <label><input id="w-all" type="checkbox"> show all</label>
       <span id="w-focus"></span>
+      <label title="Compact stacks short chains in fewer columns, to use the height. By time keeps one column for each chain.">layout <select id="f-layout"><option value="compact">compact</option><option value="time">by time</option></select></label>
       <span class="zoombar" data-for="graph-canvas"><button type="button" data-zoom="out" title="Zoom out">−</button><button type="button" data-zoom="in" title="Zoom in">+</button><button type="button" data-zoom="fit" title="Fit the drawing to the window">Fit</button><button type="button" data-zoom="one" title="Natural size">100%</button><span class="muted" data-zoom-label></span></span>
     </div>
     <div class="notice" id="graph-notice"></div>
@@ -354,6 +355,122 @@ const Akyuu = (function () {
   //    gutters and more lines. So the columns are ordered to make the edges
   //    short (see orderColumns). A chain stays in its column, and each cell
   //    still holds one node. `opts.reorder === false` skips this step.
+  //
+  // `opts.maxColumns` makes a compact layout. Step 3 gives one column to each
+  // chain that is alive at the same time, and most chains start at the top, so
+  // a graph of many short chains is wide and short. With a limit, the chains
+  // are stacked in at most that many columns (packChains), between step 4 and
+  // step 5, and the graph gets taller and narrower.
+
+  // Stack the chains of a layout in at most K columns.
+  //
+  // The rows of a chain keep their distances (a chain moves as a whole), so a
+  // chain stays in one column and every edge inside it is as it was. A chain
+  // moves down until it is below the chain above it in its column, and below
+  // each node that points at one of its nodes. The chains are placed in an
+  // order where a chain comes after the chains that point at it, so every
+  // edge between chains still points down.
+  //
+  // Two chains that point at each other (an edge each way, in different nodes)
+  // cannot be put one under the other. Such a chain, and a chain that cannot
+  // be moved because it must stay above a pinned chain, is pinned: it keeps its
+  // rows, and so a column of its own (shared only with pinned chains that do
+  // not overlap it). The result can have more than K columns then, never fewer
+  // rows than the by-time layout needs for them.
+  //
+  // Returns the new place of each node and the number of columns, or null if
+  // the layout needs no packing.
+  function packChains(chains, pos, graph, K) {
+    const info = chains.map((ids, c) => {
+      const rows = ids.map(id => pos.get(id).row);
+      const min = Math.min.apply(null, rows);
+      return { c: c, ids: ids, rel: rows.map(r => r - min), min: min, len: Math.max.apply(null, rows) - min + 1, off: 0, col: -1 };
+    });
+    const at = new Map();
+    for (const ci of info) ci.ids.forEach((id, i) => at.set(id, { ci: ci, i: i }));
+    const into = info.map(() => []), outof = info.map(() => []);
+    for (const e of graph.edges) {
+      const s = at.get(e.src), d = at.get(e.dst);
+      if (!s || !d || s.ci === d.ci) continue;
+      outof[s.ci.c].push({ s: s, d: d });
+      into[d.ci.c].push({ s: s, d: d });
+    }
+    // One try with a set of pinned chains. Returns { ok: true } or the chains
+    // to pin and try again.
+    function attempt(pinned) {
+      // The pinned chains: their own rows, columns by their spans.
+      const pinCols = [];   // the last row of each pinned column
+      for (const ci of info.filter(x => pinned.has(x.c)).sort((a, b) => a.min - b.min || a.c - b.c)) {
+        let col = pinCols.findIndex(end => end < ci.min);
+        if (col < 0) { col = pinCols.length; pinCols.push(-1); }
+        pinCols[col] = ci.min + ci.len - 1;
+        ci.off = ci.min; ci.col = col;
+      }
+      const stackCols = Math.max(1, K - pinCols.length);
+      const bottom = new Array(stackCols).fill(-1);
+      // Order the others: a chain after the chains that point at it.
+      const rest = info.filter(x => !pinned.has(x.c));
+      const waiting = new Map(rest.map(ci => [ci.c, new Set(into[ci.c].filter(x => !pinned.has(x.s.ci.c)).map(x => x.s.ci.c)).size]));
+      const ready = rest.filter(ci => waiting.get(ci.c) === 0).sort((a, b) => a.min - b.min || a.c - b.c);
+      const done = new Set();
+      const queue = ready.slice();
+      let placed = 0;
+      while (queue.length) {
+        queue.sort((a, b) => a.min - b.min || a.c - b.c);
+        const ci = queue.shift();
+        let lb = 0, ub = Infinity;
+        for (const x of into[ci.c]) lb = Math.max(lb, x.s.ci.off + x.s.ci.rel[x.s.i] + 1 - ci.rel[x.d.i]);
+        for (const x of outof[ci.c]) if (pinned.has(x.d.ci.c)) ub = Math.min(ub, x.d.ci.off + x.d.ci.rel[x.d.i] - 1 - ci.rel[x.s.i]);
+        let best = -1, start = Infinity;
+        for (let k = 0; k < stackCols; k++) {
+          const s = Math.max(bottom[k] + 1, lb);
+          if (s < start) { start = s; best = k; }
+        }
+        if (best < 0 || start > ub) return { ok: false, pin: [ci.c] };
+        ci.off = start; ci.col = pinCols.length + best;
+        bottom[best] = start + ci.len - 1;
+        done.add(ci.c); placed++;
+        for (const x of outof[ci.c]) {
+          const d = x.d.ci;
+          if (pinned.has(d.c) || done.has(d.c) || !waiting.has(d.c)) continue;
+          const left = new Set(into[d.c].filter(y => !pinned.has(y.s.ci.c) && !done.has(y.s.ci.c)).map(y => y.s.ci.c)).size;
+          waiting.set(d.c, left);
+          if (left === 0 && queue.indexOf(d) < 0) queue.push(d);
+        }
+      }
+      if (placed < rest.length) {
+        // Some chains were never ready: they point at each other, or at a chain
+        // that does. Pin the oldest of them, and try again. After many tries,
+        // pin them all, so that the work stays small.
+        const left = rest.filter(ci => !done.has(ci.c)).sort((a, b) => a.min - b.min || a.c - b.c);
+        return { ok: false, pin: tries >= MAX_TRIES ? left.map(ci => ci.c) : [left[0].c] };
+      }
+      return { ok: true };
+    }
+    const MAX_TRIES = 40;
+    let tries = 0;
+    const pinned = new Set();
+    for (;;) {
+      tries++;
+      const r = attempt(pinned);
+      if (r.ok) break;
+      for (const c of r.pin) pinned.add(c);
+    }
+    // The used columns, in order, with no gap.
+    const used = Array.from(new Set(info.map(ci => ci.col))).sort((a, b) => a - b);
+    const newCol = new Map(used.map((c, i) => [c, i]));
+    const out = new Map();
+    let rows = 0;
+    for (const ci of info) {
+      ci.ids.forEach((id, i) => {
+        const row = ci.off + ci.rel[i];
+        rows = Math.max(rows, row + 1);
+        out.set(id, { col: newCol.get(ci.col), row: row, seq: pos.get(id).seq });
+      });
+    }
+    return { pos: out, columns: used.length, rows: rows };
+  }
+
   function layout(graph, opts) {
     const byId = new Map();
     for (const n of graph.nodes) byId.set(n.id, n);
@@ -423,8 +540,21 @@ const Akyuu = (function () {
       usedCols.add(col); inRow.add(n.id);
       pos.set(n.id, { col: col, row: row, seq: seq.get(n.id) });
     }
+    // 4b. a compact layout: stack the chains in at most maxColumns columns
+    let rowsUsed = order.length ? row + 1 : 0;
+    let columnsUsed = colEnd.length;
+    if (opts && opts.maxColumns >= 1 && colEnd.length > opts.maxColumns && order.length) {
+      const packed = packChains(chains, pos, graph, opts.maxColumns);
+      // Chains that point at each other stay in their own columns. If that
+      // leaves more columns than the limit, the by-time layout is better.
+      if (packed.columns <= opts.maxColumns) {
+        for (const [id, p] of packed.pos) pos.set(id, p);
+        rowsUsed = packed.rows;
+        columnsUsed = packed.columns;
+      }
+    }
     // 5. column order
-    const ncol = Math.max(colEnd.length, 1);
+    const ncol = Math.max(columnsUsed, 1);
     let colAt = null;   // the column that each old column becomes
     if (!(opts && opts.reorder === false) && ncol > 2) {
       const adj = [];
@@ -439,7 +569,7 @@ const Akyuu = (function () {
       for (const [id, p] of pos) pos.set(id, { col: colAt[p.col], row: p.row, seq: p.seq });
     }
     return { pos: pos, order: order.map(n => n.id), columns: ncol, colAt: colAt,
-             rows: order.length ? row + 1 : 0, chains: chains };
+             rows: rowsUsed, chains: chains };
   }
 
   // The marks of a snippet are the control characters U+0001 and U+0002, the
@@ -1029,6 +1159,7 @@ const Akyuu = (function () {
     hits: new Set(),
     lastSearch: null,
     verifyFingerprint: null,
+    compact: true,
     check: null,
     checkError: null,
     checkFilter: { kind: '', level: '' },
@@ -1070,6 +1201,35 @@ const Akyuu = (function () {
 
   const EDGE_VAR = { supersedes: 'sup', about: 'about', 'derived-from': 'derived', refines: 'refines' };
 
+  // The layout, the routes and the geometry of a graph.
+  function geometryOf(graph, lay, marks) {
+    const plan = planRoutes(graph, lay);
+    const geo = columnGeometry(graph, lay, marks, plan.gutterTracks);
+    const routed = routeEdges(graph, lay, geo, plan);
+    return { lay: lay, plan: plan, geo: geo, routed: routed, width: geo.width, height: routed.height + 30 };
+  }
+
+  // The by-time layout, or a compact one if that fits the canvas better. A
+  // compact layout stacks the chains in fewer columns, so the drawing is
+  // narrower and taller. The page tries fewer and fewer columns, and keeps the
+  // layout with the largest scale at which the drawing fits the canvas (before
+  // the floor of the scale), so a graph that fits as it is does not change.
+  function chooseLayout(graph, marks, cw, ch, compact) {
+    let best = geometryOf(graph, layout(graph), marks);
+    if (!compact || !(cw > 0 && ch > 0) || best.lay.columns <= 3 || graph.nodes.length > 800) return best;
+    const score = (g) => Math.min(cw / g.width, ch / g.height, 1);
+    let bestScore = score(best);
+    if (bestScore >= 1) return best;
+    for (let k = best.lay.columns - 1; k >= 3; k = Math.min(k - 1, Math.floor(k * 0.75))) {
+      const lay = layout(graph, { maxColumns: k });
+      if (lay.columns > k) continue;
+      const g = geometryOf(graph, lay, marks);
+      const s = score(g);
+      if (s > bestScore + 0.005) { best = g; bestScore = s; }
+    }
+    return best;
+  }
+
   function drawGraph(container, graph, opts) {
     const keep = { left: container.scrollLeft, top: container.scrollTop };
     container.replaceChildren();
@@ -1077,12 +1237,10 @@ const Akyuu = (function () {
       container.appendChild(el('p', { class: 'pad muted', text: 'Nothing to draw: the store has no memories, or the window is empty.' }));
       return;
     }
-    const lay = layout(graph);
     const marks = opts.marks || new Map();
-    const plan = planRoutes(graph, lay);
-    const geo = columnGeometry(graph, lay, marks, plan.gutterTracks);
+    const chosen = chooseLayout(graph, marks, container.clientWidth, container.clientHeight, state.compact);
+    const { lay, plan, geo, routed } = chosen;
     const { colX, width, tagsOf } = geo;
-    const routed = routeEdges(graph, lay, geo, plan);
     const rowY = routed.rowY;
     const height = routed.height + 30;
     const root = svg('svg', { class: 'graph', width: width, height: height, viewBox: '0 0 ' + width + ' ' + height, 'data-overview': '0' });
@@ -1808,6 +1966,7 @@ const Akyuu = (function () {
     $('f-kind').addEventListener('change', (e) => { state.filter.kind = e.target.value; renderGraph(); });
     $('f-agent').addEventListener('change', (e) => { state.filter.agent = e.target.value; renderGraph(); });
     $('f-ref').addEventListener('change', (e) => { state.filter.ref = e.target.value; renderGraph(); });
+    $('f-layout').addEventListener('change', (e) => { state.compact = e.target.value === 'compact'; fitCanvas($('graph-canvas')); fitCanvas($('gc-canvas')); redrawCurrent(); });
     const num = (id, lo, hi, d) => { const n = Math.round(Number($(id).value)); return isNaN(n) ? d : Math.min(hi, Math.max(lo, n)); };
     $('w-hops').addEventListener('change', () => { state.window.hops = num('w-hops', 0, 10, 2); loadGraph(); });
     $('w-limit').addEventListener('change', () => { state.window.limit = num('w-limit', 1, 100000, 200); loadGraph(); });
