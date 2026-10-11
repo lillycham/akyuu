@@ -2,10 +2,11 @@
 
 module MCPTests (mcpTests) where
 
+import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
-import Akyuu.Id (IdParseError (BadHex), render)
-import Akyuu.MCP (CallError (BadArguments, UnknownTool), ToolCall (CallAdd, CallGet, CallNeighbours, CallRefSet, CallSearch), ToolResult (ToolResult), handleLine, handleMessage, parseToolCall, runTool, supportedVersions)
+import Akyuu.Id (IdParseError (BadHex), parse, render)
+import Akyuu.MCP (CallError (BadArguments, UnknownTool), ToolCall (CallAdd, CallCheck, CallGet, CallNeighbours, CallRefSet, CallSearch), ToolResult (ToolResult), handleLine, handleMessage, parseToolCall, runTool, supportedVersions)
 import Akyuu.Ops (NewMemory (NewMemory))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), mkName)
@@ -111,7 +112,7 @@ protocolCases =
         case r >>= at ["result", "tools"] of
           Just (Array ts) -> do
             let names = [n | t <- foldr (:) [] ts, Just (String n) <- [at ["name"] t]]
-            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list"]
+            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list", "check"]
             mapM_ (\t -> (at ["inputSchema", "type"] t, isJust (at ["description"] t)) @?= (Just "object", True)) ts
           other -> assertFailure ("no tools: " <> show other),
       testCase "a tool call runs the tool" $ do
@@ -183,6 +184,16 @@ toolCallCases =
           @?= Right (CallRefSet n MustBeAbsent (nid 1))
         parseToolCall "ref_set" (args [("ref", "a"), ("id", String (render (nid 1))), ("expected", String (render (nid 2)))])
           @?= Right (CallRefSet n (MustBe (nid 2)) (nid 1)),
+      testCase "check fills in the defaults" $
+        parseToolCall "check" (args []) @?= Right (CallCheck defaultCheckOptions [] Nothing),
+      testCase "check reads kinds, severity and the options" $
+        parseToolCall "check" (args [("kinds", A.toJSON ["fork" :: Text]), ("severity", "problem"), ("near_threshold", Number 0.5), ("hub_degree", Number 9)])
+          @?= Right (CallCheck defaultCheckOptions {nearThreshold = 0.5, hubDegree = 9} [Fork] (Just Problem)),
+      testCase "check refuses a kind that does not exist and a threshold above 1" $ do
+        parseToolCall "check" (args [("kinds", A.toJSON ["nope" :: Text])])
+          @?= Left (BadArguments "The argument 'kinds' has 'nope', which is not a kind of finding.")
+        parseToolCall "check" (args [("near_threshold", Number 2)])
+          @?= Left (BadArguments "The argument 'near_threshold' must be from 0 to 1."),
       testCase "an unknown tool" $
         parseToolCall "rm" (args []) @?= Left (UnknownTool "rm")
     ]
@@ -211,6 +222,17 @@ runToolCases =
         withOpsEnv $ \_ env -> do
           r <- runTool env (CallGet (Right (nid 7)))
           r @?= ToolResult (describe (StoreFailed (NotFound (nid 7)))) True,
+      testCase "check shows a fork and says when there is nothing" $
+        withOpsEnv $ \_ env -> do
+          ToolResult none False <- runTool env (CallCheck defaultCheckOptions [] Nothing)
+          none @?= "No findings."
+          ToolResult old False <- runTool env (CallAdd (NewMemory "fact" "claude" Set.empty "the old text"))
+          let oldId = either (error . show) id (parse old)
+              sup = Set.singleton (Edge Supersedes oldId)
+          _ <- runTool env (CallAdd (NewMemory "fact" "claude" sup "new one"))
+          _ <- runTool env (CallAdd (NewMemory "fact" "claude" sup "new two"))
+          ToolResult r False <- runTool env (CallCheck defaultCheckOptions [Fork] (Just Problem))
+          T.isPrefixOf "[problem] fork:" r @?= True,
       testCase "an empty search says so" $
         withOpsEnv $ \_ env -> do
           r <- runTool env (CallSearch defaultSearchOptions "nothing")

@@ -31,7 +31,7 @@ module Akyuu.CLI
   )
 where
 
-import Akyuu.Check (CheckOptions (CheckOptions, hubDegree, minWords, nearThreshold), Finding (findingKind, findingSeverity), FindingKind, Severity (Problem), defaultCheckOptions, kindName, severityName)
+import Akyuu.Check (CheckOptions (CheckOptions, hubDegree, minWords, nearThreshold), Finding (findingSeverity), FindingKind, Severity (Problem), defaultCheckOptions, filterFindings, kindName, severityName)
 import Akyuu.Error (AkyuuError (BadInput, BadName), describe)
 import Akyuu.GC (Policy (Policy, gracePeriod, keepGenerations, trashTTL), defaultPolicy)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
@@ -424,7 +424,7 @@ runCommand env c = runExceptT $ case c of
     r <- ExceptT (verifyStore env)
     pure (Output (encodeUtf8 (T.unlines (verifyLines r))) (verifyOk r) False)
   CheckStore a -> do
-    fs <- filterFindings a <$> ExceptT (checkStore env (caOptions a))
+    fs <- filterFindings (caKinds a) (caSeverity a) <$> ExceptT (checkStore env (caOptions a))
     refs <- ExceptT (listRefValues env)
     let out
           | caJson a = BL.toStrict (encode (toJSON (map findingJSON fs))) <> "\n"
@@ -507,14 +507,6 @@ data CheckArgs = CheckArgs
     caJson :: Bool
   }
   deriving (Eq, Show)
-
--- | The findings that the arguments ask for.
-filterFindings :: CheckArgs -> [Finding] -> [Finding]
-filterFindings a = filter keep
-  where
-    keep f =
-      (null (caKinds a) || findingKind f `elem` caKinds a)
-        && maybe True (\s -> findingSeverity f <= s) (caSeverity a)
 
 checkKindReader :: ReadM FindingKind
 checkKindReader = via $ \t ->

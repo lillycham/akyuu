@@ -19,6 +19,7 @@ module Akyuu.Check
     Finding (..),
     kindName,
     severityName,
+    filterFindings,
 
     -- * Options
     CheckOptions (..),
@@ -339,3 +340,12 @@ severityName :: Severity -> Text
 severityName Problem = "problem"
 severityName Suggestion = "suggestion"
 severityName Info = "info"
+
+-- | The findings of these kinds, and of this severity or a more serious one.
+-- An empty list of kinds and 'Nothing' for the severity keep every finding.
+filterFindings :: [FindingKind] -> Maybe Severity -> [Finding] -> [Finding]
+filterFindings ks s = filter keep
+  where
+    keep f =
+      (null ks || findingKind f `elem` ks)
+        && maybe True (\lvl -> findingSeverity f <= lvl) s

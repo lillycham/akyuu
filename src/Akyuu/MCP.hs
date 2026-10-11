@@ -35,14 +35,15 @@ module Akyuu.MCP
   )
 where
 
+import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind, Severity, defaultCheckOptions, filterFindings, kindName, severityName)
 import Akyuu.Error (AkyuuError (BadId, BadName), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, getMemory, listRefValues, neighboursOf, readRef, searchMemories, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, getMemory, listRefValues, neighboursOf, readRef, searchMemories, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName)
-import Akyuu.Render (edgeName, memoryText, neighbourLines, refLines, refListLines, searchLines)
+import Akyuu.Render (edgeName, findingLines, memoryText, neighbourLines, refLines, refListLines, searchLines)
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (unless)
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
@@ -74,6 +75,8 @@ data ToolCall
     CallRefGet Name Bool
   | CallRefSet Name Expected Id
   | CallRefList
+  | -- | The options, the kinds to show (none means all), and the lowest severity.
+    CallCheck CheckOptions [FindingKind] (Maybe Severity)
   deriving (Eq, Show)
 
 -- | The result of a tool: text, and whether it is an error.
@@ -184,7 +187,18 @@ toolList =
     tool
       "ref_list"
       "List all refs, one on each line: the name, two spaces and the id that the ref points to."
-      (objectSchema [] [])
+      (objectSchema [] []),
+    tool
+      "check"
+      "Find memories that need attention, without changing anything. It lists stale links (a memory points at an old version, and the finding names the current one), forks, duplicates, near duplicates, memories that nothing keeps, and hubs. Each finding has a severity (problem, suggestion or info), a reason, and the ids. Read the ids with get, then decide: use supersede for a copy or an old text, and ref_set or add with an edge to fix a link."
+      ( objectSchema
+          [ ("kinds", object ["type" .= ("array" :: Text), "items" .= object ["type" .= ("string" :: Text), "enum" .= map kindName [minBound .. maxBound :: FindingKind]], "description" .= ("Show only these kinds. The default is all kinds." :: Text)]),
+            ("severity", object ["type" .= ("string" :: Text), "enum" .= map severityName [minBound .. maxBound :: Severity], "description" .= ("Show this level or a more serious one. The default is all levels." :: Text)]),
+            ("near_threshold", object ["type" .= ("number" :: Text), "minimum" .= (0 :: Int), "maximum" .= (1 :: Int), "default" .= nearThreshold defaultCheckOptions, "description" .= ("The share of text that two memories must have in common to be near duplicates." :: Text)]),
+            ("hub_degree", object ["type" .= ("integer" :: Text), "minimum" .= (0 :: Int), "default" .= hubDegree defaultCheckOptions, "description" .= ("A memory with more links than this is a hub." :: Text)])
+          ]
+          []
+      )
   ]
   where
     tool :: Text -> Text -> Value -> Value
@@ -216,6 +230,12 @@ asInt v@(Number _) = case A.fromJSON v of
   A.Success n -> Just n
   A.Error _ -> Nothing
 asInt _ = Nothing
+
+asDouble :: Value -> Maybe Double
+asDouble v@(Number _) = case A.fromJSON v of
+  A.Success x -> Just x
+  A.Error _ -> Nothing
+asDouble _ = Nothing
 
 asBool :: Value -> Maybe Bool
 asBool (Bool b) = Just b
@@ -302,11 +322,31 @@ parseToolCall n args = case n of
       (Nothing, False) -> Left (BadArguments "Give 'expected' (the id that the ref points to now), or 'create': true for a new ref.")
     pure (CallRefSet r ex i)
   "ref_list" -> pure CallRefList
+  "check" -> do
+    ks <- maybe [] id <$> optional' args "kinds" (asList asText) "a list of strings"
+    s <- optional' args "severity" asText "a string"
+    t <- optional' args "near_threshold" asDouble "a number"
+    h <- optional' args "hub_degree" asInt "a whole number"
+    kinds <- traverse kindName' ks
+    sev <- traverse severityOf s
+    thr <- maybe (pure (nearThreshold defaultCheckOptions)) (\x -> if x >= 0 && x <= 1 then Right x else argError "near_threshold" "must be from 0 to 1.") t
+    hub <- atLeast "hub_degree" 0 (maybe (hubDegree defaultCheckOptions) id h)
+    pure (CallCheck defaultCheckOptions {nearThreshold = thr, hubDegree = hub} kinds sev)
   _ -> Left (UnknownTool n)
   where
     atLeast k lo v
       | v >= lo = Right v
       | otherwise = argError k ("must be at least " <> T.pack (show lo) <> ".")
+    kindName' t =
+      maybe
+        (argError "kinds" ("has '" <> t <> "', which is not a kind of finding."))
+        Right
+        (lookup t [(kindName k, k) | k <- [minBound .. maxBound]])
+    severityOf t =
+      maybe
+        (argError "severity" ("is '" <> t <> "'. Use problem, suggestion or info."))
+        Right
+        (lookup t [(severityName s, s) | s <- [minBound .. maxBound]])
     kindOf t =
       maybe
         (argError "follow" ("has '" <> t <> "', which is not a kind of edge."))
@@ -336,6 +376,10 @@ runTool env c = either failed id <$> go
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
       CallRefList -> fmap (lines' "There are no refs." . refListLines) <$> listRefValues env
+      CallCheck o ks s -> do
+        r <- checkStore env o
+        refs <- listRefValues env
+        pure ((\fs rs -> okText (T.intercalate "\n" (findingLines rs (filterFindings ks s fs))) False) <$> r <*> refs)
 
 -- Protocol -------------------------------------------------------------
 
