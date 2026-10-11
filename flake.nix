@@ -16,9 +16,16 @@
       # the dev shell takes its dependencies (the test libraries too).
       withTests = pkgs: pkgs.haskellPackages.callPackage ./akyuu.nix { };
 
-      # The package to install: no tests (they run in `checks`), no haddock.
+      # The package to install: no tests (they run in `checks`), no haddock,
+      # and only the executable. justStaticExecutables drops the references to
+      # the Haskell libraries and to GHC, so the closure is the binary and a
+      # few system libraries, and not the libraries and docs of every
+      # dependency (it was about 3.5 GiB without it).
       akyuuFor = pkgs:
-        pkgs.haskell.lib.dontHaddock (pkgs.haskell.lib.dontCheck (withTests pkgs));
+        let
+          lib = pkgs.haskell.lib;
+        in
+        lib.justStaticExecutables (lib.dontHaddock (lib.dontCheck (withTests pkgs)));
 
       backupFor = pkgs:
         pkgs.writeShellApplication {
