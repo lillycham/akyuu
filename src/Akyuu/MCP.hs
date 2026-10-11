@@ -45,7 +45,7 @@ import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName)
 import Akyuu.Render (edgeName, memoryText, neighbourLines, refLines, refListLines, searchLines)
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (unless)
-import Data.Aeson ((.=), Value (Array, Bool, Null, Number, Object, String), object)
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
 import Data.Aeson qualified as A
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap (KeyMap)

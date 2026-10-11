@@ -338,7 +338,8 @@ resolveId env (Prefix p) = runExceptT $ do
 parseDuration :: Text -> Either AkyuuError NominalDiffTime
 parseDuration t = case T.span isDigit t of
   (ds, u)
-    | not (T.null ds), Just k <- lookup u units ->
+    | not (T.null ds),
+      Just k <- lookup u units ->
         Right (fromInteger (read (T.unpack ds)) * k)
   _ -> Left (BadInput (quote t <> " is not a length of time. Use a number and a unit: s, m, h or d, for example 30m, 1h or 7d."))
   where

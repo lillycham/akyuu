@@ -6,10 +6,10 @@ import Control.Exception (bracket)
 import Data.ByteString qualified as BS
 import Data.Maybe (fromMaybe)
 import System.Directory
-  ( createDirectory
-  , getTemporaryDirectory
-  , removeDirectoryRecursive
-  , removeFile
+  ( createDirectory,
+    getTemporaryDirectory,
+    removeDirectoryRecursive,
+    removeFile,
   )
 import System.IO (hClose, openTempFile)
 import Test.Tasty.HUnit (assertFailure)

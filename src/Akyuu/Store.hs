@@ -50,7 +50,7 @@ module Akyuu.Store
   )
 where
 
-import Akyuu.Fs (tryWith, atomicWrite)
+import Akyuu.Fs (atomicWrite, tryWith)
 import Akyuu.Id (Id, hashBytes, hashFile, parse, render, toBytes)
 import Akyuu.Memory (Memory, MemoryParseError, parseMemory, renderMemory)
 import Control.Exception (IOException, try, tryJust)

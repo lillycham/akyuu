@@ -9,19 +9,19 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import System.Timeout (timeout)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit ((@?=), testCase)
-import Test.Tasty.QuickCheck ((===), Gen, Property, Testable, choose, conjoin, elements, forAll, forAllShrink, listOf, shrinkList, shuffle, sublistOf, testProperty)
+import Test.Tasty.HUnit (testCase, (@?=))
+import Test.Tasty.QuickCheck (Gen, Property, Testable, choose, conjoin, elements, forAll, forAllShrink, listOf, shrinkList, shuffle, sublistOf, testProperty, (===))
 
 graphTests :: TestTree
 graphTests =
   testGroup
     "Akyuu.Graph"
-    [ constructionTests
-    , monoidTests
-    , queryTests
-    , traversalTests
-    , supersessionTests
-    , modelTests
+    [ constructionTests,
+      monoidTests,
+      queryTests,
+      traversalTests,
+      supersessionTests,
+      modelTests
     ]
 
 -- A memory is an Id and its edges. The generators use six Ids only, so edges
@@ -122,14 +122,14 @@ constructionTests =
   testGroup
     "singleton and mempty"
     [ testCase "mempty has no nodes" $
-        nodes mempty @?= Set.empty
-    , testCase "a memory with no edges is a node" $
-        nodes (singleton a []) @?= Set.singleton a
-    , testCase "a memory with no edges has no neighbours" $
-        neighbours a (singleton a []) @?= Set.empty
-    , testCase "the target of an edge is not a node" $
-        nodes (singleton b [Edge Supersedes a]) @?= Set.singleton b
-    , testCase "an edge is visible from both ends" $ do
+        nodes mempty @?= Set.empty,
+      testCase "a memory with no edges is a node" $
+        nodes (singleton a []) @?= Set.singleton a,
+      testCase "a memory with no edges has no neighbours" $
+        neighbours a (singleton a []) @?= Set.empty,
+      testCase "the target of an edge is not a node" $
+        nodes (singleton b [Edge Supersedes a]) @?= Set.singleton b,
+      testCase "an edge is visible from both ends" $ do
         successors Supersedes b g @?= Set.singleton a
         predecessors Supersedes a g @?= Set.singleton b
     ]
@@ -142,24 +142,24 @@ monoidTests =
     "Monoid"
     [ testCase "two memories with the same target keep both edges" $
         predecessors About a (build [(b, [(About, a)]), (c, [(About, a)])])
-          @?= Set.fromList [b, c]
-    , testCase "two graphs of the same memory keep the edges of both" $ do
+          @?= Set.fromList [b, c],
+      testCase "two graphs of the same memory keep the edges of both" $ do
         let g = singleton b [Edge About a] <> singleton b [Edge Refines c]
         successors About b g @?= Set.singleton a
-        successors Refines b g @?= Set.singleton c
-    , testCase "a graph that holds a target and a graph that holds its source join up" $ do
+        successors Refines b g @?= Set.singleton c,
+      testCase "a graph that holds a target and a graph that holds its source join up" $ do
         let g = singleton a [] <> singleton b [Edge Supersedes a]
         nodes g @?= Set.fromList [a, b]
-        predecessors Supersedes a g @?= Set.singleton b
-    , testProperty "mempty is a left and right identity" $ forMemories $ \ms ->
+        predecessors Supersedes a g @?= Set.singleton b,
+      testProperty "mempty is a left and right identity" $ forMemories $ \ms ->
         let g = build ms
-         in conjoin [mempty <> g === g, g <> mempty === g]
-    , testProperty "<> is associative" $
+         in conjoin [mempty <> g === g, g <> mempty === g],
+      testProperty "<> is associative" $
         forMemories $ \m1 -> forMemories $ \m2 -> forMemories $ \m3 ->
-          (build m1 <> build m2) <> build m3 === build m1 <> (build m2 <> build m3)
-    , testProperty "the order of the memories does not matter" $ forMemories $ \ms ->
-        forAll (shuffle ms) $ \ms' -> build ms' === build ms
-    , testProperty "two halves joined are the same as the whole" $ forMemories $ \ms ->
+          (build m1 <> build m2) <> build m3 === build m1 <> (build m2 <> build m3),
+      testProperty "the order of the memories does not matter" $ forMemories $ \ms ->
+        forAll (shuffle ms) $ \ms' -> build ms' === build ms,
+      testProperty "two halves joined are the same as the whole" $ forMemories $ \ms ->
         forAll (choose (0, length ms)) $ \n ->
           build (take n ms) <> build (drop n ms) === build ms
     ]
@@ -169,33 +169,33 @@ queryTests =
   testGroup
     "queries"
     [ testCase "successors of an unknown node are empty" $
-        successors Supersedes x chain @?= Set.empty
-    , testCase "predecessors of an unknown node are empty" $
-        predecessors Supersedes x chain @?= Set.empty
-    , testCase "successors keep only the asked kind" $ do
+        successors Supersedes x chain @?= Set.empty,
+      testCase "predecessors of an unknown node are empty" $
+        predecessors Supersedes x chain @?= Set.empty,
+      testCase "successors keep only the asked kind" $ do
         let g = build [(b, [(Supersedes, a), (About, c)])]
         successors Supersedes b g @?= Set.singleton a
         successors About b g @?= Set.singleton c
-        successors Refines b g @?= Set.empty
-    , testCase "predecessors keep only the asked kind" $ do
+        successors Refines b g @?= Set.empty,
+      testCase "predecessors keep only the asked kind" $ do
         let g = build [(b, [(Supersedes, a)]), (c, [(About, a)])]
         predecessors Supersedes a g @?= Set.singleton b
-        predecessors About a g @?= Set.singleton c
-    , testCase "neighbours tell the direction of each edge" $
+        predecessors About a g @?= Set.singleton c,
+      testCase "neighbours tell the direction of each edge" $
         neighbours b chain
-          @?= Set.fromList [(Out, Supersedes, a), (In, Supersedes, c)]
-    , testCase "an edge to a dangling target shows from the source only" $ do
+          @?= Set.fromList [(Out, Supersedes, a), (In, Supersedes, c)],
+      testCase "an edge to a dangling target shows from the source only" $ do
         let g = build [(b, [(About, x)])]
         neighbours b g @?= Set.singleton (Out, About, x)
-        neighbours x g @?= Set.singleton (In, About, b)
-    , testProperty "an edge is a successor of its source exactly when its target has it as a predecessor" $
+        neighbours x g @?= Set.singleton (In, About, b),
+      testProperty "an edge is a successor of its source exactly when its target has it as a predecessor" $
         forMemories $ \ms ->
           let g = build ms
            in conjoin
                 [ (y `Set.member` successors k i g) === (i `Set.member` predecessors k y g)
-                | k <- kinds
-                , i <- universe
-                , y <- universe
+                | k <- kinds,
+                  i <- universe,
+                  y <- universe
                 ]
     ]
 
@@ -205,35 +205,35 @@ traversalTests =
     "reachable and withinHops"
     [ testCase "reachable follows edges from newer to older only" $ do
         reachable (const True) (Set.singleton c) chain @?= Set.fromList [a, b, c]
-        reachable (const True) (Set.singleton a) chain @?= Set.singleton a
-    , testCase "reachable does not follow a kind that the predicate rejects" $
-        reachable (/= Supersedes) (Set.singleton c) chain @?= Set.singleton c
-    , testCase "reachable from no roots is empty" $
-        reachable (const True) Set.empty chain @?= Set.empty
-    , testCase "reachable stops on a cycle" $ do
+        reachable (const True) (Set.singleton a) chain @?= Set.singleton a,
+      testCase "reachable does not follow a kind that the predicate rejects" $
+        reachable (/= Supersedes) (Set.singleton c) chain @?= Set.singleton c,
+      testCase "reachable from no roots is empty" $
+        reachable (const True) Set.empty chain @?= Set.empty,
+      testCase "reachable stops on a cycle" $ do
         r <- timeout 1000000 (evaluate (Set.size (reachable (const True) (Set.singleton a) cycleGraph)))
-        r @?= Just 2
-    , testCase "withinHops follows edges in both directions" $ do
+        r @?= Just 2,
+      testCase "withinHops follows edges in both directions" $ do
         withinHops 1 (const True) (Set.singleton b) chain @?= Set.fromList [a, b, c]
         withinHops 1 (const True) (Set.singleton c) chain @?= Set.fromList [b, c]
-        withinHops 2 (const True) (Set.singleton c) chain @?= Set.fromList [a, b, c]
-    , testCase "withinHops does not follow a kind that the predicate rejects" $
-        withinHops 5 (/= Supersedes) (Set.singleton b) chain @?= Set.singleton b
-    , testCase "withinHops stops on a cycle" $ do
+        withinHops 2 (const True) (Set.singleton c) chain @?= Set.fromList [a, b, c],
+      testCase "withinHops does not follow a kind that the predicate rejects" $
+        withinHops 5 (/= Supersedes) (Set.singleton b) chain @?= Set.singleton b,
+      testCase "withinHops stops on a cycle" $ do
         r <- timeout 1000000 (evaluate (Set.size (withinHops 100 (const True) (Set.singleton a) cycleGraph)))
-        r @?= Just 2
-    , testProperty "reachable includes the roots" $ forMemories $ \ms ->
+        r @?= Just 2,
+      testProperty "reachable includes the roots" $ forMemories $ \ms ->
         forAll genRoots $ \roots -> forAll genPred $ \pn ->
-          roots `Set.isSubsetOf` reachable (predOf pn) roots (build ms)
-    , testProperty "reachable is closed: a second pass adds nothing" $ forMemories $ \ms ->
+          roots `Set.isSubsetOf` reachable (predOf pn) roots (build ms),
+      testProperty "reachable is closed: a second pass adds nothing" $ forMemories $ \ms ->
         forAll genRoots $ \roots -> forAll genPred $ \pn ->
           let g = build ms
               r = reachable (predOf pn) roots g
-           in reachable (predOf pn) r g === r
-    , testProperty "withinHops 0 is the roots" $ forMemories $ \ms ->
+           in reachable (predOf pn) r g === r,
+      testProperty "withinHops 0 is the roots" $ forMemories $ \ms ->
         forAll genRoots $ \roots -> forAll genPred $ \pn ->
-          withinHops 0 (predOf pn) roots (build ms) === roots
-    , testProperty "withinHops only grows as the number of hops grows" $ forMemories $ \ms ->
+          withinHops 0 (predOf pn) roots (build ms) === roots,
+      testProperty "withinHops only grows as the number of hops grows" $ forMemories $ \ms ->
         forAll genRoots $ \roots -> forAll genPred $ \pn -> forAll (choose (0, 4)) $ \n ->
           let g = build ms
            in withinHops n (predOf pn) roots g `Set.isSubsetOf` withinHops (n + 1) (predOf pn) roots g
@@ -245,27 +245,27 @@ supersessionTests =
     "superseded, heads and dangling"
     [ testCase "in a chain, only the newest memory is a head" $ do
         superseded chain @?= Set.fromList [a, b]
-        heads chain @?= Set.singleton c
-    , testCase "two memories that supersede the same memory are both heads" $ do
+        heads chain @?= Set.singleton c,
+      testCase "two memories that supersede the same memory are both heads" $ do
         let g = build [(a, []), (b, [(Supersedes, a)]), (c, [(Supersedes, a)])]
         superseded g @?= Set.singleton a
-        heads g @?= Set.fromList [b, c]
-    , testCase "an edge of another kind does not supersede" $ do
+        heads g @?= Set.fromList [b, c],
+      testCase "an edge of another kind does not supersede" $ do
         let g = build [(a, []), (b, [(About, a), (Refines, a), (DerivedFrom, a)])]
         superseded g @?= Set.empty
-        heads g @?= Set.fromList [a, b]
-    , testCase "a memory with no edges, and nothing that supersedes it, is a head" $
-        heads (singleton a []) @?= Set.singleton a
-    , testCase "an empty graph has no heads" $
-        heads mempty @?= Set.empty
-    , testCase "a pruned target is dangling, and is not a superseded node" $ do
+        heads g @?= Set.fromList [a, b],
+      testCase "a memory with no edges, and nothing that supersedes it, is a head" $
+        heads (singleton a []) @?= Set.singleton a,
+      testCase "an empty graph has no heads" $
+        heads mempty @?= Set.empty,
+      testCase "a pruned target is dangling, and is not a superseded node" $ do
         let g = build [(b, [(Supersedes, x)])]
         dangling g @?= Set.singleton x
         superseded g @?= Set.empty
-        heads g @?= Set.singleton b
-    , testCase "a complete graph has no dangling targets" $
-        dangling chain @?= Set.empty
-    , testCase "a target is not dangling when its own memory joins the graph later" $
+        heads g @?= Set.singleton b,
+      testCase "a complete graph has no dangling targets" $
+        dangling chain @?= Set.empty,
+      testCase "a target is not dangling when its own memory joins the graph later" $
         dangling (singleton b [Edge About a] <> singleton a []) @?= Set.empty
     ]
 
@@ -274,38 +274,38 @@ modelTests =
   testGroup
     "agree with a list model"
     [ testProperty "nodes" $ forMemories $ \ms ->
-        nodes (build ms) === modelNodes ms
-    , testProperty "successors and predecessors" $ forMemories $ \ms ->
+        nodes (build ms) === modelNodes ms,
+      testProperty "successors and predecessors" $ forMemories $ \ms ->
         let g = build ms
          in conjoin
               [ conjoin
-                  [ successors k i g === modelSucc ms k i
-                  , predecessors k i g === modelPred ms k i
+                  [ successors k i g === modelSucc ms k i,
+                    predecessors k i g === modelPred ms k i
                   ]
-              | k <- kinds
-              , i <- universe
-              ]
-    , testProperty "neighbours" $ forMemories $ \ms ->
+              | k <- kinds,
+                i <- universe
+              ],
+      testProperty "neighbours" $ forMemories $ \ms ->
         let g = build ms
-         in conjoin [neighbours i g === modelNeighbours ms i | i <- universe]
-    , testProperty "dangling" $ forMemories $ \ms ->
-        dangling (build ms) === modelDangling ms
-    , testProperty "superseded" $ forMemories $ \ms ->
-        superseded (build ms) === modelSuperseded ms
-    , testProperty "heads" $ forMemories $ \ms ->
-        heads (build ms) === modelHeads ms
-    , testProperty "heads and superseded split the nodes" $ forMemories $ \ms ->
+         in conjoin [neighbours i g === modelNeighbours ms i | i <- universe],
+      testProperty "dangling" $ forMemories $ \ms ->
+        dangling (build ms) === modelDangling ms,
+      testProperty "superseded" $ forMemories $ \ms ->
+        superseded (build ms) === modelSuperseded ms,
+      testProperty "heads" $ forMemories $ \ms ->
+        heads (build ms) === modelHeads ms,
+      testProperty "heads and superseded split the nodes" $ forMemories $ \ms ->
         let g = build ms
          in conjoin
-              [ heads g `Set.union` superseded g === nodes g
-              , Set.null (heads g `Set.intersection` superseded g) === True
-              ]
-    , testProperty "reachable" $ forMemories $ \ms ->
+              [ heads g `Set.union` superseded g === nodes g,
+                Set.null (heads g `Set.intersection` superseded g) === True
+              ],
+      testProperty "reachable" $ forMemories $ \ms ->
         forAll genRoots $ \roots -> forAll genPred $ \pn ->
           let g = build ms
               p = predOf pn
-           in onlyNodes g (reachable p roots g) === onlyNodes g (modelReach p roots ms)
-    , testProperty "withinHops" $ forMemories $ \ms ->
+           in onlyNodes g (reachable p roots g) === onlyNodes g (modelReach p roots ms),
+      testProperty "withinHops" $ forMemories $ \ms ->
         forAll genRoots $ \roots -> forAll genPred $ \pn -> forAll (choose (0, 4)) $ \n ->
           let g = build ms
               p = predOf pn

@@ -10,7 +10,7 @@ import Akyuu.Ops (NewMemory (NewMemory))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), mkName)
 import Akyuu.Store (StoreError (NotFound))
-import Data.Aeson ((.=), Value (Array, Bool, Null, Number, Object, String), object)
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
 import Data.Aeson qualified as A
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
@@ -23,15 +23,15 @@ import Data.Text qualified as T
 import OpsTests (withOpsEnv)
 import Support (nid, right)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 mcpTests :: TestTree
 mcpTests =
   testGroup
     "Akyuu.MCP"
-    [ protocolCases
-    , toolCallCases
-    , runToolCases
+    [ protocolCases,
+      toolCallCases,
+      runToolCases
     ]
 
 -- Helpers --------------------------------------------------------------
@@ -85,65 +85,65 @@ protocolCases =
         (r >>= at ["result", "protocolVersion"]) @?= Just "2025-06-18"
         (r >>= at ["result", "serverInfo", "name"]) @?= Just "akyuu"
         isJust (r >>= at ["result", "capabilities", "tools"]) @?= True
-        (r >>= at ["id"]) @?= Just (Number 1)
-    , testCase "initialize tells a client to read the memory policy first" $ do
+        (r >>= at ["id"]) @?= Just (Number 1),
+      testCase "initialize tells a client to read the memory policy first" $ do
         let r = answer (req (Number 1) "initialize" (object ["protocolVersion" .= ("2025-06-18" :: Text)]))
         case r >>= at ["result", "instructions"] of
           Just (String t) -> do
             assertBool "names the policy ref" ("claude/memory-policy" `T.isInfixOf` t)
             assertBool "still explains supersede" ("supersede" `T.isInfixOf` t)
-          other -> assertFailure ("expected instructions text, got " <> show other)
-    , testCase "initialize with an unknown version offers the newest" $
+          other -> assertFailure ("expected instructions text, got " <> show other),
+      testCase "initialize with an unknown version offers the newest" $
         (answer (req (Number 1) "initialize" (object ["protocolVersion" .= ("1999-01-01" :: Text)])) >>= at ["result", "protocolVersion"])
-          @?= fmap String (listToMaybe supportedVersions)
-    , testCase "a notification gets no answer" $
-        answer (object ["jsonrpc" .= ("2.0" :: Text), "method" .= ("notifications/initialized" :: Text)]) @?= Nothing
-    , testCase "an unknown notification gets no answer" $
-        answer (object ["jsonrpc" .= ("2.0" :: Text), "method" .= ("notifications/whatever" :: Text)]) @?= Nothing
-    , testCase "a response from the client gets no answer" $
-        answer (object ["jsonrpc" .= ("2.0" :: Text), "id" .= (5 :: Int), "result" .= object []]) @?= Nothing
-    , testCase "ping gives an empty result, with a string id" $ do
+          @?= fmap String (listToMaybe supportedVersions),
+      testCase "a notification gets no answer" $
+        answer (object ["jsonrpc" .= ("2.0" :: Text), "method" .= ("notifications/initialized" :: Text)]) @?= Nothing,
+      testCase "an unknown notification gets no answer" $
+        answer (object ["jsonrpc" .= ("2.0" :: Text), "method" .= ("notifications/whatever" :: Text)]) @?= Nothing,
+      testCase "a response from the client gets no answer" $
+        answer (object ["jsonrpc" .= ("2.0" :: Text), "id" .= (5 :: Int), "result" .= object []]) @?= Nothing,
+      testCase "ping gives an empty result, with a string id" $ do
         let r = answer (req (String "abc") "ping" (object []))
         (r >>= at ["result"]) @?= Just (object [])
-        (r >>= at ["id"]) @?= Just (String "abc")
-    , testCase "tools/list lists every tool with a schema" $ do
+        (r >>= at ["id"]) @?= Just (String "abc"),
+      testCase "tools/list lists every tool with a schema" $ do
         let r = answer (req (Number 2) "tools/list" (object []))
         case r >>= at ["result", "tools"] of
           Just (Array ts) -> do
             let names = [n | t <- foldr (:) [] ts, Just (String n) <- [at ["name"] t]]
             Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list"]
             mapM_ (\t -> (at ["inputSchema", "type"] t, isJust (at ["description"] t)) @?= (Just "object", True)) ts
-          other -> assertFailure ("no tools: " <> show other)
-    , testCase "a tool call runs the tool" $ do
+          other -> assertFailure ("no tools: " <> show other),
+      testCase "a tool call runs the tool" $ do
         let r = answer (callReq "neighbours" (object ["id" .= render (nid 1)]))
-        toolOut r @?= Just (String (T.pack (show (CallNeighbours (nid 1)))), Bool False)
-    , testCase "bad arguments give a tool error with the friendly text" $ do
+        toolOut r @?= Just (String (T.pack (show (CallNeighbours (nid 1)))), Bool False),
+      testCase "bad arguments give a tool error with the friendly text" $ do
         let r = answer (callReq "neighbours" (object ["id" .= ("sha256-zz" :: Text)]))
-        toolOut r @?= Just (String (describe (BadId "sha256-zz" (BadHex "zz"))), Bool True)
-    , testCase "a missing argument gives a tool error" $
+        toolOut r @?= Just (String (describe (BadId "sha256-zz" (BadHex "zz"))), Bool True),
+      testCase "a missing argument gives a tool error" $
         toolOut (answer (callReq "neighbours" (object [])))
-          @?= Just (String "The argument 'id' is missing.", Bool True)
-    , testCase "an unknown tool gives -32602" $
-        errCode (answer (callReq "nope" (object []))) @?= Just (Number (-32602))
-    , testCase "tools/call with no params gives -32602" $
-        errCode (answer (object ["jsonrpc" .= ("2.0" :: Text), "id" .= (1 :: Int), "method" .= ("tools/call" :: Text)])) @?= Just (Number (-32602))
-    , testCase "arguments that are not an object give -32602" $
-        errCode (answer (req (Number 1) "tools/call" (object ["name" .= ("ref_list" :: Text), "arguments" .= ([] :: [Int])]))) @?= Just (Number (-32602))
-    , testCase "an unknown method gives -32601" $
-        errCode (answer (req (Number 1) "resources/list" (object []))) @?= Just (Number (-32601))
-    , testCase "a message without jsonrpc 2.0 gives -32600" $
-        errCode (answer (object ["id" .= (1 :: Int), "method" .= ("ping" :: Text)])) @?= Just (Number (-32600))
-    , testCase "a null id gives -32600" $
-        errCode (answer (req Null "ping" (object []))) @?= Just (Number (-32600))
-    , testCase "a batch (an array) gives -32600" $
-        errCode (answer (A.toJSON [req (Number 1) "ping" (object [])])) @?= Just (Number (-32600))
-    , testCase "a line that is not JSON gives -32700 with a null id" $ do
+          @?= Just (String "The argument 'id' is missing.", Bool True),
+      testCase "an unknown tool gives -32602" $
+        errCode (answer (callReq "nope" (object []))) @?= Just (Number (-32602)),
+      testCase "tools/call with no params gives -32602" $
+        errCode (answer (object ["jsonrpc" .= ("2.0" :: Text), "id" .= (1 :: Int), "method" .= ("tools/call" :: Text)])) @?= Just (Number (-32602)),
+      testCase "arguments that are not an object give -32602" $
+        errCode (answer (req (Number 1) "tools/call" (object ["name" .= ("ref_list" :: Text), "arguments" .= ([] :: [Int])]))) @?= Just (Number (-32602)),
+      testCase "an unknown method gives -32601" $
+        errCode (answer (req (Number 1) "resources/list" (object []))) @?= Just (Number (-32601)),
+      testCase "a message without jsonrpc 2.0 gives -32600" $
+        errCode (answer (object ["id" .= (1 :: Int), "method" .= ("ping" :: Text)])) @?= Just (Number (-32600)),
+      testCase "a null id gives -32600" $
+        errCode (answer (req Null "ping" (object []))) @?= Just (Number (-32600)),
+      testCase "a batch (an array) gives -32600" $
+        errCode (answer (A.toJSON [req (Number 1) "ping" (object [])])) @?= Just (Number (-32600)),
+      testCase "a line that is not JSON gives -32700 with a null id" $ do
         let r = runIdentity (handleLine (pure . fake) "{not json")
         errCode r @?= Just (Number (-32700))
-        (r >>= at ["id"]) @?= Just Null
-    , testCase "a blank line gives no answer" $
-        runIdentity (handleLine (pure . fake) "  \r") @?= Nothing
-    , testCase "every answer is one line of JSON" $ do
+        (r >>= at ["id"]) @?= Just Null,
+      testCase "a blank line gives no answer" $
+        runIdentity (handleLine (pure . fake) "  \r") @?= Nothing,
+      testCase "every answer is one line of JSON" $ do
         let r = answer (callReq "add" (object ["kind" .= ("fact" :: Text), "agent" .= ("a" :: Text), "body" .= ("two\nlines" :: Text)]))
         fmap (BL.elem 10 . A.encode) r @?= Just False
     ]
@@ -159,31 +159,31 @@ toolCallCases =
     "parseToolCall"
     [ testCase "add with edges" $
         parseToolCall "add" (args [("kind", "fact"), ("agent", "claude"), ("body", "hi"), ("about", A.toJSON [render (nid 1)]), ("supersedes", A.toJSON [render (nid 2)])])
-          @?= Right (CallAdd (NewMemory "fact" "claude" (Set.fromList [Edge About (nid 1), Edge Supersedes (nid 2)]) "hi"))
-    , testCase "add checks the kind" $
+          @?= Right (CallAdd (NewMemory "fact" "claude" (Set.fromList [Edge About (nid 1), Edge Supersedes (nid 2)]) "hi")),
+      testCase "add checks the kind" $
         parseToolCall "add" (args [("kind", "a\nb"), ("agent", "claude"), ("body", "hi")])
-          @?= Left (BadArguments (describe (BadField "kind" "a\nb")))
-    , testCase "get needs exactly one of id and ref" $ do
+          @?= Left (BadArguments (describe (BadField "kind" "a\nb"))),
+      testCase "get needs exactly one of id and ref" $ do
         parseToolCall "get" (args []) @?= Left (BadArguments "Give exactly one of the arguments 'id' and 'ref'.")
         n <- right (mkName "claude/notes")
-        parseToolCall "get" (args [("ref", "claude/notes")]) @?= Right (CallGet (Left n))
-    , testCase "search fills in the defaults" $
-        parseToolCall "search" (args [("query", "haskell")]) @?= Right (CallSearch defaultSearchOptions "haskell")
-    , testCase "search reads limit, hops and follow" $
+        parseToolCall "get" (args [("ref", "claude/notes")]) @?= Right (CallGet (Left n)),
+      testCase "search fills in the defaults" $
+        parseToolCall "search" (args [("query", "haskell")]) @?= Right (CallSearch defaultSearchOptions "haskell"),
+      testCase "search reads limit, hops and follow" $
         parseToolCall "search" (args [("query", "x"), ("limit", Number 3), ("hops", Number 0), ("follow", A.toJSON ["about" :: Text])])
-          @?= Right (CallSearch (SearchOptions 3 0 (Set.singleton About)) "x")
-    , testCase "search refuses a limit of 0 and a fraction" $ do
+          @?= Right (CallSearch (SearchOptions 3 0 (Set.singleton About)) "x"),
+      testCase "search refuses a limit of 0 and a fraction" $ do
         parseToolCall "search" (args [("query", "x"), ("limit", Number 0)]) @?= Left (BadArguments "The argument 'limit' must be at least 1.")
-        parseToolCall "search" (args [("query", "x"), ("hops", Number 1.5)]) @?= Left (BadArguments "The argument 'hops' must be a whole number.")
-    , testCase "ref_set needs expected or create" $ do
+        parseToolCall "search" (args [("query", "x"), ("hops", Number 1.5)]) @?= Left (BadArguments "The argument 'hops' must be a whole number."),
+      testCase "ref_set needs expected or create" $ do
         n <- right (mkName "a")
         parseToolCall "ref_set" (args [("ref", "a"), ("id", String (render (nid 1)))])
           @?= Left (BadArguments "Give 'expected' (the id that the ref points to now), or 'create': true for a new ref.")
         parseToolCall "ref_set" (args [("ref", "a"), ("id", String (render (nid 1))), ("create", Bool True)])
           @?= Right (CallRefSet n MustBeAbsent (nid 1))
         parseToolCall "ref_set" (args [("ref", "a"), ("id", String (render (nid 1))), ("expected", String (render (nid 2)))])
-          @?= Right (CallRefSet n (MustBe (nid 2)) (nid 1))
-    , testCase "an unknown tool" $
+          @?= Right (CallRefSet n (MustBe (nid 2)) (nid 1)),
+      testCase "an unknown tool" $
         parseToolCall "rm" (args []) @?= Left (UnknownTool "rm")
     ]
 
@@ -201,17 +201,17 @@ runToolCases =
           ToolResult g False <- runTool env (CallGet (Left n))
           T.isSuffixOf "\n\nLilly prefers Haskell" g @?= True
           ToolResult s False <- runTool env (CallSearch defaultSearchOptions "haskell")
-          T.isPrefixOf i s @?= True
-    , testCase "search text has the same brackets as the CLI" $
+          T.isPrefixOf i s @?= True,
+      testCase "search text has the same brackets as the CLI" $
         withOpsEnv $ \_ env -> do
           ToolResult i False <- runTool env (CallAdd (NewMemory "fact" "claude" Set.empty "see [x] and Haskell"))
           ToolResult s False <- runTool env (CallSearch defaultSearchOptions "haskell")
-          s @?= i <> "  see \\[x\\] and [Haskell]"
-    , testCase "a failed operation is a tool error with the CLI text" $
+          s @?= i <> "  see \\[x\\] and [Haskell]",
+      testCase "a failed operation is a tool error with the CLI text" $
         withOpsEnv $ \_ env -> do
           r <- runTool env (CallGet (Right (nid 7)))
-          r @?= ToolResult (describe (StoreFailed (NotFound (nid 7)))) True
-    , testCase "an empty search says so" $
+          r @?= ToolResult (describe (StoreFailed (NotFound (nid 7)))) True,
+      testCase "an empty search says so" $
         withOpsEnv $ \_ env -> do
           r <- runTool env (CallSearch defaultSearchOptions "nothing")
           r @?= ToolResult "No matches." False

@@ -81,19 +81,26 @@ describe err = case err of
   BadName t e -> describeName t e
   BadId t e -> describeId t e
   BadField name v ->
-    "The " <> name <> " " <> quote v
+    "The "
+      <> name
+      <> " "
+      <> quote v
       <> " is not valid. It must be one line of text, not empty, with no space at either end."
   BadInput t -> t
   NoRoot -> "No store is given. Use --root DIR, or set AKYUU_ROOT."
   RootMissing p -> "The store directory " <> quote (T.pack p) <> " does not exist. Make it first."
   Pruned i t -> "The memory " <> render i <> " is gone: GC deleted it at " <> time t <> "."
   BadIdSpec t ->
-    quote t <> " is not an id or the start of one. Give the whole id (sha256- and 64 hex digits),"
+    quote t
+      <> " is not an id or the start of one. Give the whole id (sha256- and 64 hex digits),"
       <> " or the first 4 or more characters of it."
   NoSuchPrefix t -> "No memory has an id that starts with " <> quote t <> "."
   AmbiguousPrefix t is ->
-    "More than one memory has an id that starts with " <> quote t <> ". Give more characters. They are: "
-      <> T.intercalate ", " (map render is) <> "."
+    "More than one memory has an id that starts with "
+      <> quote t
+      <> ". Give more characters. They are: "
+      <> T.intercalate ", " (map render is)
+      <> "."
   where
     time = T.pack . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" . prunedAt
 
@@ -141,7 +148,9 @@ describeGC e = case e of
 describeName :: Text -> NameError -> Text
 describeName _ EmptyName = "A ref name cannot be empty."
 describeName t (BadSegment s) =
-  quote t <> " is not a valid ref name. The part " <> quote s
+  quote t
+    <> " is not a valid ref name. The part "
+    <> quote s
     <> " must have 1 to 64 of the characters a-z, 0-9, '-', '_' and '.', and must not start with '.'."
 
 describeId :: Text -> IdParseError -> Text

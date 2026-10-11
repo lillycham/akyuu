@@ -14,20 +14,20 @@ module Akyuu.Id
   )
 where
 
+import Control.Exception (evaluate)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
+import Data.ByteString.Lazy qualified as BL
 import Data.ByteString.Short (ShortByteString)
 import Data.ByteString.Short qualified as SBS
-import Data.ByteString.Lazy qualified as BL
+import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
 import Data.Text.Encoding qualified as TE
-import Control.Exception (evaluate)
-import Data.Maybe (fromJust)
 
 -- | The identity of a stored object. An 'Id' is the SHA-256 digest of the
 -- content of the object.
@@ -78,8 +78,8 @@ hashBytes = Id . SBS.toShort . SHA256.hash
 -- all file sizes. It throws an 'IOException' if it cannot open or read the file.
 hashFile :: FilePath -> IO Id
 hashFile p = do
-    i <- SHA256.hashlazy <$> BL.readFile p
-    evaluate $ fromJust $ fromDigest i
+  i <- SHA256.hashlazy <$> BL.readFile p
+  evaluate $ fromJust $ fromDigest i
 
 -- | Check that some content matches an 'Id'.
 --

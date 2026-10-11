@@ -1,21 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
+
 module Main (main) where
 
 import Akyuu.Id (Id, IdParseError (BadHex, BadLength, BadPrefix), fromDigest, hashBytes, hashFile, parse, render, toBytes, verify)
-import CacheTests (cacheTests)
-import FsTests (fsTests)
-import GCTests (gcTests)
-import GraphTests (graphTests)
-import MemoryTests (memoryTests)
-import QueryTests (queryTests)
-import OpsTests (opsTests)
 import CLITests (cliTests)
-import MCPTests (mcpTests)
-import RefsTests (refsTests)
-import StoreTests (storeTests)
-import SeedTests (seedTests)
-import SupersedeTests (supersedeTests)
-import WebTests (webTests)
+import CacheTests (cacheTests)
 import Control.Exception (IOException, bracket, try)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -23,11 +12,23 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Word (Word8)
+import FsTests (fsTests)
+import GCTests (gcTests)
+import GraphTests (graphTests)
+import MCPTests (mcpTests)
+import MemoryTests (memoryTests)
+import OpsTests (opsTests)
+import QueryTests (queryTests)
+import RefsTests (refsTests)
+import SeedTests (seedTests)
+import StoreTests (storeTests)
+import SupersedeTests (supersedeTests)
 import System.Directory (getTemporaryDirectory, removeFile)
 import System.IO (hClose, openBinaryTempFile)
 import Test.Tasty (TestTree, defaultMain, testGroup)
-import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
-import Test.Tasty.QuickCheck ((===), (==>), conjoin, testProperty)
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import Test.Tasty.QuickCheck (conjoin, testProperty, (===), (==>))
+import WebTests (webTests)
 
 main :: IO ()
 main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, opsTests, cliTests, mcpTests, webTests, seedTests]
@@ -36,15 +37,15 @@ idTests :: TestTree
 idTests =
   testGroup
     "Akyuu.Id"
-    [ digestTests
-    , toBytesTests
-    , hashTests
-    , hashFileTests
-    , verifyTests
-    , renderTests
-    , showTests
-    , parseTests
-    , properties
+    [ digestTests,
+      toBytesTests,
+      hashTests,
+      hashFileTests,
+      verifyTests,
+      renderTests,
+      showTests,
+      parseTests,
+      properties
     ]
 
 -- SHA-256 test vectors (FIPS 180-4 / NIST).
@@ -81,16 +82,16 @@ digestTests =
   testGroup
     "fromDigest"
     [ testCase "accepts 32 bytes" $
-        assertBool "expected Just" (isJust' (fromDigest (BS.replicate 32 0)))
-    , testCase "rejects empty input" $
-        assertBool "expected Nothing" (not (isJust' (fromDigest BS.empty)))
-    , testCase "rejects 31 bytes" $
-        assertBool "expected Nothing" (not (isJust' (fromDigest (BS.replicate 31 0))))
-    , testCase "rejects 33 bytes" $
-        assertBool "expected Nothing" (not (isJust' (fromDigest (BS.replicate 33 0))))
-    , testCase "does not check that a hash function made the digest" $
-        assertBool "expected Just" (isJust' (fromDigest (BS.replicate 32 0xff)))
-    , testCase "gives the same Id as hashBytes for a real digest" $
+        assertBool "expected Just" (isJust' (fromDigest (BS.replicate 32 0))),
+      testCase "rejects empty input" $
+        assertBool "expected Nothing" (not (isJust' (fromDigest BS.empty))),
+      testCase "rejects 31 bytes" $
+        assertBool "expected Nothing" (not (isJust' (fromDigest (BS.replicate 31 0)))),
+      testCase "rejects 33 bytes" $
+        assertBool "expected Nothing" (not (isJust' (fromDigest (BS.replicate 33 0)))),
+      testCase "does not check that a hash function made the digest" $
+        assertBool "expected Just" (isJust' (fromDigest (BS.replicate 32 0xff))),
+      testCase "gives the same Id as hashBytes for a real digest" $
         fromDigest (hexBytes emptyHex) @?= Just (hashBytes BS.empty)
     ]
 
@@ -99,10 +100,10 @@ toBytesTests =
   testGroup
     "toBytes"
     [ testCase "gives the SHA-256 digest of the empty string" $
-        toBytes (hashBytes BS.empty) @?= hexBytes emptyHex
-    , testCase "gives the SHA-256 digest of \"abc\"" $
-        toBytes (hashBytes "abc") @?= hexBytes abcHex
-    , testCase "gives back the digest that fromDigest got" $
+        toBytes (hashBytes BS.empty) @?= hexBytes emptyHex,
+      testCase "gives the SHA-256 digest of \"abc\"" $
+        toBytes (hashBytes "abc") @?= hexBytes abcHex,
+      testCase "gives back the digest that fromDigest got" $
         fmap toBytes (fromDigest (BS.replicate 32 7)) @?= Just (BS.replicate 32 7)
     ]
 
@@ -111,12 +112,12 @@ hashTests =
   testGroup
     "hashBytes"
     [ testCase "matches the SHA-256 vector for the empty string" $
-        parse ("sha256-" <> emptyHex) @?= Right (hashBytes BS.empty)
-    , testCase "matches the SHA-256 vector for \"abc\"" $
-        parse ("sha256-" <> abcHex) @?= Right (hashBytes "abc")
-    , testCase "is deterministic" $
-        hashBytes "akyuu" @?= hashBytes "akyuu"
-    , testCase "distinguishes different inputs" $
+        parse ("sha256-" <> emptyHex) @?= Right (hashBytes BS.empty),
+      testCase "matches the SHA-256 vector for \"abc\"" $
+        parse ("sha256-" <> abcHex) @?= Right (hashBytes "abc"),
+      testCase "is deterministic" $
+        hashBytes "akyuu" @?= hashBytes "akyuu",
+      testCase "distinguishes different inputs" $
         assertBool "ids equal" (hashBytes "a" /= hashBytes "b")
     ]
 
@@ -125,19 +126,19 @@ hashFileTests =
   testGroup
     "hashFile"
     [ testCase "gives the Id of an empty file" $
-        withTempFileContaining BS.empty hashFile >>= (@?= hashBytes BS.empty)
-    , testCase "gives the Id of a small file" $
-        withTempFileContaining "abc" hashFile >>= (@?= hashBytes "abc")
-    , testCase "gives the Id of a file that is larger than one chunk" $ do
+        withTempFileContaining BS.empty hashFile >>= (@?= hashBytes BS.empty),
+      testCase "gives the Id of a small file" $
+        withTempFileContaining "abc" hashFile >>= (@?= hashBytes "abc"),
+      testCase "gives the Id of a file that is larger than one chunk" $ do
         -- About 1 MiB, and not a round multiple of any usual chunk size.
         let content = BS.pack (take (1024 * 1024 + 17) (cycle [0 .. 250]))
         withTempFileContaining content hashFile
-          >>= (@?= hashBytes (content))
-    , testCase "gives a different Id for a file with different content" $ do
+          >>= (@?= hashBytes (content)),
+      testCase "gives a different Id for a file with different content" $ do
         a <- withTempFileContaining "a" hashFile
         b <- withTempFileContaining "b" hashFile
-        assertBool "ids equal" (a /= b)
-    , testCase "throws an IOException if the file does not exist" $ do
+        assertBool "ids equal" (a /= b),
+      testCase "throws an IOException if the file does not exist" $ do
         r <- try (hashFile "/nonexistent/akyuu-test-missing-file")
         case r of
           Left (_ :: IOException) -> pure ()
@@ -149,12 +150,12 @@ verifyTests =
   testGroup
     "verify"
     [ testCase "accepts content that matches the Id" $
-        assertBool "expected True" (verify (hashBytes "abc") "abc")
-    , testCase "accepts the empty content for the Id of the empty string" $
-        assertBool "expected True" (verify (hashBytes BS.empty) BS.empty)
-    , testCase "rejects content that does not match the Id" $
-        assertBool "expected False" (not (verify (hashBytes "abc") "abd"))
-    , testCase "rejects content for an Id that no content made" $
+        assertBool "expected True" (verify (hashBytes "abc") "abc"),
+      testCase "accepts the empty content for the Id of the empty string" $
+        assertBool "expected True" (verify (hashBytes BS.empty) BS.empty),
+      testCase "rejects content that does not match the Id" $
+        assertBool "expected False" (not (verify (hashBytes "abc") "abd")),
+      testCase "rejects content for an Id that no content made" $
         assertBool "expected False" (not (verify (idFromBytes []) BS.empty))
     ]
 
@@ -163,10 +164,10 @@ renderTests =
   testGroup
     "render"
     [ testCase "writes sha256- and lower case hex for the empty string" $
-        render (hashBytes BS.empty) @?= "sha256-" <> emptyHex
-    , testCase "writes sha256- and lower case hex for \"abc\"" $
-        render (hashBytes "abc") @?= "sha256-" <> abcHex
-    , testCase "writes 64 hex digits for the all-zero digest" $
+        render (hashBytes BS.empty) @?= "sha256-" <> emptyHex,
+      testCase "writes sha256- and lower case hex for \"abc\"" $
+        render (hashBytes "abc") @?= "sha256-" <> abcHex,
+      testCase "writes 64 hex digits for the all-zero digest" $
         render (idFromBytes []) @?= "sha256-" <> T.replicate 64 "0"
     ]
 
@@ -183,26 +184,26 @@ parseTests =
   testGroup
     "parse"
     [ testCase "accepts a valid id" $
-        parse ("sha256-" <> emptyHex) @?= Right (hashBytes BS.empty)
-    , testCase "reads back what render wrote for a known id" $
-        parse (render (hashBytes BS.empty)) @?= Right (hashBytes BS.empty)
-    , testCase "reports the prefix error before the hex error" $
-        parse "md5-zz" @?= Left (BadPrefix "md5-zz")
-    , testCase "reports the hex error before the length error" $
-        parse "sha256-abc" @?= Left (BadHex "abc")
-    , testCase "rejects a missing prefix" $
-        parse emptyHex @?= Left (BadPrefix emptyHex)
-    , testCase "rejects a wrong prefix" $
-        parse ("md5-" <> emptyHex) @?= Left (BadPrefix ("md5-" <> emptyHex))
-    , testCase "rejects non-hex characters" $
-        parse "sha256-zz" @?= Left (BadHex "zz")
-    , testCase "rejects odd-length hex" $
-        parse "sha256-abc" @?= Left (BadHex "abc")
-    , testCase "rejects a digest that is too short" $
-        parse "sha256-abcd" @?= Left (BadLength 2)
-    , testCase "rejects a digest that is too long" $
-        parse ("sha256-" <> emptyHex <> "00") @?= Left (BadLength 33)
-    , testCase "rejects an empty digest" $
+        parse ("sha256-" <> emptyHex) @?= Right (hashBytes BS.empty),
+      testCase "reads back what render wrote for a known id" $
+        parse (render (hashBytes BS.empty)) @?= Right (hashBytes BS.empty),
+      testCase "reports the prefix error before the hex error" $
+        parse "md5-zz" @?= Left (BadPrefix "md5-zz"),
+      testCase "reports the hex error before the length error" $
+        parse "sha256-abc" @?= Left (BadHex "abc"),
+      testCase "rejects a missing prefix" $
+        parse emptyHex @?= Left (BadPrefix emptyHex),
+      testCase "rejects a wrong prefix" $
+        parse ("md5-" <> emptyHex) @?= Left (BadPrefix ("md5-" <> emptyHex)),
+      testCase "rejects non-hex characters" $
+        parse "sha256-zz" @?= Left (BadHex "zz"),
+      testCase "rejects odd-length hex" $
+        parse "sha256-abc" @?= Left (BadHex "abc"),
+      testCase "rejects a digest that is too short" $
+        parse "sha256-abcd" @?= Left (BadLength 2),
+      testCase "rejects a digest that is too long" $
+        parse ("sha256-" <> emptyHex <> "00") @?= Left (BadLength 33),
+      testCase "rejects an empty digest" $
         parse "sha256-" @?= Left (BadLength 0)
     ]
 
@@ -212,42 +213,42 @@ properties =
     "properties"
     [ testProperty "fromDigest succeeds exactly for 32-byte inputs" $ \ws ->
         let b = BS.pack ws
-         in isJust' (fromDigest b) === (BS.length b == 32)
-    , testProperty "toBytes gives back what fromDigest got" $ \ws ->
+         in isJust' (fromDigest b) === (BS.length b == 32),
+      testProperty "toBytes gives back what fromDigest got" $ \ws ->
         let b = BS.pack (take 32 (ws ++ repeat 0))
-         in fmap toBytes (fromDigest b) === Just b
-    , testProperty "toBytes always gives 32 bytes" $ \ws ->
-        BS.length (toBytes (hashBytes (BS.pack ws))) === 32
-    , testProperty "verify accepts the content that hashBytes hashed" $ \ws ->
+         in fmap toBytes (fromDigest b) === Just b,
+      testProperty "toBytes always gives 32 bytes" $ \ws ->
+        BS.length (toBytes (hashBytes (BS.pack ws))) === 32,
+      testProperty "verify accepts the content that hashBytes hashed" $ \ws ->
         let c = BS.pack ws
-         in verify (hashBytes c) c
-    , testProperty "verify rejects other content" $ \ws ws' ->
-        ws /= ws' ==> not (verify (hashBytes (BS.pack ws)) (BS.pack ws'))
-    , testProperty "parse accepts every hex-encoded 32-byte digest" $ \ws ->
+         in verify (hashBytes c) c,
+      testProperty "verify rejects other content" $ \ws ws' ->
+        ws /= ws' ==> not (verify (hashBytes (BS.pack ws)) (BS.pack ws')),
+      testProperty "parse accepts every hex-encoded 32-byte digest" $ \ws ->
         let b = BS.pack (take 32 (ws ++ repeat 0))
             t = "sha256-" <> TE.decodeUtf8 (B16.encode b)
-         in fmap toBytes (parse t) === Right b
-    , testProperty "parse rejects every hex-encoded digest that is not 32 bytes" $ \ws ->
+         in fmap toBytes (parse t) === Right b,
+      testProperty "parse rejects every hex-encoded digest that is not 32 bytes" $ \ws ->
         let b = BS.pack ws
             t = "sha256-" <> TE.decodeUtf8 (B16.encode b)
-         in BS.length b /= 32 ==> parse t === Left (BadLength (BS.length b))
-    , testProperty "parse (render i) == Right i for hashed content" $ \ws ->
+         in BS.length b /= 32 ==> parse t === Left (BadLength (BS.length b)),
+      testProperty "parse (render i) == Right i for hashed content" $ \ws ->
         let i = hashBytes (BS.pack ws)
-         in parse (render i) === Right i
-    , testProperty "parse (render i) == Right i for any 32-byte digest" $ \ws ->
+         in parse (render i) === Right i,
+      testProperty "parse (render i) == Right i for any 32-byte digest" $ \ws ->
         let i = idFromBytes ws
-         in parse (render i) === Right i
-    , testProperty "render writes sha256- and 64 lower case hex digits" $ \ws ->
+         in parse (render i) === Right i,
+      testProperty "render writes sha256- and 64 lower case hex digits" $ \ws ->
         let t = render (idFromBytes ws)
             hex = T.drop 7 t
          in conjoin
-              [ T.take 7 t === "sha256-"
-              , T.length hex === 64
-              , T.all (`elem` ['0' .. '9'] ++ ['a' .. 'f']) hex === True
-              ]
-    , testProperty "show agrees with render" $ \ws ->
+              [ T.take 7 t === "sha256-",
+                T.length hex === 64,
+                T.all (`elem` ['0' .. '9'] ++ ['a' .. 'f']) hex === True
+              ],
+      testProperty "show agrees with render" $ \ws ->
         let i = idFromBytes ws
-         in show i === T.unpack (render i)
-    , testProperty "hashBytes gives the same Id for the same content" $ \ws ->
+         in show i === T.unpack (render i),
+      testProperty "hashBytes gives the same Id for the same content" $ \ws ->
         hashBytes (BS.pack ws) === hashBytes (BS.pack ws)
     ]

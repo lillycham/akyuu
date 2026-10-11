@@ -16,32 +16,32 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import MemoryTests (genMemory, shrinkMemory)
 import Support (nid, right, withTempDir)
 import System.Directory
-  ( createDirectoryIfMissing
-  , doesDirectoryExist
-  , doesFileExist
-  , getModificationTime
-  , listDirectory
-  , setModificationTime
+  ( createDirectoryIfMissing,
+    doesDirectoryExist,
+    doesFileExist,
+    getModificationTime,
+    listDirectory,
+    setModificationTime,
   )
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
-import Test.Tasty.QuickCheck ((===), forAllShrink, ioProperty, listOf, shrinkList, testProperty, withMaxSuccess)
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import Test.Tasty.QuickCheck (forAllShrink, ioProperty, listOf, shrinkList, testProperty, withMaxSuccess, (===))
 
 storeTests :: TestTree
 storeTests =
   testGroup
     "Akyuu.Store"
-    [ openTests
-    , pathTests
-    , addTests
-    , getTests
-    , getVerifiedTests
-    , existsTests
-    , listTests
-    , verifyTests
-    , trashTests
-    , properties
+    [ openTests,
+      pathTests,
+      addTests,
+      getTests,
+      getVerifiedTests,
+      existsTests,
+      listTests,
+      verifyTests,
+      trashTests,
+      properties
     ]
 
 -- Test helpers ---------------------------------------------------------
@@ -76,11 +76,11 @@ isBadMemory _ _ = False
 mem :: Text -> Memory
 mem body =
   Memory
-    { memKind = "fact"
-    , memCreated = posixSecondsToUTCTime 1791201600
-    , memAgent = "claude"
-    , memEdges = Set.empty
-    , memBody = body
+    { memKind = "fact",
+      memCreated = posixSecondsToUTCTime 1791201600,
+      memAgent = "claude",
+      memEdges = Set.empty,
+      memBody = body
     }
 
 -- Bytes that are not a memory.
@@ -104,17 +104,17 @@ openTests =
           _ <- right =<< openStore (dir </> "s")
           mapM_
             (\d -> doesDirectoryExist (dir </> "s" </> d) >>= assertBool d)
-            ["", "store", "trash"]
-    , testCase "storeRoot is the directory that openStore got" $
+            ["", "store", "trash"],
+      testCase "storeRoot is the directory that openStore got" $
         withTempDir $ \dir -> do
           s <- right =<< openStore (dir </> "s")
-          storeRoot s @?= dir </> "s"
-    , testCase "can open a store that already exists" $
+          storeRoot s @?= dir </> "s",
+      testCase "can open a store that already exists" $
         withStore $ \s dir -> do
           i <- right =<< add s (mem "kept")
           s' <- right =<< openStore (dir </> "s")
-          get s' i >>= (@?= Right (mem "kept"))
-    , testCase "returns StoreIO if the directory cannot be made" $
+          get s' i >>= (@?= Right (mem "kept")),
+      testCase "returns StoreIO if the directory cannot be made" $
         withTempDir $ \dir -> do
           -- A regular file where the root should go.
           BS.writeFile (dir </> "file") "x"
@@ -131,12 +131,14 @@ pathTests =
     [ testCase "is root/store/<first two hex digits>/<rendered Id>.md" $
         withStore $ \s _ ->
           let i = hashBytes "abc"
-           in objectPath s i @?= storeRoot s </> "store" </> shardOf i </> fileName i
-    , testCase "is the same for the same Id" $
-        withStore $ \s _ -> objectPath s (nid 1) @?= objectPath s (nid 1)
-    , testCase "is different for different Ids" $
-        withStore $ \s _ -> assertBool "paths equal" (objectPath s (nid 1) /= objectPath s (nid 2))
-    , testCase "does not make a file" $
+           in objectPath s i @?= storeRoot s </> "store" </> shardOf i </> fileName i,
+      testCase "is the same for the same Id" $
+        withStore $
+          \s _ -> objectPath s (nid 1) @?= objectPath s (nid 1),
+      testCase "is different for different Ids" $
+        withStore $
+          \s _ -> assertBool "paths equal" (objectPath s (nid 1) /= objectPath s (nid 2)),
+      testCase "does not make a file" $
         withStore $ \s _ -> do
           let _ = objectPath s (nid 1)
           doesFileExist (objectPath s (nid 1)) >>= assertBool "file exists" . not
@@ -148,29 +150,29 @@ addTests =
     "add"
     [ testCase "returns the Id of the memory" $
         withStore $ \s _ ->
-          (right =<< add s (mem "a")) >>= (@?= memoryId (mem "a"))
-    , testCase "writes the canonical form to the path of the Id" $
+          (right =<< add s (mem "a")) >>= (@?= memoryId (mem "a")),
+      testCase "writes the canonical form to the path of the Id" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
-          BS.readFile (objectPath s i) >>= (@?= renderMemory (mem "a"))
-    , testCase "adding the same memory twice gives the same Id and one file" $
+          BS.readFile (objectPath s i) >>= (@?= renderMemory (mem "a")),
+      testCase "adding the same memory twice gives the same Id and one file" $
         withStore $ \s _ -> do
           i1 <- right =<< add s (mem "a")
           i2 <- right =<< add s (mem "a")
           i1 @?= i2
-          listDirectory (takeDirectory (objectPath s i1)) >>= (@?= [fileName i1])
-    , testCase "leaves no temporary file behind" $
+          listDirectory (takeDirectory (objectPath s i1)) >>= (@?= [fileName i1]),
+      testCase "leaves no temporary file behind" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
-          listDirectory (takeDirectory (objectPath s i)) >>= (@?= [takeFileName (objectPath s i)])
-    , testCase "does not write again if the object is there" $
+          listDirectory (takeDirectory (objectPath s i)) >>= (@?= [takeFileName (objectPath s i)]),
+      testCase "does not write again if the object is there" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
           -- Change the file. A second add must not put the old bytes back.
           BS.writeFile (objectPath s i) "changed"
           _ <- right =<< add s (mem "a")
-          BS.readFile (objectPath s i) >>= (@?= "changed")
-    , testCase "sets the file time to now if the object is there" $
+          BS.readFile (objectPath s i) >>= (@?= "changed"),
+      testCase "sets the file time to now if the object is there" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
           let past = posixSecondsToUTCTime 1000000000
@@ -178,14 +180,14 @@ addTests =
           _ <- right =<< add s (mem "a")
           t <- getModificationTime (objectPath s i)
           assertBool "the file time did not move" (t > past)
-          BS.readFile (objectPath s i) >>= (@?= renderMemory (mem "a"))
-    , testCase "writes the object again if it was moved to the trash" $
+          BS.readFile (objectPath s i) >>= (@?= renderMemory (mem "a")),
+      testCase "writes the object again if it was moved to the trash" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
           right =<< trash s i
           _ <- right =<< add s (mem "a")
-          BS.readFile (objectPath s i) >>= (@?= renderMemory (mem "a"))
-    , testCase "two different memories are two files" $
+          BS.readFile (objectPath s i) >>= (@?= renderMemory (mem "a")),
+      testCase "two different memories are two files" $
         withStore $ \s _ -> do
           i1 <- right =<< add s (mem "a")
           i2 <- right =<< add s (mem "b")
@@ -200,18 +202,18 @@ getTests =
     [ testCase "reads back what add wrote" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
-          get s i >>= (@?= Right (mem "a"))
-    , testCase "returns NotFound for an unknown Id" $
+          get s i >>= (@?= Right (mem "a")),
+      testCase "returns NotFound for an unknown Id" $
         withStore $ \s _ ->
-          get s (nid 1) >>= (@?= Left (NotFound (nid 1)))
-    , testCase "returns BadMemory for a file that is not a memory" $
+          get s (nid 1) >>= (@?= Left (NotFound (nid 1))),
+      testCase "returns BadMemory for a file that is not a memory" $
         withStore $ \s _ -> do
           plant s (nid 1) garbage
           r <- get s (nid 1)
           case r of
             Left e -> assertBool (show e) (isBadMemory (nid 1) e)
-            Right _ -> assertFailure "expected Left"
-    , testCase "does not hash the file again" $
+            Right _ -> assertFailure "expected Left",
+      testCase "does not hash the file again" $
         withStore $ \s _ -> do
           -- A valid memory under the name of another Id.
           plant s (nid 1) (renderMemory (mem "a"))
@@ -225,19 +227,19 @@ getVerifiedTests =
     [ testCase "reads back what add wrote" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
-          getVerified s i >>= (@?= Right (mem "a"))
-    , testCase "returns NotFound for an unknown Id" $
+          getVerified s i >>= (@?= Right (mem "a")),
+      testCase "returns NotFound for an unknown Id" $
         withStore $ \s _ ->
-          getVerified s (nid 1) >>= (@?= Left (NotFound (nid 1)))
-    , testCase "returns Corrupt for a valid memory under the wrong name" $
+          getVerified s (nid 1) >>= (@?= Left (NotFound (nid 1))),
+      testCase "returns Corrupt for a valid memory under the wrong name" $
         withStore $ \s _ -> do
           plant s (nid 1) (renderMemory (mem "a"))
-          getVerified s (nid 1) >>= (@?= Left (Corrupt (nid 1)))
-    , testCase "returns Corrupt, not BadMemory, for damaged bytes" $
+          getVerified s (nid 1) >>= (@?= Left (Corrupt (nid 1))),
+      testCase "returns Corrupt, not BadMemory, for damaged bytes" $
         withStore $ \s _ -> do
           plant s (nid 1) garbage
-          getVerified s (nid 1) >>= (@?= Left (Corrupt (nid 1)))
-    , testCase "returns BadMemory if the bytes match the name but are not a memory" $
+          getVerified s (nid 1) >>= (@?= Left (Corrupt (nid 1))),
+      testCase "returns BadMemory if the bytes match the name but are not a memory" $
         withStore $ \s _ -> do
           let i = hashBytes garbage
           plant s i garbage
@@ -252,12 +254,13 @@ existsTests =
   testGroup
     "exists"
     [ testCase "is False for an unknown Id" $
-        withStore $ \s _ -> exists s (nid 1) >>= (@?= Right False)
-    , testCase "is True after add" $
+        withStore $
+          \s _ -> exists s (nid 1) >>= (@?= Right False),
+      testCase "is True after add" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
-          exists s i >>= (@?= Right True)
-    , testCase "does not read the file" $
+          exists s i >>= (@?= Right True),
+      testCase "does not read the file" $
         withStore $ \s _ -> do
           plant s (nid 1) garbage
           exists s (nid 1) >>= (@?= Right True)
@@ -268,41 +271,43 @@ listTests =
   testGroup
     "list"
     [ testCase "is empty for an empty store" $
-        withStore $ \s _ -> list s >>= (@?= Right [])
-    , testCase "has the Id of each object that was added" $
+        withStore $
+          \s _ -> list s >>= (@?= Right []),
+      testCase "has the Id of each object that was added" $
         withStore $ \s _ -> do
           ids <- mapM (\b -> right =<< add s (mem b)) ["a", "b", "c"]
           is <- right =<< list s
-          sort is @?= sort ids
-    , testCase "has an Id once if its memory is added twice" $
+          sort is @?= sort ids,
+      testCase "has an Id once if its memory is added twice" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
           _ <- right =<< add s (mem "a")
-          list s >>= (@?= Right [i])
-    , testCase "skips a file whose name is not an Id" $
+          list s >>= (@?= Right [i]),
+      testCase "skips a file whose name is not an Id" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
           let dir = takeDirectory (objectPath s i)
           BS.writeFile (dir </> "junk.tmp") "x"
           BS.writeFile (dir </> ".tmp-1234") "x"
-          list s >>= (@?= Right [i])
-    , testCase "skips a file in the store directory, such as .DS_Store" $
+          list s >>= (@?= Right [i]),
+      testCase "skips a file in the store directory, such as .DS_Store" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
           let base = storeRoot s </> "store"
           BS.writeFile (base </> ".DS_Store") "x"
           BS.writeFile (base </> "README") "x"
           BS.writeFile (takeDirectory (objectPath s i) </> ".DS_Store") "x"
-          list s >>= (@?= Right [i])
-    , testCase "skips a directory whose name is not a shard" $
+          list s >>= (@?= Right [i]),
+      testCase "skips a directory whose name is not a shard" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
           let base = storeRoot s </> "store"
           -- Not two hex digits: too long, upper case, or not hex.
-          mapM_ (\d -> createDirectoryIfMissing True (base </> d) >> BS.writeFile (base </> d </> fileName i) "x")
+          mapM_
+            (\d -> createDirectoryIfMissing True (base </> d) >> BS.writeFile (base </> d </> fileName i) "x")
             ["notes", "AB", "zz", "a"]
-          list s >>= (@?= Right [i])
-    , testCase "does not list an object that is in the trash" $
+          list s >>= (@?= Right [i]),
+      testCase "does not list an object that is in the trash" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
           _ <- right =<< trash s i
@@ -314,17 +319,18 @@ verifyTests =
   testGroup
     "verify"
     [ testCase "finds nothing in an empty store" $
-        withStore $ \s _ -> verify s >>= (@?= Right [])
-    , testCase "finds nothing in a sound store" $
+        withStore $
+          \s _ -> verify s >>= (@?= Right []),
+      testCase "finds nothing in a sound store" $
         withStore $ \s _ -> do
           mapM_ (\b -> right =<< add s (mem b)) ["a", "b"]
-          verify s >>= (@?= Right [])
-    , testCase "finds an object whose content does not match its name" $
+          verify s >>= (@?= Right []),
+      testCase "finds an object whose content does not match its name" $
         withStore $ \s _ -> do
           _ <- right =<< add s (mem "a")
           plant s (nid 1) (renderMemory (mem "b"))
-          verify s >>= (@?= Right [nid 1])
-    , testCase "finds only the damaged objects" $
+          verify s >>= (@?= Right [nid 1]),
+      testCase "finds only the damaged objects" $
         withStore $ \s _ -> do
           good <- right =<< add s (mem "a")
           plant s (nid 1) garbage
@@ -346,17 +352,17 @@ trashTests =
           doesFileExist (objectPath s i) >>= assertBool "still in store" . not
           let inTrash = storeRoot s </> "trash" </> fileName i
           doesFileExist inTrash >>= assertBool "not in trash"
-          BS.readFile inTrash >>= (@?= before)
-    , testCase "the object is gone from the store" $
+          BS.readFile inTrash >>= (@?= before),
+      testCase "the object is gone from the store" $
         withStore $ \s _ -> do
           i <- right =<< add s (mem "a")
           _ <- right =<< trash s i
           exists s i >>= (@?= Right False)
-          get s i >>= (@?= Left (NotFound i))
-    , testCase "returns NotFound for an unknown Id" $
+          get s i >>= (@?= Left (NotFound i)),
+      testCase "returns NotFound for an unknown Id" $
         withStore $ \s _ ->
-          trash s (nid 1) >>= (@?= Left (NotFound (nid 1)))
-    , testCase "leaves the other objects alone" $
+          trash s (nid 1) >>= (@?= Left (NotFound (nid 1))),
+      testCase "leaves the other objects alone" $
         withStore $ \s _ -> do
           i1 <- right =<< add s (mem "a")
           i2 <- right =<< add s (mem "b")
@@ -375,29 +381,29 @@ properties =
             ioProperty $ withStore $ \s _ -> do
               i <- right =<< add s m
               r <- get s i
-              pure (r === Right m)
-    , testProperty "getVerified agrees with get on every added memory" $
+              pure (r === Right m),
+      testProperty "getVerified agrees with get on every added memory" $
         withMaxSuccess 30 $
           forAllShrink genMemory shrinkMemory $ \m ->
             ioProperty $ withStore $ \s _ -> do
               i <- right =<< add s m
               r1 <- get s i
               r2 <- getVerified s i
-              pure (r1 === r2)
-    , testProperty "add returns memoryId" $
+              pure (r1 === r2),
+      testProperty "add returns memoryId" $
         withMaxSuccess 30 $
           forAllShrink genMemory shrinkMemory $ \m ->
             ioProperty $ withStore $ \s _ -> do
               i <- right =<< add s m
-              pure (i === memoryId m)
-    , testProperty "list is the set of the Ids that were added" $
+              pure (i === memoryId m),
+      testProperty "list is the set of the Ids that were added" $
         withMaxSuccess 30 $
           forAllShrink (listOf genMemory) (shrinkList shrinkMemory) $ \ms ->
             ioProperty $ withStore $ \s _ -> do
               mapM_ (\m -> right =<< add s m) ms
               is <- right =<< list s
-              pure (sort is === Set.toAscList (Set.fromList (map memoryId ms)))
-    , testProperty "verify finds nothing in a store that only add wrote" $
+              pure (sort is === Set.toAscList (Set.fromList (map memoryId ms))),
+      testProperty "verify finds nothing in a store that only add wrote" $
         withMaxSuccess 30 $
           forAllShrink (listOf genMemory) (shrinkList shrinkMemory) $ \ms ->
             ioProperty $ withStore $ \s _ -> do

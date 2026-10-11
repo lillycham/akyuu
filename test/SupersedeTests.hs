@@ -18,15 +18,15 @@ import Data.Text qualified as T
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Support (right, withTempDir)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit ((@?=), assertBool, testCase)
+import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 supersedeTests :: TestTree
 supersedeTests =
   testGroup
     "Akyuu.Supersede"
-    [ supersedeCases
-    , supersedeFromCases
-    , raceCases
+    [ supersedeCases,
+      supersedeFromCases,
+      raceCases
     ]
 
 -- Test helpers ---------------------------------------------------------
@@ -35,11 +35,11 @@ supersedeTests =
 memWith :: Text -> [Edge] -> Memory
 memWith body es =
   Memory
-    { memKind = "fact"
-    , memCreated = posixSecondsToUTCTime 1791201600
-    , memAgent = "claude"
-    , memEdges = Set.fromList es
-    , memBody = body
+    { memKind = "fact",
+      memCreated = posixSecondsToUTCTime 1791201600,
+      memAgent = "claude",
+      memEdges = Set.fromList es,
+      memBody = body
     }
 
 mem :: Text -> Memory
@@ -67,40 +67,40 @@ supersedeCases =
         withEnv $ \s rs n _ -> do
           v2 <- right =<< supersede s rs n (mem "v2")
           r <- right =<< getRef rs n
-          current r @?= v2
-    , testCase "keeps the old value as the newest generation" $
+          current r @?= v2,
+      testCase "keeps the old value as the newest generation" $
         withEnv $ \s rs n v1 -> do
           _ <- right =<< supersede s rs n (mem "v2")
           r <- right =<< getRef rs n
-          history r @?= [v1]
-    , testCase "puts a Supersedes edge to the old memory in the new one" $
+          history r @?= [v1],
+      testCase "puts a Supersedes edge to the old memory in the new one" $
         withEnv $ \s rs n v1 -> do
           v2 <- right =<< supersede s rs n (mem "v2")
           m <- right =<< Store.get s v2
-          memEdges m @?= Set.singleton (Edge Supersedes v1)
-    , testCase "keeps the edges that the caller gave" $
+          memEdges m @?= Set.singleton (Edge Supersedes v1),
+      testCase "keeps the edges that the caller gave" $
         withEnv $ \s rs n v1 -> do
           other <- right =<< Store.add s (mem "other")
           let given = [Edge About other, Edge DerivedFrom other]
           v2 <- right =<< supersede s rs n (memWith "v2" given)
           m <- right =<< Store.get s v2
-          memEdges m @?= Set.fromList (Edge Supersedes v1 : given)
-    , testCase "does not repeat a Supersedes edge that the caller gave" $
+          memEdges m @?= Set.fromList (Edge Supersedes v1 : given),
+      testCase "does not repeat a Supersedes edge that the caller gave" $
         withEnv $ \s rs n v1 -> do
           v2 <- right =<< supersede s rs n (memWith "v2" [Edge Supersedes v1])
           m <- right =<< Store.get s v2
-          memEdges m @?= Set.singleton (Edge Supersedes v1)
-    , testCase "keeps the old object in the store" $
+          memEdges m @?= Set.singleton (Edge Supersedes v1),
+      testCase "keeps the old object in the store" $
         withEnv $ \s rs n v1 -> do
           _ <- right =<< supersede s rs n (mem "v2")
-          Store.exists s v1 >>= (@?= Right True)
-    , testCase "can be called again on the new value" $
+          Store.exists s v1 >>= (@?= Right True),
+      testCase "can be called again on the new value" $
         withEnv $ \s rs n v1 -> do
           v2 <- right =<< supersede s rs n (mem "v2")
           v3 <- right =<< supersede s rs n (mem "v3")
           r <- right =<< getRef rs n
-          (current r, history r) @?= (v3, [v2, v1])
-    , testCase "returns NoSuchRef for a ref that does not exist, and adds nothing" $
+          (current r, history r) @?= (v3, [v2, v1]),
+      testCase "returns NoSuchRef for a ref that does not exist, and adds nothing" $
         withEnv $ \s rs _ _ -> do
           missing <- right (mkName "claude/missing")
           r <- supersede s rs missing (mem "v2")
@@ -118,20 +118,20 @@ supersedeFromCases =
     [ testCase "works if the ref still has the value that the caller read" $
         withEnv $ \s rs n v1 -> do
           v2 <- right =<< supersedeFrom s rs n v1 (mem "v2")
-          getRef rs n >>= fmap current . right >>= (@?= v2)
-    , testCase "returns Stale if another agent moved the ref first" $
+          getRef rs n >>= fmap current . right >>= (@?= v2),
+      testCase "returns Stale if another agent moved the ref first" $
         withEnv $ \s rs n v1 -> do
           -- The other agent moves the ref after the caller read v1.
           theirs <- right =<< supersedeFrom s rs n v1 (mem "theirs")
           r <- supersedeFrom s rs n v1 (mem "mine")
-          r @?= Left (SupersedeRef (Stale n (Just theirs)))
-    , testCase "leaves the ref as it was after Stale" $
+          r @?= Left (SupersedeRef (Stale n (Just theirs))),
+      testCase "leaves the ref as it was after Stale" $
         withEnv $ \s rs n v1 -> do
           theirs <- right =<< supersedeFrom s rs n v1 (mem "theirs")
           _ <- supersedeFrom s rs n v1 (mem "mine")
           r <- right =<< getRef rs n
-          (current r, history r) @?= (theirs, [v1])
-    , testCase "leaves the new object in the store after Stale" $
+          (current r, history r) @?= (theirs, [v1]),
+      testCase "leaves the new object in the store after Stale" $
         withEnv $ \s rs n v1 -> do
           _ <- right =<< supersedeFrom s rs n v1 (mem "theirs")
           _ <- supersedeFrom s rs n v1 (mem "mine")
