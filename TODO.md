@@ -364,5 +364,8 @@ Not done:
       `Fs.atomicWrite` removes the temporary file with `ignoreIO`, and `add` calls it.
 - [x] Move `ignoreIO` and a generic `tryWith` from `Akyuu.Store` to `Akyuu.Fs`.
 - [ ] Do the same for `orNotFound` once `getRef` shows what it needs.
+      `Store.orNotFound` and `Refs.orNoSuchRef` have one shape: `tryWith`, then one test on the `IOException`. They differ in the test:
+      `isDoesNotExistError` for the store, `isMissing` (also `InappropriateType`) for refs. A shared helper needs that test as a parameter,
+      for example `orMissing :: (IOException -> Bool) -> e -> (IOException -> e) -> IO a -> IO (Either e a)`. That is a choice about the API, so it waits for a decision.
 - [x] Add `-threaded` to the test suite, so the race test with `MustBe` can really run threads in parallel.
       Done, with `-N`. Check that the `MustBe` race test now runs threads in parallel: it is not changed yet.
