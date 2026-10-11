@@ -164,8 +164,6 @@ withinHops n = walk Both (Just n)
 data WalkMode
   = -- | From a node to the nodes that it points at.
     Forward
-  | -- | From a node to the nodes that point at it.
-    Backward
   | -- | In both directions.
     Both
 
@@ -189,7 +187,6 @@ walk dir limit p roots g = go limit roots roots
     -- the nodes one edge away from n, in the chosen direction
     step n = case dir of
       Forward -> out n
-      Backward -> inn n
       Both -> out n <> inn n
 
     out = follow (fwd g)
