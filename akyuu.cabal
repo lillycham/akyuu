@@ -50,6 +50,7 @@ library
                    , Akyuu.Store
                    , Akyuu.Refs
                    , Akyuu.Cache
+                   , Akyuu.Check
                    , Akyuu.Supersede
                    , Akyuu.GC
                    , Akyuu.Query
@@ -83,6 +84,7 @@ test-suite akyuu-test
                     , CLITests
                     , MCPTests
                     , QueryTests
+                    , CheckTests
                     , RefsTests
                     , StoreTests
                     , SeedTests
