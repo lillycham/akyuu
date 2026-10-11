@@ -1684,6 +1684,14 @@ const Akyuu = (function () {
     out.replaceChildren();
     // What the fuzzy step did: a word that the index does not have was searched as a prefix or a near term.
     for (const c of r.corrections || []) {
+      if (c.kind === 'meaning') {
+        out.appendChild(el('p', { class: 'notice' }, [el('span', { class: 'pill', text: 'by meaning' }), ' ' + c.count + ' of these were found by meaning, not by the words.']));
+        continue;
+      }
+      if (c.kind === 'unavailable') {
+        out.appendChild(el('p', { class: 'notice' }, [el('span', { class: 'pill', text: 'text only' }), ' The search by meaning did not run. ' + c.why]));
+        continue;
+      }
       out.appendChild(el('p', { class: 'notice' }, [el('span', { class: 'pill', text: c.kind === 'prefix' ? 'start of a word' : 'spelling' }),
         ' No word "' + c.word + '", so it was searched as ' + c.used.map(u => '"' + u + '"').join(' or ') + '.']));
     }

@@ -157,7 +157,7 @@ searchCases =
           setEnv "AKYUU_EMBED_MODEL" "from-env"
           s <- embedSettings
           e <- Akyuu.Embed.embedderFromEnv
-          unsetEnv "AKYUU_CONFIG"
+          setEnv "AKYUU_CONFIG" "/nonexistent/akyuu-embed.env"
           unsetEnv "AKYUU_EMBED_MODEL"
           lookup "AKYUU_EMBED_QUERY_PREFIX" s @?= Just "search_query: "
           fmap (\x -> (embCommand x, embModel x)) e @?= Just ("cat", "from-env"),

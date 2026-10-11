@@ -31,6 +31,7 @@ import SeedTests (seedTests)
 import StoreTests (storeTests)
 import SupersedeTests (supersedeTests)
 import System.Directory (getTemporaryDirectory, removeFile)
+import System.Environment (setEnv, unsetEnv)
 import System.IO (hClose, openBinaryTempFile)
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
@@ -39,7 +40,12 @@ import TierTests (tierTests)
 import WebTests (webTests)
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, amendTests, compareTests, reviewTests, tierTests, recallTests, embedTests, episodeTests, opsTests, cliTests, mcpTests, webTests, seedTests]
+main = do
+  -- The tests must not read the settings of the person that runs them: a
+  -- real embedding command would change the results and start a model.
+  mapM_ unsetEnv ["AKYUU_EMBED_COMMAND", "AKYUU_EMBED_MODEL", "AKYUU_EMBED_MIN", "AKYUU_EMBED_TIMEOUT", "AKYUU_EMBED_MAX_CHARS"]
+  setEnv "AKYUU_CONFIG" "/nonexistent/akyuu-embed.env"
+  defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, amendTests, compareTests, reviewTests, tierTests, recallTests, embedTests, episodeTests, opsTests, cliTests, mcpTests, webTests, seedTests]
 
 idTests :: TestTree
 idTests =

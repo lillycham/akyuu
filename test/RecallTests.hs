@@ -97,6 +97,8 @@ nearCases =
       testCase "a short stem or one with another start is not near a long word" $ do
         nearTerms 4 "persnoa" [("perl", 3)] @?= []
         nearTerms 4 "xerivation" [("deriv", 2)] @?= [],
+      testCase "a plural with a typing mistake is near the stem" $
+        nearTerms 4 "emcas" [("emac", 3), ("email", 1)] @?= ["emac"],
       testCase "a far term is not near" $ nearTerms 4 "haskell" [("python", 5)] @?= []
     ]
 

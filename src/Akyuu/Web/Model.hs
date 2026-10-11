@@ -47,7 +47,7 @@ module Akyuu.Web.Model
   )
 where
 
-import Akyuu.Cache (Correction (PrefixOf, SpelledAs), Summary (sumAgent, sumCreated, sumFirstLine, sumKind))
+import Akyuu.Cache (Correction (AddedByMeaning, MeaningUnavailable, PrefixOf, SpelledAs), Summary (sumAgent, sumCreated, sumFirstLine, sumKind))
 import Akyuu.Error (AkyuuError (RefFailed), describe, describeParse)
 import Akyuu.GC (Observed (now, storedAt), Policy (gracePeriod, keepGenerations, trashTTL), Reason (HeldByPin, HeldByRef, HeldByTemp, IsYoung, RetainedBy), Roots (rootPins, rootRefs, rootTemps), Tombstone (prunedAt), Why (whyIsNode, whyLive, whyPath, whyReasons))
 import Akyuu.Graph (Dir (In, Out), EdgeType, Graph)
@@ -403,6 +403,8 @@ searchJSON q r =
         .= [ case c of
                PrefixOf w -> object ["word" .= w, "kind" .= ("prefix" :: Text), "used" .= ([w <> "*"] :: [Text])]
                SpelledAs w ts -> object ["word" .= w, "kind" .= ("spelling" :: Text), "used" .= ts]
+               AddedByMeaning n -> object ["kind" .= ("meaning" :: Text), "count" .= n]
+               MeaningUnavailable why -> object ["kind" .= ("unavailable" :: Text), "why" .= why]
            | c <- corrections r
            ]
     ]

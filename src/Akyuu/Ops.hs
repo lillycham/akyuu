@@ -116,7 +116,6 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
 import System.Directory (doesDirectoryExist)
-import System.Environment (lookupEnv)
 import Text.Read (readMaybe)
 
 -- The environment ------------------------------------------------------
