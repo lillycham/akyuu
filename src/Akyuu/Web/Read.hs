@@ -42,7 +42,7 @@ import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind))
-import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, checkStore, getMemory, listRefValues, missing, resolveId, verifyStore)
+import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, checkStore, getMemory, listRefValues, missing, resolveId, searchTuning, verifyStore)
 import Akyuu.Query (SearchOptions)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (RefError, nameText)
@@ -239,7 +239,9 @@ readRefs env = fmap (refsJSON (keepGenerations webPolicy)) <$> readRefEntries en
 -- | A search of the text index ('Akyuu.Query.search'). This does not sync
 -- the cache first. See the module header.
 readSearch :: Env -> SearchOptions -> Text -> IO (Either AkyuuError Value)
-readSearch env o q = runExceptT $ searchJSON q <$> cache (Query.search (envCache env) o q)
+readSearch env o q = runExceptT $ do
+  t <- liftIO (searchTuning env)
+  searchJSON q <$> cache (Query.searchWith (envCache env) t o q)
 
 -- GC -----------------------------------------------------------------------
 

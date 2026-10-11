@@ -79,7 +79,7 @@ searchResultCases =
         let g = line <> build [(x, [(Supersedes, a)])]
          in map matchSupersededBy (matches (searchResult (hops 0) g [hit a])) @?= [Set.fromList [b, x]],
       testCase "no hits give an empty result" $
-        searchResult (hops 2) line [] @?= SearchResult [] Set.empty,
+        searchResult (hops 2) line [] @?= SearchResult [] Set.empty [],
       testCase "the context can hold a dangling target" $
         let g = build [(a, [(About, x)])]
          in context (searchResult (hops 1) g [hit a]) @?= Set.singleton x
@@ -211,7 +211,7 @@ ioCases =
         withTempDir $ \dir ->
           bracket (right =<< openCache dir) closeCache $ \cache -> do
             r <- right =<< search cache defaultSearchOptions "nothing"
-            r @?= SearchResult [] Set.empty,
+            r @?= SearchResult [] Set.empty [],
       testCase "search with a limit of 1 gives the current memory, not the old version" $
         withTempDir $ \dir -> do
           s <- right =<< openStore dir

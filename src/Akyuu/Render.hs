@@ -31,7 +31,7 @@ module Akyuu.Render
   )
 where
 
-import Akyuu.Cache (SyncReport (added, removed), snippetClose, snippetOpen)
+import Akyuu.Cache (Correction (PrefixOf, SpelledAs), SyncReport (added, removed), snippetClose, snippetOpen)
 import Akyuu.Check (Finding (findingIds, findingKind, findingRelated, findingSeverity, findingWhy), kindName, severityName)
 import Akyuu.Compare (Comparison (cmpOnlyA, cmpOnlyB, cmpShared), canDropA, canDropB)
 import Akyuu.Error (describe, describeParse)
@@ -41,7 +41,7 @@ import Akyuu.Graph (Dir (In, Out), EdgeType)
 import Akyuu.Id (Id, render)
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader, renderMemory)
 import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, Present), ContextReport (ContextReport), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
-import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, matches))
+import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, corrections, matches))
 import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Akyuu.Review (Review (reviewAgent, reviewAt, reviewNote))
 import Data.Aeson (Value, object, (.=))
@@ -83,8 +83,11 @@ refLines withHistory r =
 --
 -- An empty result gives no lines.
 searchLines :: SearchResult -> [Text]
-searchLines r = concatMap matchLines (matches r) <> contextLines
+searchLines r = concatMap matchLines (matches r) <> contextLines <> map correctionLine (corrections r)
   where
+    correctionLine (PrefixOf w) = "note: no whole word " <> quoted w <> ", so it was searched as the start of a word."
+    correctionLine (SpelledAs w ts) = "note: no word " <> quoted w <> ", so it was searched as " <> T.intercalate " or " (map quoted ts) <> "."
+    quoted t = "'" <> t <> "'"
     matchLines m =
       (render (matchId m) <> "  " <> oneLine (snippetText (matchSnippet m)))
         : ["  superseded by " <> render i | i <- Set.toAscList (matchSupersededBy m)]

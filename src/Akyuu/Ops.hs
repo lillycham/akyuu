@@ -36,6 +36,7 @@ module Akyuu.Ops
     parseIdSpec,
     resolveId,
     searchMemories,
+    searchTuning,
     neighboursOf,
     parseDuration,
     dryRunGC,
@@ -368,7 +369,17 @@ synced env = () <$ cache (Cache.sync (envCache env) (envStore env))
 searchMemories :: Env -> SearchOptions -> Text -> IO (Either AkyuuError SearchResult)
 searchMemories env o q = runExceptT $ do
   synced env
-  cache (Query.search (envCache env) o q)
+  t <- liftIO (searchTuning env)
+  cache (Query.searchWith (envCache env) t o q)
+
+-- | How a search of this store forgives and ranks: fuzzy on, a memory that a
+-- ref holds ranks higher, and a newer one ranks higher. If the refs cannot be
+-- read, the ranking does not use them: a search must not fail for that.
+searchTuning :: Env -> IO Query.Tuning
+searchTuning env = do
+  now <- getCurrentTime
+  held <- either (const Set.empty) (Set.fromList . map snd) <$> listRefValues env
+  pure Query.defaultTuning {Query.tuneBoost = Query.Boost {Query.boostNow = Just now, Query.boostHeld = held}}
 
 -- | The edges of a memory ('Akyuu.Query.neighbourList'), after a sync of
 -- the cache.

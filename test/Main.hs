@@ -21,6 +21,7 @@ import MCPTests (mcpTests)
 import MemoryTests (memoryTests)
 import OpsTests (opsTests)
 import QueryTests (queryTests)
+import RecallTests (recallTests)
 import RefsTests (refsTests)
 import ReviewTests (reviewTests)
 import SeedTests (seedTests)
@@ -35,7 +36,7 @@ import TierTests (tierTests)
 import WebTests (webTests)
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, compareTests, reviewTests, tierTests, opsTests, cliTests, mcpTests, webTests, seedTests]
+main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, compareTests, reviewTests, tierTests, recallTests, opsTests, cliTests, mcpTests, webTests, seedTests]
 
 idTests :: TestTree
 idTests =

@@ -19,6 +19,7 @@
 -- > edges    (src TEXT NOT NULL, kind TEXT NOT NULL, dst TEXT NOT NULL,
 -- >           PRIMARY KEY (src, kind, dst)) WITHOUT ROWID
 -- > bodies   USING fts5(body, tokenize = 'porter unicode61')
+-- > bodies_vocab USING fts5vocab(bodies, 'row')   (the terms of the index)
 --
 -- * @memories.id@ and @edges.src@ and @edges.dst@ hold the text form of an
 --   'Id'. @edges.kind@ holds the header name of the kind, from
@@ -72,6 +73,9 @@ module Akyuu.Cache
     firstLine,
     Hit (..),
     search,
+    createdTimes,
+    Correction (..),
+    searchFuzzy,
     snippetOpen,
     snippetClose,
     indexedBody,
@@ -80,6 +84,7 @@ module Akyuu.Cache
 where
 
 import Akyuu.Fs (ignoreIO, tryAs)
+import Akyuu.Fuzzy qualified as Fuzzy
 import Akyuu.Graph (Edge (Edge, kind, target), EdgeType, Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, parse, render)
@@ -91,6 +96,8 @@ import Control.Exception (IOException, bracketOnError, onException, tryJust)
 import Control.Monad (forM_, guard, when)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, withExceptT)
 import Data.Bifunctor (first)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -143,7 +150,7 @@ data CacheError
 -- this number whenever a table changes. The next 'openCache' then deletes
 -- the old file and starts again.
 schemaVersion :: Int
-schemaVersion = 2
+schemaVersion = 3
 
 -- | The path of the cache file for a store: @\<root\>/cache.sqlite@.
 -- The root is the directory that 'Akyuu.Store.openStore' gets.
@@ -168,6 +175,7 @@ createSchema c = do
   execute_ c "CREATE TABLE IF NOT EXISTS edges (src TEXT NOT NULL, kind TEXT NOT NULL, dst TEXT NOT NULL, PRIMARY KEY (src, kind, dst)) WITHOUT ROWID"
   execute_ c "CREATE TABLE IF NOT EXISTS memories (rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, created TEXT NOT NULL, agent TEXT NOT NULL)"
   execute_ c "CREATE VIRTUAL TABLE IF NOT EXISTS bodies USING fts5(body, tokenize = 'porter unicode61')"
+  execute_ c "CREATE VIRTUAL TABLE IF NOT EXISTS bodies_vocab USING fts5vocab(bodies, 'row')"
   execute_ c "PRAGMA journal_mode = WAL"
   execute_ c (Query $ T.pack ("PRAGMA user_version =" ++ show schemaVersion))
 
@@ -568,19 +576,86 @@ snippetClose = '\x02'
 -- The number is the most hits to return. A number of 0 or less gives no hits.
 -- A text without words gives no hits.
 search :: Cache -> Text -> Int -> IO (Either CacheError [Hit])
-search (Cache c) q n
+search c q n = runFts c (ftsQuery q) n
+
+-- | Run a query of FTS5 and return the hits, best first. The text must be a
+-- valid FTS5 query: 'ftsQuery' or 'searchFuzzy' make it.
+runFts :: Cache -> Text -> Int -> IO (Either CacheError [Hit])
+runFts (Cache c) fq n
   | n <= 0 || T.null fq = pure (Right [])
   | otherwise = do
       rows <- tryAs CacheSQL (query c theQuery (fq, n) :: IO [(Text, Text)])
       pure (rows >>= traverse (\(t, s) -> (\i -> Hit i s) <$> parseCached t))
   where
-    fq = ftsQuery q
     theQuery =
       "SELECT memories.id, snippet(bodies, 0, char(1), char(2), '...', 10) \
       \FROM bodies JOIN memories ON memories.rowid = bodies.rowid \
       \WHERE bodies MATCH ? \
       \ORDER BY bm25(bodies) \
       \LIMIT ?"
+
+-- | The time of creation of some memories. An 'Id' that is not in the cache
+-- has no entry.
+createdTimes :: Cache -> [Id] -> IO (Either CacheError (Map Id UTCTime))
+createdTimes _ [] = pure (Right Map.empty)
+createdTimes (Cache c) is = do
+  rows <- tryAs CacheSQL (query c (Query ("SELECT id, created FROM memories WHERE id IN (" <> T.intercalate "," (map (const "?") is) <> ")")) (map render is) :: IO [(Text, UTCTime)])
+  pure (rows >>= fmap Map.fromList . traverse (\(i, t) -> (\x -> (x, t)) <$> parseCached i))
+
+-- | What 'searchFuzzy' did to a word that the index does not have.
+data Correction
+  = -- | The word is the start of a term: it was searched as a prefix.
+    PrefixOf Text
+  | -- | The word is near some terms (a typing mistake): it was searched as
+    -- any of these terms. The terms are stems, because the index holds stems.
+    SpelledAs Text [Text]
+  deriving (Eq, Show)
+
+-- | 'search' that forgives a word that the index does not have.
+--
+-- A word that is a term of the index is searched as it is, so a query of
+-- words that exist gives the same hits as 'search'. For each other word:
+--
+-- 1. If it is the start of a term, it is a prefix (@ finds @).
+-- 2. Else, if some terms are within a few edits ('Akyuu.Fuzzy.nearTerms'),
+--    it is any of them (@ finds @).
+-- 3. Else it is searched as it is, and the memory does not match.
+--
+-- The second part of the result lists each change, so a caller can show it.
+-- The memory must still hold all the words (or the words that stand for
+-- them): the match is not wider than 'search' for words that exist.
+searchFuzzy :: Cache -> Text -> Int -> IO (Either CacheError ([Hit], [Correction]))
+searchFuzzy cache@(Cache c) q n
+  | n <= 0 || null ws = pure (Right ([], []))
+  | otherwise = runExceptT $ do
+      planned <- traverse (ExceptT . plan) ws
+      -- A group in parentheses needs an explicit AND: the space between two
+      -- phrases is an AND, but between a group and a phrase it is a syntax error.
+      hits <- ExceptT (runFts cache (T.intercalate " AND " (map fst planned)) n)
+      pure (hits, concatMap snd planned)
+  where
+    ws = T.words (T.map (\ch -> if ch == '\0' then ' ' else ch) q)
+    quote w = "\"" <> T.replace "\"" "\"\"" w <> "\""
+    has fq = do
+      rows <- tryAs CacheSQL (query c "SELECT 1 FROM bodies WHERE bodies MATCH ? LIMIT 1" (Only fq) :: IO [Only Int])
+      pure (not . null <$> rows)
+    plan w = do
+      exact <- has (quote w)
+      case exact of
+        Left e -> pure (Left e)
+        Right True -> pure (Right (quote w, []))
+        Right False -> do
+          pre <- if T.length w >= 2 then has (quote w <> "*") else pure (Right False)
+          case pre of
+            Left e -> pure (Left e)
+            Right True -> pure (Right (quote w <> "*", [PrefixOf w]))
+            Right False -> do
+              vocab <- tryAs CacheSQL (query_ c "SELECT term, doc FROM bodies_vocab" :: IO [(Text, Int)])
+              pure $ case vocab of
+                Left e -> Left e
+                Right v -> case Fuzzy.nearTerms 4 (T.toLower w) v of
+                  [] -> Right (quote w, [])
+                  ts -> Right ("(" <> T.intercalate " OR " (map quote ts) <> ")", [SpelledAs w ts])
 
 -- | Make an FTS5 query from the words of a text.
 --

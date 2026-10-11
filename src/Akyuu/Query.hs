@@ -19,7 +19,13 @@ module Akyuu.Query
     SearchResult (..),
     searchResult,
     headsFirst,
+    Boost (..),
+    noBoost,
+    rankHits,
+    Tuning (..),
+    defaultTuning,
     search,
+    searchWith,
 
     -- * Neighbours
     Neighbour (..),
@@ -31,16 +37,20 @@ module Akyuu.Query
   )
 where
 
-import Akyuu.Cache (Cache, CacheError, Hit (hitId, hitSnippet))
+import Akyuu.Cache (Cache, CacheError, Correction, Hit (hitId, hitSnippet))
 import Akyuu.Cache qualified as Cache
 import Akyuu.Graph (Dir, EdgeType (Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT)
-import Data.List (partition)
+import Data.List (partition, sortOn)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
+import Data.Ord (Down (Down))
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Time (UTCTime, diffUTCTime)
 
 -- Search ---------------------------------------------------------------
 
@@ -87,7 +97,11 @@ data SearchResult = SearchResult
     -- | The memories within 'searchHops' edges of a hit, that are not hits
     -- themselves. This can hold a dangling target: an 'Id' that some edge
     -- names but that is not in the graph.
-    context :: Set Id
+    context :: Set Id,
+    -- | What the fuzzy step changed in the query: a word that the index does
+    -- not have, searched as a prefix or as a near term. Empty for a query
+    -- of words that exist.
+    corrections :: [Correction]
   }
   deriving (Eq, Show)
 
@@ -101,7 +115,8 @@ searchResult :: SearchOptions -> Graph -> [Hit] -> SearchResult
 searchResult o g hits =
   SearchResult
     { matches = map toMatch hits,
-      context = near `Set.difference` ids
+      context = near `Set.difference` ids,
+      corrections = []
     }
   where
     ids = Set.fromList (map hitId hits)
@@ -141,10 +156,77 @@ fetchCount n = max 0 n * 4
 -- and keeps the first 'searchLimit'. An old version stays in the result if
 -- there are not enough current memories to fill it.
 search :: Cache -> SearchOptions -> Text -> IO (Either CacheError SearchResult)
-search c o q = runExceptT $ do
-  hits <- ExceptT (Cache.search c q (fetchCount (searchLimit o)))
+search c = searchWith c defaultTuning
+
+-- | What 'searchWith' does besides the text match.
+data Tuning = Tuning
+  { -- | Forgive a word that the index does not have: search it as a prefix,
+    -- or as a near term ('Akyuu.Cache.searchFuzzy'). A word that exists is
+    -- never changed.
+    tuneFuzzy :: Bool,
+    -- | The signals that reorder the hits.
+    tuneBoost :: Boost
+  }
+  deriving (Eq, Show)
+
+-- | Fuzzy on, and no boost: the order is the order of the text index.
+defaultTuning :: Tuning
+defaultTuning = Tuning {tuneFuzzy = True, tuneBoost = noBoost}
+
+-- | Signals from outside the text index that rank a hit higher.
+data Boost = Boost
+  { -- | The time now. With a time, a newer memory ranks higher. 'Nothing'
+    -- means no preference for the new.
+    boostNow :: Maybe UTCTime,
+    -- | The memories that a ref holds now. A ref is a topic that somebody
+    -- chose to keep current, so its memory ranks higher.
+    boostHeld :: Set Id
+  }
+  deriving (Eq, Show)
+
+-- | No boost: 'rankHits' keeps the order.
+noBoost :: Boost
+noBoost = Boost {boostNow = Nothing, boostHeld = Set.empty}
+
+-- | Reorder the hits of the text index. This function is pure.
+--
+-- Each hit gets the score @1 / (3 + r)@, where @ is its place in the
+-- text index order (best first), so the text match stays the main signal.
+-- The score is multiplied by 1.3 if a ref holds the memory, and by a factor
+-- from 1.3 (a new memory) down to 1 (an old one) that loses half of its gain
+-- every 90 days. One signal moves a hit up about one place. A held memory
+-- that is also new can pass the best match from the next place, and no
+-- boost lifts a hit from far down. The sort is stable, and with 'noBoost'
+-- the order does not change.
+rankHits :: Boost -> Map Id UTCTime -> [Hit] -> [Hit]
+rankHits b created hits = map snd (sortOn (Down . fst) (zip scores hits))
+  where
+    scores = [score r h | (r, h) <- zip [0 :: Int ..] hits]
+    score r h = 1 / (3 + fromIntegral r) * held h * recent h :: Double
+    held h = if hitId h `Set.member` boostHeld b then 1.3 else 1
+    recent h = case (boostNow b, Map.lookup (hitId h) created) of
+      (Just now, Just t) -> 1 + 0.3 * 0.5 ** (max 0 (realToFrac (diffUTCTime now t) / 86400) / 90)
+      _ -> 1
+
+-- | 'search' with a 'Tuning'.
+--
+-- The text index is asked for @4 * 'searchLimit'@ hits. They are reordered
+-- by 'rankHits', the current memories go before the old versions
+-- ('headsFirst'), and the list is cut to the limit.
+searchWith :: Cache -> Tuning -> SearchOptions -> Text -> IO (Either CacheError SearchResult)
+searchWith c t o q = runExceptT $ do
+  let n = fetchCount (searchLimit o)
+  (hits, notes) <-
+    if tuneFuzzy t
+      then ExceptT (Cache.searchFuzzy c q n)
+      else (\h -> (h, [])) <$> ExceptT (Cache.search c q n)
   g <- ExceptT (Cache.loadGraph c)
-  pure (searchResult o g (take (searchLimit o) (headsFirst g hits)))
+  created <-
+    if tuneBoost t == noBoost || null hits
+      then pure Map.empty
+      else ExceptT (Cache.createdTimes c (map hitId hits))
+  let ranked = headsFirst g (rankHits (tuneBoost t) created hits)
+  pure (searchResult o g (take (searchLimit o) ranked)) {corrections = notes}
 
 -- Neighbours -----------------------------------------------------------
 
