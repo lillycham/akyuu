@@ -357,6 +357,11 @@ Ideas, not decisions. None of this is started.
 
 ### Consolidation pass
 
+Detection is built: `akyuu check`, the `check` MCP tool, and `GET /api/check` (see `docs/check.md`).
+It finds stale links, forks, duplicate and near-duplicate bodies, memories that nothing keeps, and hubs.
+Judgement (the LLM phase) is not built. It would read the findings and write normal `supersede` or `add` calls.
+Not done: `SameProject` (detector 6), shingle hashes in the cache, and a way to mark a pair as reviewed.
+
 Two phases, so that no result depends on the attention of a model.
 
 1. **Detection, with no LLM.** Cheap checks, deterministic or based on embeddings, that flag candidates. It is exhaustive.
