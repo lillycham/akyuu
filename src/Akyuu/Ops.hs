@@ -29,6 +29,7 @@ module Akyuu.Ops
     setRefTo,
     listRefNames,
     listRefValues,
+    firstLines,
     pinMemory,
     unpinMemory,
     listPinned,
@@ -276,6 +277,21 @@ listRefValues :: Env -> IO (Either AkyuuError [(Name, Id)])
 listRefValues env = runExceptT $ do
   names <- ExceptT (listRefNames env)
   forM names $ \n -> (,) n . current <$> ExceptT (readRef env n)
+
+-- | The first line of the body of each memory, cut to 80 characters. A memory
+-- that cannot be read has no entry: this is for a list, which must not fail
+-- for one bad memory.
+firstLines :: Env -> [Id] -> IO (Map.Map Id Text)
+firstLines env is = do
+  rs <- forM (Set.toList (Set.fromList is)) $ \i -> do
+    r <- getMemory env i
+    pure (either (const []) (\m -> [(i, cut (memBody m))]) r)
+  pure (Map.fromList (concat rs))
+  where
+    cut b = case filter (not . T.null) (map T.strip (T.lines b)) of
+      (l : _) | T.length l > 80 -> T.take 79 l <> "…"
+      (l : _) -> l
+      [] -> ""
 
 -- | Pin a memory, so that GC keeps it. Pinning twice is the same as once.
 --

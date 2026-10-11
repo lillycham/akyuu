@@ -42,7 +42,7 @@ import Akyuu.Memory (renderMemory)
 import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, parseDuration, parseIdSpec, pinMemory, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLines, syncLines, tierLines, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, syncLines, tierLines, unpinLines, verifyLines)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Web.Page qualified as Page
 import Akyuu.Web.Read qualified as Read
@@ -55,6 +55,7 @@ import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -477,7 +478,10 @@ runCommand env c = runExceptT $ case c of
     manifest <- liftIO (manifestRef given)
     r <- ExceptT (either (pure . Left) (\mr -> contextFor env mr (maybe "always" id tier) extra) manifest)
     pure (ok (tierLines r))
-  Search o q -> ok . searchLines <$> ExceptT (searchMemories env o q)
+  Search o q -> do
+    r <- ExceptT (searchMemories env o q)
+    held <- either (const Map.empty) heldBy <$> liftIO (listRefValues env)
+    pure (ok (searchLinesWith held r))
   Neighbours i -> ok . neighbourLines <$> ExceptT (neighboursOf env i)
   Compare a b j -> do
     r <- ExceptT (compareMemories env a b)

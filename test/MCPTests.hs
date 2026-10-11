@@ -6,10 +6,11 @@ import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind (Fork),
 import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
 import Akyuu.Id (IdParseError (BadHex), parse, render)
-import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (McpConfig), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallRefSet, CallReview, CallSearch), ToolResult (ToolResult), defaultMcpConfig, handleLine, handleMessage, parseToolCall, runTool, supportedVersions)
+import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (McpConfig), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallRefList, CallRefSet, CallReview, CallSearch), ToolResult (ToolResult), defaultMcpConfig, expandCall, handleLine, handleMessage, parseToolCall, resolvePrefix, runTool, supportedVersions)
 import Akyuu.Ops (NewMemory (NewMemory))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), mkName)
+import Akyuu.Render (shortIds)
 import Akyuu.Store (StoreError (NotFound))
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
 import Data.Aeson qualified as A
@@ -241,12 +242,12 @@ runToolCases =
           ToolResult g False <- runTool defaultMcpConfig env (CallGet (Left n))
           T.isSuffixOf "\n\nLilly prefers Haskell" g @?= True
           ToolResult s False <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "haskell")
-          T.isPrefixOf i s @?= True,
+          T.isPrefixOf (shortIds i) s @?= True,
       testCase "search text has the same brackets as the CLI" $
         withOpsEnv $ \_ env -> do
           ToolResult i False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "see [x] and Haskell"))
           ToolResult s False <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "haskell")
-          s @?= i <> "  see \\[x\\] and [Haskell]",
+          s @?= shortIds i <> "  see \\[x\\] and [Haskell]",
       testCase "a failed operation is a tool error with the CLI text" $
         withOpsEnv $ \_ env -> do
           r <- runTool defaultMcpConfig env (CallGet (Right (nid 7)))
@@ -272,6 +273,32 @@ runToolCases =
           let ls = T.lines r
           assertBool "A alone" ("  - Mine." `elem` ls)
           assertBool "B alone" ("  - Yours." `elem` ls),
+      testCase "search names the refs that hold a hit, and ref_list shows the first line" $
+        withOpsEnv $ \_ env -> do
+          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "Lilly likes tea\nand more"))
+          n <- right (mkName "claude/tea")
+          _ <- runTool defaultMcpConfig env (CallRefSet n MustBeAbsent (either (error . show) id (parse i)))
+          ToolResult s False <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "tea")
+          assertBool "held by" ("  held by claude/tea" `elem` T.lines s)
+          ToolResult l False <- runTool defaultMcpConfig env CallRefList
+          l @?= "claude/tea  " <> shortIds i <> "  Lilly likes tea",
+      testCase "a prefix of 8 digits names the memory, and a shared prefix is an error" $
+        withOpsEnv $ \_ env -> do
+          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "one"))
+          let short = T.take (7 + 8) i
+              call = BL.toStrict (A.encode (callReq "get" (object ["id" .= short])))
+          Right out <- expandCall (resolvePrefix env) call
+          (A.decodeStrict out >>= at ["params", "arguments", "id"]) @?= Just (String i)
+          -- 4 digits are too few to look up: the normal check gives the error.
+          let few = BL.toStrict (A.encode (callReq "get" (object ["id" .= T.take 11 i])))
+          Right out2 <- expandCall (resolvePrefix env) few
+          (A.decodeStrict out2 >>= at ["params", "arguments", "id"]) @?= Just (String (T.take 11 i))
+          -- No memory has this prefix.
+          Left bad <- expandCall (resolvePrefix env) (BL.toStrict (A.encode (callReq "get" (object ["id" .= ("sha256-00000000" :: Text)]))))
+          (at ["result", "isError"] bad) @?= Just (Bool True),
+      testCase "shortIds cuts whole ids and leaves the rest" $ do
+        let full = "sha256-" <> T.replicate 64 "a"
+        shortIds ("x " <> full <> " y sha256-abc") @?= "x sha256-" <> T.replicate 12 "a" <> " y sha256-abc",
       testCase "an empty search says so" $
         withOpsEnv $ \_ env -> do
           r <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "nothing")

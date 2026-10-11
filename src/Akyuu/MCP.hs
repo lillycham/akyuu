@@ -33,6 +33,9 @@ module Akyuu.MCP
     supportedVersions,
     handleMessage,
     handleLine,
+    expandIds,
+    resolvePrefix,
+    expandCall,
     serve,
   )
 where
@@ -42,12 +45,14 @@ import Akyuu.Error (AkyuuError (BadId, BadName), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, getMemory, listRefValues, neighboursOf, readLog, readRef, reviewPair, searchMemories, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, parseIdSpec, readLog, readRef, resolveId, reviewPair, searchMemories, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName)
-import Akyuu.Render (compareLines, edgeName, findingLines, logLines, memoryText, neighbourLines, refLines, refListLines, searchLines, tierLines)
+import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLines)
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (unless)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT)
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
 import Data.Aeson qualified as A
 import Data.Aeson.Key qualified as K
@@ -57,6 +62,8 @@ import Data.Bifunctor (first)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy qualified as BL
+import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -109,7 +116,7 @@ data CallError
 
 -- | The JSON schema of a string that is an 'Id'.
 idSchema :: Text -> Value
-idSchema d = object ["type" .= ("string" :: Text), "pattern" .= ("^sha256-[0-9a-f]{64}$" :: Text), "description" .= d]
+idSchema d = object ["type" .= ("string" :: Text), "description" .= (d <> " A whole id, or the first 8 or more hex digits of one that no other memory shares.")]
 
 -- | The JSON schema of a list of 'Id' values.
 idsSchema :: Text -> Value
@@ -162,7 +169,7 @@ toolList =
       ),
     tool
       "search"
-      "Search the bodies of the memories for words. Each hit is a line with its id and a snippet, best first. Square brackets mark the matching words. A square bracket with a backslash before it is part of the text. 'superseded by ID' under a hit means that a newer memory replaces it: read the newer one. After 'context:' come the memories near the hits in the graph."
+      "Search the bodies of the memories for words. Each hit is a line with its id and a snippet, best first. Square brackets mark the matching words. A square bracket with a backslash before it is part of the text. 'held by NAME' under a hit means that a ref names it, so it is a current memory. 'superseded by ID' under a hit means that a newer memory replaces it: read the newer one. After 'context:' come the memories near the hits in the graph."
       ( objectSchema
           [ ("query", stringSchema "The words to find. A memory matches if it has all of them."),
             ("limit", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "default" .= searchLimit defaultSearchOptions, "description" .= ("The most hits to return." :: Text)]),
@@ -245,7 +252,7 @@ toolList =
       ),
     tool
       "ref_list"
-      "List all refs, one on each line: the name, two spaces and the id that the ref points to."
+      "List all refs, one on each line: the name, the id that the ref points to now, and the first line of that memory. Lists show ids cut to 12 digits: any id of 8 digits or more is accepted by the tools, as long as only one memory starts with it."
       (objectSchema [] []),
     tool
       "check"
@@ -430,6 +437,61 @@ parseToolCall n args = case n of
         Right
         (lookup t [(edgeName k, k) | k <- [minBound .. maxBound]])
 
+-- Id prefixes ----------------------------------------------------------
+
+-- | Arguments that hold one id.
+idKeys :: [Text]
+idKeys = ["id", "a", "b", "expected"]
+
+-- | Arguments that hold a list of ids.
+idListKeys :: [Text]
+idListKeys = ["about", "derived_from", "refines", "supersedes"]
+
+-- | The fewest hex digits of an id that a tool call may give.
+minIdDigits :: Int
+minIdDigits = 8
+
+-- | Change each id in the arguments of a call from a prefix to a whole id,
+-- with a function that does it for one text. A text that is not a prefix of
+-- 'minIdDigits' hex digits or more is left as it is, so that the normal check
+-- of the arguments gives the error. The first error stops the call.
+expandIds :: (Monad m) => (Text -> m (Either Text Text)) -> Args -> m (Either Text Args)
+expandIds res args = runExceptT (KM.traverseWithKey one args)
+  where
+    one k v
+      | K.toText k `elem` idKeys, String t <- v = String <$> ExceptT (res t)
+      | K.toText k `elem` idListKeys, Array xs <- v = Array <$> traverse each xs
+      | otherwise = pure v
+    each (String t) = String <$> ExceptT (res t)
+    each x = lift (pure x)
+
+-- | The function for 'expandIds' on an open store.
+resolvePrefix :: Env -> Text -> IO (Either Text Text)
+resolvePrefix env t
+  | T.length digits < minIdDigits || not (T.all isHex digits) = pure (Right t)
+  | otherwise = case parseIdSpec t of
+      Left _ -> pure (Right t)
+      Right (Full i) -> pure (Right (Id.render i))
+      Right s@(Prefix _) -> either (Left . describe) (Right . Id.render) <$> resolveId env s
+  where
+    digits = fromMaybe t (T.stripPrefix "sha256-" t)
+    isHex c = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+
+-- | Look at one line of input. A @tools/call@ gets its ids expanded. If an id
+-- does not name one memory, the result is 'Left' with the answer, a tool
+-- result with an error. Any other line is returned as it is.
+expandCall :: (Monad m) => (Text -> m (Either Text Text)) -> BS.ByteString -> m (Either Value BS.ByteString)
+expandCall res line = case A.decodeStrict line of
+  Just (Object o)
+    | Just (String "tools/call") <- KM.lookup "method" o,
+      Just (Object p) <- KM.lookup "params" o,
+      Just (Object a) <- KM.lookup "arguments" p -> do
+        r <- expandIds res a
+        pure $ case r of
+          Left why -> Left (response (fromMaybe Null (KM.lookup "id" o)) (toolResultValue (ToolResult why True)))
+          Right a' -> Right (BL.toStrict (A.encode (Object (KM.insert "params" (Object (KM.insert "arguments" (Object a') p)) o))))
+  _ -> pure (Right line)
+
 -- Running tools --------------------------------------------------------
 
 -- | Run a tool call against an open store. An error of the operation becomes
@@ -448,22 +510,33 @@ runTool cfg env c = either failed id <$> go
           Left e -> pure (Left e)
           Right x -> fmap (\m -> okText (memoryText m) False) <$> getMemory env x
       CallSupersede n old m -> fmap (\i -> okText (Id.render i) False) <$> supersedeMemory env n old m
-      CallSearch o q -> fmap (lines' "No matches." . searchLines) <$> searchMemories env o q
-      CallNeighbours i -> fmap (lines' "This memory has no edges." . neighbourLines) <$> neighboursOf env i
+      CallSearch o q -> do
+        r <- searchMemories env o q
+        held <- either (const Map.empty) heldBy <$> listRefValues env
+        pure (fmap (shorten . lines' "No matches." . searchLinesWith held) r)
+      CallNeighbours i -> fmap (shorten . lines' "This memory has no edges." . neighbourLines) <$> neighboursOf env i
       CallCompare a b -> fmap (\r -> okText (T.intercalate "\n" (compareLines r)) False) <$> compareMemories env a b
       CallReview a b ag n -> fmap (const (okText ("reviewed " <> Id.render a <> " " <> Id.render b) False)) <$> reviewPair env a b ag n
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
       CallAppend n m -> fmap (\i -> okText (Id.render i) False) <$> appendEpisode env n m
-      CallLog n lim full -> fmap (\w -> okText (T.intercalate "\n" (logLines full w)) False) <$> readLog env n (maybe 20 id lim)
-      CallRefList -> fmap (lines' "There are no refs." . refListLines) <$> listRefValues env
+      CallLog n lim full -> fmap (\w -> (if full then id else shorten) (okText (T.intercalate "\n" (logLines full w)) False)) <$> readLog env n (maybe 20 id lim)
+      CallRefList -> do
+        r <- listRefValues env
+        case r of
+          Left e -> pure (Left e)
+          Right rs -> do
+            firsts <- firstLines env (map snd rs)
+            pure (Right (shorten (lines' "There are no refs." (refListLinesWith firsts rs))))
       CallContext tier refs -> case mkName (mcpTiersRef cfg) of
         Left e -> pure (Left (BadName (mcpTiersRef cfg) e))
         Right manifest -> fmap (\r -> okText (T.intercalate "\n" (tierLines r)) False) <$> contextFor env manifest (maybe "always" id tier) refs
       CallCheck o ks s -> do
         r <- checkStore env o
         refs <- listRefValues env
-        pure ((\fs rs -> okText (T.intercalate "\n" (findingLines rs (filterFindings ks s fs))) False) <$> r <*> refs)
+        pure ((\fs rs -> shorten (okText (T.intercalate "\n" (findingLines rs (filterFindings ks s fs))) False)) <$> r <*> refs)
+    -- Ids in a list are cut to 12 digits: a prefix names the memory again.
+    shorten r = r {resultText = shortIds (resultText r)}
 
 -- Protocol -------------------------------------------------------------
 
@@ -619,7 +692,10 @@ serve cfg env = do
       eof <- hIsEOF stdin
       unless eof $ do
         line <- BC.hGetLine stdin
-        answer <- handleLine cfg safeRun line
+        expanded <- expandCall (resolvePrefix env) line
+        answer <- case expanded of
+          Left v -> pure (Just v)
+          Right l -> handleLine cfg safeRun l
         mapM_ (\v -> BL.hPut stdout (A.encode v <> "\n") >> hFlush stdout) answer
         loop
     safeRun tc = do

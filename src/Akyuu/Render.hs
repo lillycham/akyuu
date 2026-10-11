@@ -14,6 +14,10 @@ module Akyuu.Render
     unpinLines,
     pinListLines,
     searchLines,
+    searchLinesWith,
+    heldBy,
+    refListLinesWith,
+    shortIds,
     snippetText,
     neighbourLines,
     planLines,
@@ -85,14 +89,20 @@ refLines withHistory r =
 --
 -- An empty result gives no lines.
 searchLines :: SearchResult -> [Text]
-searchLines r = concatMap matchLines (matches r) <> contextLines <> map correctionLine (corrections r)
+searchLines = searchLinesWith Map.empty
+
+-- | Like 'searchLines', and a hit that a ref holds gets one more line,
+-- @  held by NAME, NAME@. See 'heldBy'.
+searchLinesWith :: Map Id [Name] -> SearchResult -> [Text]
+searchLinesWith held r = concatMap matchLines (matches r) <> contextLines <> map correctionLine (corrections r)
   where
     correctionLine (PrefixOf w) = "note: no whole word " <> quoted w <> ", so it was searched as the start of a word."
     correctionLine (SpelledAs w ts) = "note: no word " <> quoted w <> ", so it was searched as " <> T.intercalate " or " (map quoted ts) <> "."
     quoted t = "'" <> t <> "'"
     matchLines m =
       (render (matchId m) <> "  " <> oneLine (snippetText (matchSnippet m)))
-        : ["  superseded by " <> render i | i <- Set.toAscList (matchSupersededBy m)]
+        : ["  held by " <> T.intercalate ", " (map nameText ns) | Just ns <- [Map.lookup (matchId m) held]]
+          <> ["  superseded by " <> render i | i <- Set.toAscList (matchSupersededBy m)]
     contextLines
       | Set.null (context r) = []
       | otherwise = "context:" : map render (Set.toAscList (context r))
@@ -176,6 +186,32 @@ count n noun = T.pack (show n) <> " " <> plural noun
 -- line at the first space. An empty list gives no lines.
 refListLines :: [(Name, Id)] -> [Text]
 refListLines = map (\(n, i) -> nameText n <> "  " <> render i)
+
+-- | The refs that hold each memory now, from the list of refs.
+heldBy :: [(Name, Id)] -> Map Id [Name]
+heldBy rs = Map.fromListWith (flip (<>)) [(i, [n]) | (n, i) <- rs]
+
+-- | Like 'refListLines', with the first line of each memory at the end of
+-- its line. A memory that is not in the map has no such part.
+refListLinesWith :: Map Id Text -> [(Name, Id)] -> [Text]
+refListLinesWith firsts = map line
+  where
+    line (n, i) = T.intercalate "  " ([nameText n, render i] <> maybe [] pure (Map.lookup i firsts))
+
+-- | Cut each whole id in a text to its first 12 hex digits. The result is
+-- for an agent that reads a list: a prefix of 8 digits or more names the
+-- memory again (see the tool descriptions). Text that is not a whole id
+-- stays as it is.
+shortIds :: Text -> Text
+shortIds t = case T.breakOn "sha256-" t of
+  (before, rest)
+    | T.null rest -> before
+    | otherwise ->
+        let (pre, afterPre) = T.splitAt 7 rest
+            (digits, tail') = T.span isHex afterPre
+         in before <> pre <> (if T.length digits == 64 then T.take 12 digits else digits) <> shortIds tail'
+  where
+    isHex c = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
 
 -- | The answer of @pin@: the word @pinned@ and the 'Id'.
 pinLines :: Id -> [Text]
