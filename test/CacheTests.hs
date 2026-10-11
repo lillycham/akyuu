@@ -2,11 +2,11 @@
 
 module CacheTests (cacheTests) where
 
-import Akyuu.Cache
-import Akyuu.Graph (Edge (..), EdgeType (..), Graph, dangling, nodes)
+import Akyuu.Cache (Cache, CacheError (CacheSQL, CacheStore), Hit (hitId, hitSnippet), Summary (Summary, sumFirstLine, sumId), SyncReport (SyncReport, added, removed), cachePath, cachedIds, closeCache, firstLine, forget, ftsQuery, index, indexedBody, loadGraph, openCache, reindex, search, snippetClose, snippetOpen, summaries, sync)
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, dangling, nodes)
 import Akyuu.Id (Id)
-import Akyuu.Memory
-import Akyuu.Store
+import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind), memoryGraph, memoryId)
+import Akyuu.Store (Store, StoreError (BadMemory), add, objectPath, openStore, trash)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (bracket)
@@ -24,9 +24,9 @@ import MemoryTests (genMemory, shrinkMemory)
 import Support (nid, right, withTempDir)
 import System.Directory (createDirectoryIfMissing, createFileLink, doesFileExist, removeFile)
 import System.FilePath (takeDirectory, (</>))
-import Test.Tasty
-import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
+import Test.Tasty.QuickCheck ((.&&.), (===), Arbitrary (arbitrary), Gen, conjoin, elements, forAll, forAllShrink, ioProperty, listOf, shrinkList, testProperty, withMaxSuccess)
 
 cacheTests :: TestTree
 cacheTests =

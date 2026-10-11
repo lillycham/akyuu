@@ -2,29 +2,29 @@
 
 module WebTests (webTests, at, atKey, strings, treeOf) where
 
-import Akyuu.Cache (Summary (..), cachedIds)
+import Akyuu.Cache (Summary (Summary, sumCreated), cachedIds)
 import Akyuu.Cache qualified as Cache
-import Akyuu.Error (AkyuuError (..), describe)
-import Akyuu.GC (Tombstone (..))
+import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadId, BadIdSpec, BadInput, CacheFailed, NoSuchPrefix, Pruned, StoreFailed), describe)
+import Akyuu.GC (Tombstone (Tombstone))
 import Akyuu.GC qualified as GC
-import Akyuu.Graph (Edge (..), EdgeType (..), Graph, singleton)
-import Akyuu.Id (Id, IdParseError (..), hashBytes, render)
-import Akyuu.Memory (Memory (..))
-import Akyuu.Ops
-import Akyuu.Query (SearchOptions (..), defaultSearchOptions)
-import Akyuu.Refs (Expected (..), mkName)
-import Akyuu.Store (StoreError (..))
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, singleton)
+import Akyuu.Id (Id, IdParseError (BadLength), hashBytes, render)
+import Akyuu.Memory (Memory (Memory))
+import Akyuu.Ops (Env (envCache, envStore), IdSpec (Full, Prefix), NewMemory (NewMemory), addMemory, setRefTo, supersedeMemory)
+import Akyuu.Query (SearchOptions (searchHops, searchLimit), defaultSearchOptions)
+import Akyuu.Refs (Expected (MustBeAbsent), mkName)
+import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Store qualified as Store
-import Akyuu.Web.Api
-import Akyuu.Web.Model
-import Akyuu.Web.Page
+import Akyuu.Web.Api (Endpoint (ExplainEndpoint, GraphEndpoint, MemoryEndpoint, PageEndpoint, PlanEndpoint, RefsEndpoint, SearchEndpoint, StatsEndpoint, TrashEndpoint, VerifyEndpoint), RouteError (BadParam), WebRequest (WebRequest, reqQuery), WebResponse (resBody, resHeaders, resStatus), parseEndpoint, route, runEndpoint)
+import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), GraphEdge (geDst, geSrc), GraphNode (gnId, gnInStore, gnStatus), GraphView (gvEdges, gvNodes, gvSeeds, gvTotalEdges, gvTotalNodes, gvTruncated), NodeStatus (HeadNode, MissingTarget, PrunedTarget, SupersededNode), Window (Window, winAll, winFocus, winHops, winLimit), defaultWindow, graphView, graphViewJSON, selectWindow)
+import Akyuu.Web.Page (dataMarker, indexPage, scriptSafeJSON, vizPage)
 import Akyuu.Web.Server (application, hostAllowed, toWebRequest)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Network.HTTP.Types (statusCode)
 import Network.Wai qualified as Wai
-import Network.Wai.Internal (ResponseReceived (..))
+import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import Control.Monad (forM, forM_)
-import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson ((.=), Value (Array, Bool, Null, Number, Object, String), object)
 import Data.Aeson qualified as A
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
@@ -44,9 +44,9 @@ import OpsTests (note, withOpsEnv)
 import Support (nid, right)
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath ((</>))
-import Test.Tasty
-import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
+import Test.Tasty.QuickCheck ((===), Gen, choose, conjoin, elements, forAll, listOf, testProperty)
 
 webTests :: TestTree
 webTests =

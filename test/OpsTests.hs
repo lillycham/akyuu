@@ -2,17 +2,17 @@
 
 module OpsTests (opsTests, withOpsEnv, note) where
 
-import Akyuu.Error
-import Akyuu.GC (Tombstone (..), Policy (..), defaultPolicy)
-import Akyuu.Graph (Dir (..), Edge (..), EdgeType (..))
+import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
+import Akyuu.GC (Policy (gracePeriod), Tombstone (Tombstone), defaultPolicy)
+import Akyuu.Graph (Dir (In), Edge (Edge), EdgeType (About, Refines, Supersedes))
 import Akyuu.Id (Id, render)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (..), parseMemory, renderMemory)
-import Akyuu.Ops
-import Akyuu.Query (Match (..), Neighbour (..), SearchResult (..), defaultSearchOptions)
-import Akyuu.Refs (Expected (..), Ref (..), RefError (..), mkName)
-import Akyuu.Store (StoreError (..), objectPath)
-import Akyuu.Supersede (SupersedeError (..))
+import Akyuu.Memory (Memory (memBody, memCreated, memEdges, memKind), parseMemory, renderMemory)
+import Akyuu.Ops (Env (envStore), IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets), addMemory, buildMemory, checkField, dryRunGC, getMemory, listRefNames, listRefValues, neighboursOf, parseDuration, parseIdSpec, readRef, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, verifyOk, verifyStore, withEnv)
+import Akyuu.Query (Match (matchId), Neighbour (Neighbour), SearchResult (context, matches), defaultSearchOptions)
+import Akyuu.Refs (Expected (MustBeAbsent, Unchecked), Ref (Ref), RefError (Locked, NoSuchRef, Stale), mkName)
+import Akyuu.Store (StoreError (NotFound), objectPath)
+import Akyuu.Supersede (SupersedeError (SupersedeRef, SupersedeStore))
 import Data.ByteString qualified as BS
 import Data.Either (isLeft)
 import Data.List (sort)
@@ -23,9 +23,9 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Support (nid, right, withTempDir)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
-import Test.Tasty
-import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
+import Test.Tasty.QuickCheck ((===), Testable (property), testProperty)
 
 opsTests :: TestTree
 opsTests =

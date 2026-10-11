@@ -5,20 +5,20 @@
 module SeedTests (seedTests, withDemo) where
 
 import Akyuu.Cache (cachedIds, closeCache, openCache)
-import Akyuu.Error (AkyuuError (..))
-import Akyuu.GC (Tombstone (..), defaultPolicy)
+import Akyuu.Error (AkyuuError (BadInput))
+import Akyuu.GC (Tombstone, defaultPolicy)
 import Akyuu.GC qualified as GC
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, render)
-import Akyuu.Ops (Env (..), VerifyReport (..), verifyStore, withEnv)
+import Akyuu.Ops (Env (envCache, envRefs, envStore), VerifyReport (corruptObjects, missingTargets, prunedTargets), verifyStore, withEnv)
 import Akyuu.Refs (openRefs)
-import Akyuu.Seed
+import Akyuu.Seed (Demo (demoFork, demoGarbage, demoMissing, demoPinned, demoPruned, demoRefs, demoRetained, demoStored, demoTrashed, demoYoung), checkEmptyRoot, seedDemo)
 import Akyuu.Store (openStore)
 import Akyuu.Store qualified as Store
-import Akyuu.Web.Api (WebRequest (..), WebResponse (..), route, runEndpoint)
+import Akyuu.Web.Api (WebRequest (WebRequest), WebResponse (resBody, resStatus), route, runEndpoint)
 import Akyuu.Web.Read (readBundle)
 import Control.Monad (forM_)
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String))
 import Data.Aeson qualified as A
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
@@ -31,8 +31,8 @@ import Data.Time (getCurrentTime)
 import Support (nid, right, withTempDir)
 import System.Directory (createDirectory, doesFileExist)
 import System.FilePath ((</>))
-import Test.Tasty
-import Test.Tasty.HUnit
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
 import WebTests (at, strings, treeOf)
 
 seedTests :: TestTree

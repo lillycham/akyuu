@@ -2,9 +2,9 @@
 
 module RefsTests (refsTests) where
 
-import Akyuu.Id (Id, IdParseError (..), hashBytes)
+import Akyuu.Id (Id, IdParseError (BadHex, BadPrefix), hashBytes)
 import Akyuu.Id qualified as Id
-import Akyuu.Refs
+import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, NameError (BadSegment, EmptyName), Ref (Ref, current, history), RefError (CorruptRef, Locked, NameConflict, NoSuchRef, RefIO, Stale), RefParseError (BadRefLine, EmptyRef, NotUtf8), Refs, advance, getRef, listRefs, mkName, nameText, openRefs, parseRef, refPath, refsRoot, renderRef, retained, setRef)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (forM, forM_)
@@ -20,15 +20,14 @@ import Data.Text.Encoding qualified as TE
 import Support (nid, right, withTempDir)
 import System.FileLock (SharedExclusive (Exclusive), tryLockFile, unlockFile, withFileLock)
 import System.Directory
-  ( createDirectory
-  , createDirectoryIfMissing
+  ( createDirectoryIfMissing
   , doesDirectoryExist
   , listDirectory
   )
 import System.FilePath (takeDirectory, (</>))
-import Test.Tasty
-import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
+import Test.Tasty.QuickCheck ((===), (==>), Arbitrary (arbitrary), Gen, choose, conjoin, elements, forAll, ioProperty, listOf, testProperty, vectorOf, withMaxSuccess)
 
 refsTests :: TestTree
 refsTests =

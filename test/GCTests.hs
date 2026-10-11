@@ -3,11 +3,11 @@
 module GCTests (gcTests) where
 
 import Akyuu.Cache (Cache, cachedIds, closeCache, openCache)
-import Akyuu.GC
-import Akyuu.Graph (Edge (..), EdgeType (..), Graph, nodes, reachable, singleton, successors)
+import Akyuu.GC (GCError (CorruptTombstone, GCLocked, GCRefs), Observed (Observed), Policy (Policy, gracePeriod, keepGenerations, trashTTL), Reason (HeldByPin, HeldByRef, HeldByTemp, IsYoung, RetainedBy), Roots (Roots, rootPins, rootRefs, rootTemps), RunReport (planned, swept), SweepReport (SweepReport, deleted, trashed), Tombstone (Tombstone), TombstoneParseError (BadTombstone, TombstoneNotUtf8), Why (Why, whyIsNode, whyLive, whyPath, whyReasons), allRoots, collect, defaultPolicy, dryRun, explain, explainAll, gcLockPath, listPins, listTombstones, listTrash, lookupTombstone, parseTombstone, pin, pinPath, plan, readRoots, recheck, renderTombstone, retains, snapshot, sweep, sweepAndSync, tombstonePath, unpin, withGCLock)
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, nodes, reachable, singleton, successors)
 import Akyuu.Id (Id)
-import Akyuu.Memory (Memory (..))
-import Akyuu.Refs (Expected (..), RefError (CorruptRef), Refs, mkName, openRefs, refPath, setRef)
+import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind))
+import Akyuu.Refs (Expected (Unchecked), RefError (CorruptRef), Refs, mkName, openRefs, refPath, setRef)
 import Akyuu.Store (Store, add, objectPath, openStore, trashPath)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
@@ -25,9 +25,9 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Support (nid, right, withTempDir)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, setModificationTime)
 import System.FilePath ((</>))
-import Test.Tasty
-import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck hiding (collect, recheck)
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
+import Test.Tasty.QuickCheck ((===), Arbitrary (arbitrary), Gen, Property, Testable (property), choose, conjoin, counterexample, elements, forAll, listOf, sublistOf, testProperty)
 
 gcTests :: TestTree
 gcTests =

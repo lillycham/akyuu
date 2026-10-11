@@ -4,8 +4,8 @@ module StoreTests (storeTests) where
 
 import Akyuu.Id (Id, hashBytes)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory
-import Akyuu.Store
+import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind), memoryId, renderMemory)
+import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), add, exists, get, getVerified, list, objectPath, openStore, storeRoot, trash, verify)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.List (sort)
@@ -24,9 +24,9 @@ import System.Directory
   , setModificationTime
   )
 import System.FilePath (takeDirectory, takeFileName, (</>))
-import Test.Tasty
-import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
+import Test.Tasty.QuickCheck ((===), forAllShrink, ioProperty, listOf, shrinkList, testProperty, withMaxSuccess)
 
 storeTests :: TestTree
 storeTests =

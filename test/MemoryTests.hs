@@ -2,11 +2,11 @@
 
 module MemoryTests (memoryTests, genMemory, shrinkMemory) where
 
-import Akyuu.Graph (Edge (..), EdgeType (..))
+import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Graph qualified as Graph
-import Akyuu.Id (Id, IdParseError (..), fromDigest, hashBytes)
+import Akyuu.Id (Id, IdParseError (BadLength, BadPrefix), fromDigest, hashBytes)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory
+import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind), MemoryParseError (BadEncoding, BadHeaderValue, BadLink, DuplicateHeader, MalformedHeader, MissingBlankLine, MissingHeader, UnknownHeader), memoryGraph, memoryId, parseMemory, renderMemory)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Maybe (fromMaybe)
@@ -16,9 +16,9 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Test.Tasty
-import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), testCase)
+import Test.Tasty.QuickCheck ((=/=), (===), (==>), Arbitrary (arbitrary, shrink), Gen, Property, Testable, choose, conjoin, elements, forAll, forAllShrink, listOf, listOf1, oneof, shrinkList, shuffle, testProperty)
 
 memoryTests :: TestTree
 memoryTests =

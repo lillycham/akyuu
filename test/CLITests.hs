@@ -2,26 +2,26 @@
 
 module CLITests (cliTests) where
 
-import Akyuu.CLI
-import Akyuu.Error (AkyuuError (..))
-import Akyuu.GC (Policy (..), defaultPolicy)
-import Akyuu.Graph (EdgeType (..))
-import Akyuu.Ops (IdSpec (..))
+import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), Cli (Cli, cliCommand), Command (Add, GC, Get, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Search, Serve, Supersede, Unpin, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
+import Akyuu.GC (Policy (Policy, gracePeriod), defaultPolicy)
+import Akyuu.Graph (EdgeType (About, DerivedFrom, Refines))
+import Akyuu.Ops (IdSpec (Full, Prefix))
 import Akyuu.Id (render)
-import Akyuu.Query (SearchOptions (..), defaultSearchOptions)
+import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Name, mkName)
-import Akyuu.Store (StoreError (..))
+import Akyuu.Store (StoreError (NotFound))
 import Data.Char (toUpper)
 import Data.List (isInfixOf)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
-import Options.Applicative (ParserResult (..), renderFailure)
+import Options.Applicative (ParserResult (CompletionInvoked, Failure, Success), renderFailure)
 import OpsTests (withOpsEnv)
 import Support (nid, right)
-import System.Exit (ExitCode (..))
-import Test.Tasty
-import Test.Tasty.HUnit
+import System.Exit (ExitCode (ExitSuccess))
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
 
 cliTests :: TestTree
 cliTests =

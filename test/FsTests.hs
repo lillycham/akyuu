@@ -3,14 +3,14 @@
 module FsTests (fsTests) where
 
 import Akyuu.Fs (atomicWrite, ignoreIO, tryAs, tryWith)
-import Control.Exception (ArithException (..), IOException, throwIO, try)
+import Control.Exception (ArithException (Overflow), IOException, throwIO, try)
 import Data.ByteString qualified as BS
 import Support (withTempDir)
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
-import Test.Tasty
-import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), assertFailure, testCase)
+import Test.Tasty.QuickCheck ((===), ioProperty, testProperty)
 
 fsTests :: TestTree
 fsTests =

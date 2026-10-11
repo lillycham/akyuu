@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import Akyuu.Id
+import Akyuu.Id (Id, IdParseError (BadHex, BadLength, BadPrefix), fromDigest, hashBytes, hashFile, parse, render, toBytes, verify)
 import CacheTests (cacheTests)
 import FsTests (fsTests)
 import GCTests (gcTests)
@@ -25,9 +25,9 @@ import Data.Text.Encoding qualified as TE
 import Data.Word (Word8)
 import System.Directory (getTemporaryDirectory, removeFile)
 import System.IO (hClose, openBinaryTempFile)
-import Test.Tasty
-import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
+import Test.Tasty (TestTree, defaultMain, testGroup)
+import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
+import Test.Tasty.QuickCheck ((===), (==>), conjoin, testProperty)
 
 main :: IO ()
 main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, opsTests, cliTests, mcpTests, webTests, seedTests]

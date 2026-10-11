@@ -2,12 +2,12 @@
 
 module SupersedeTests (supersedeTests) where
 
-import Akyuu.Graph (Edge (..), EdgeType (..))
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Supersedes))
 import Akyuu.Id (Id)
-import Akyuu.Memory (Memory (..))
-import Akyuu.Refs
+import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind))
+import Akyuu.Refs (Expected (MustBeAbsent), Name, Ref (current, history), RefError (NoSuchRef, Stale), Refs, getRef, mkName, openRefs, setRef)
 import Akyuu.Store qualified as Store
-import Akyuu.Supersede
+import Akyuu.Supersede (SupersedeError (SupersedeRef), supersede, supersedeFrom)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (forM)
@@ -17,8 +17,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Support (right, withTempDir)
-import Test.Tasty
-import Test.Tasty.HUnit
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), assertBool, testCase)
 
 supersedeTests :: TestTree
 supersedeTests =

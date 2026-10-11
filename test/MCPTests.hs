@@ -2,15 +2,15 @@
 
 module MCPTests (mcpTests) where
 
-import Akyuu.Error (AkyuuError (..), describe)
-import Akyuu.Graph (Edge (..), EdgeType (..))
-import Akyuu.Id (IdParseError (..), render)
-import Akyuu.MCP
-import Akyuu.Ops (NewMemory (..))
-import Akyuu.Query (SearchOptions (..), defaultSearchOptions)
-import Akyuu.Refs (Expected (..), mkName)
-import Akyuu.Store (StoreError (..))
-import Data.Aeson (Value (..), object, (.=))
+import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
+import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
+import Akyuu.Id (IdParseError (BadHex), render)
+import Akyuu.MCP (CallError (BadArguments, UnknownTool), ToolCall (CallAdd, CallGet, CallNeighbours, CallRefSet, CallSearch), ToolResult (ToolResult), handleLine, handleMessage, parseToolCall, runTool, supportedVersions)
+import Akyuu.Ops (NewMemory (NewMemory))
+import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
+import Akyuu.Refs (Expected (MustBe, MustBeAbsent), mkName)
+import Akyuu.Store (StoreError (NotFound))
+import Data.Aeson ((.=), Value (Array, Bool, Null, Number, Object, String), object)
 import Data.Aeson qualified as A
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
@@ -22,8 +22,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import OpsTests (withOpsEnv)
 import Support (nid, right)
-import Test.Tasty
-import Test.Tasty.HUnit
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), assertBool, assertFailure, testCase)
 
 mcpTests :: TestTree
 mcpTests =

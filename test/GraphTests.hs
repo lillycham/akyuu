@@ -1,6 +1,6 @@
 module GraphTests (graphTests) where
 
-import Akyuu.Graph
+import Akyuu.Graph (Dir (In, Out), Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, dangling, heads, neighbours, nodes, predecessors, reachable, singleton, successors, superseded, withinHops)
 import Akyuu.Id (Id, fromDigest)
 import Control.Exception (evaluate)
 import Data.ByteString qualified as BS
@@ -8,9 +8,9 @@ import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import System.Timeout (timeout)
-import Test.Tasty
-import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit ((@?=), testCase)
+import Test.Tasty.QuickCheck ((===), Gen, Property, Testable, choose, conjoin, elements, forAll, forAllShrink, listOf, shrinkList, shuffle, sublistOf, testProperty)
 
 graphTests :: TestTree
 graphTests =
