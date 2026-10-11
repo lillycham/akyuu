@@ -86,6 +86,13 @@ protocolCases =
         (r >>= at ["result", "serverInfo", "name"]) @?= Just "akyuu"
         isJust (r >>= at ["result", "capabilities", "tools"]) @?= True
         (r >>= at ["id"]) @?= Just (Number 1)
+    , testCase "initialize tells a client to read the memory policy first" $ do
+        let r = answer (req (Number 1) "initialize" (object ["protocolVersion" .= ("2025-06-18" :: Text)]))
+        case r >>= at ["result", "instructions"] of
+          Just (String t) -> do
+            assertBool "names the policy ref" ("claude/memory-policy" `T.isInfixOf` t)
+            assertBool "still explains supersede" ("supersede" `T.isInfixOf` t)
+          other -> assertFailure ("expected instructions text, got " <> show other)
     , testCase "initialize with an unknown version offers the newest" $
         (answer (req (Number 1) "initialize" (object ["protocolVersion" .= ("1999-01-01" :: Text)])) >>= at ["result", "protocolVersion"])
           @?= fmap String (listToMaybe supportedVersions)

@@ -370,7 +370,9 @@ initializeResult asked =
         .= ( "akyuu is a content-addressed memory store. A memory never changes. \
              \A ref (such as claude/notes) names the current memory of a topic. \
              \To change a memory, read its ref, then call supersede with the id that you read as expected. \
-             \Search shows when a hit is superseded: read the newer memory." ::
+             \Search shows when a hit is superseded: read the newer memory. \
+             \If the store has the ref claude/memory-policy, read it first: \
+             \it says how this store is used for memory, and which refs to read at the start of work." ::
                Text
            )
     ]
