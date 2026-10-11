@@ -42,10 +42,10 @@ import Akyuu.Error (AkyuuError (BadId, BadName), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, getMemory, listRefValues, neighboursOf, readRef, searchMemories, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, getMemory, listRefValues, neighboursOf, readRef, searchMemories, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName)
-import Akyuu.Render (edgeName, findingLines, memoryText, neighbourLines, refLines, refListLines, searchLines)
+import Akyuu.Render (compareLines, edgeName, findingLines, memoryText, neighbourLines, refLines, refListLines, searchLines)
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (unless)
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
@@ -73,6 +73,8 @@ data ToolCall
   | CallSupersede Name (Maybe Id) NewMemory
   | CallSearch SearchOptions Text
   | CallNeighbours Id
+  | -- | Compare two memories by their ids.
+    CallCompare Id Id
   | -- | The ref, and 'True' to show the older values too.
     CallRefGet Name Bool
   | CallRefSet Name Expected Id
@@ -167,6 +169,10 @@ toolList =
           ]
           ["query"]
       ),
+    tool
+      "compare"
+      "Compare two memories. It shows the refs that hold each one, how much text they share, the sentences that only A has and the sentences that only B has, and whether either can be dropped in favour of the other. Use it before you decide that two memories are duplicates: a memory that has a sentence the other lacks must not be dropped, because that fact is lost. Merge it or keep both."
+      (objectSchema [("a", idSchema "The first memory."), ("b", idSchema "The second memory.")] ["a", "b"]),
     tool
       "neighbours"
       "List the edges of a memory, in both directions. 'out KIND ID' means that this memory points at ID. 'in KIND ID' means that ID points at this memory."
@@ -311,6 +317,7 @@ parseToolCall n args = case n of
     follow <- maybe (pure (searchFollow defaultSearchOptions)) (fmap Set.fromList . traverse kindOf) f
     pure (CallSearch (SearchOptions limit hops follow) q)
   "neighbours" -> CallNeighbours <$> idArg args "id"
+  "compare" -> CallCompare <$> idArg args "a" <*> idArg args "b"
   "ref_get" -> CallRefGet <$> refArg args <*> (maybe False id <$> optional' args "history" asBool "true or false")
   "ref_set" -> do
     r <- refArg args
@@ -375,6 +382,7 @@ runTool env c = either failed id <$> go
       CallSupersede n old m -> fmap (\i -> okText (Id.render i) False) <$> supersedeMemory env n old m
       CallSearch o q -> fmap (lines' "No matches." . searchLines) <$> searchMemories env o q
       CallNeighbours i -> fmap (lines' "This memory has no edges." . neighbourLines) <$> neighboursOf env i
+      CallCompare a b -> fmap (\r -> okText (T.intercalate "\n" (compareLines r)) False) <$> compareMemories env a b
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
       CallRefList -> fmap (lines' "There are no refs." . refListLines) <$> listRefValues env

@@ -6,7 +6,7 @@ import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind (Fork),
 import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
 import Akyuu.Id (IdParseError (BadHex), parse, render)
-import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (McpConfig), ToolCall (CallAdd, CallCheck, CallGet, CallNeighbours, CallRefSet, CallSearch), ToolResult (ToolResult), defaultMcpConfig, handleLine, handleMessage, parseToolCall, runTool, supportedVersions)
+import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (McpConfig), ToolCall (CallAdd, CallCheck, CallCompare, CallGet, CallNeighbours, CallRefSet, CallSearch), ToolResult (ToolResult), defaultMcpConfig, handleLine, handleMessage, parseToolCall, runTool, supportedVersions)
 import Akyuu.Ops (NewMemory (NewMemory))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), mkName)
@@ -120,7 +120,7 @@ protocolCases =
         case r >>= at ["result", "tools"] of
           Just (Array ts) -> do
             let names = [n | t <- foldr (:) [] ts, Just (String n) <- [at ["name"] t]]
-            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list", "check"]
+            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list", "check", "compare"]
             mapM_ (\t -> (at ["inputSchema", "type"] t, isJust (at ["description"] t)) @?= (Just "object", True)) ts
           other -> assertFailure ("no tools: " <> show other),
       testCase "a tool call runs the tool" $ do
@@ -202,6 +202,11 @@ toolCallCases =
           @?= Left (BadArguments "The argument 'kinds' has 'nope', which is not a kind of finding.")
         parseToolCall "check" (args [("near_threshold", Number 2)])
           @?= Left (BadArguments "The argument 'near_threshold' must be from 0 to 1."),
+      testCase "compare needs both ids" $ do
+        parseToolCall "compare" (args [("a", String (render (nid 1))), ("b", String (render (nid 2)))])
+          @?= Right (CallCompare (nid 1) (nid 2))
+        parseToolCall "compare" (args [("a", String (render (nid 1)))])
+          @?= Left (BadArguments "The argument 'b' is missing."),
       testCase "an unknown tool" $
         parseToolCall "rm" (args []) @?= Left (UnknownTool "rm")
     ]
@@ -241,6 +246,16 @@ runToolCases =
           _ <- runTool env (CallAdd (NewMemory "fact" "claude" sup "new two"))
           ToolResult r False <- runTool env (CallCheck defaultCheckOptions [Fork] (Just Problem))
           T.isPrefixOf "[problem] fork:" r @?= True,
+      testCase "compare says what each memory has alone" $
+        withOpsEnv $ \_ env -> do
+          ToolResult a False <- runTool env (CallAdd (NewMemory "fact" "claude" Set.empty "Shared one. Mine."))
+          ToolResult b False <- runTool env (CallAdd (NewMemory "fact" "claude" Set.empty "Shared one. Yours."))
+          let ida = either (error . show) id (parse a)
+              idb = either (error . show) id (parse b)
+          ToolResult r False <- runTool env (CallCompare ida idb)
+          let ls = T.lines r
+          assertBool "A alone" ("  - Mine." `elem` ls)
+          assertBool "B alone" ("  - Yours." `elem` ls),
       testCase "an empty search says so" $
         withOpsEnv $ \_ env -> do
           r <- runTool env (CallSearch defaultSearchOptions "nothing")

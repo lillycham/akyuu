@@ -21,6 +21,8 @@ module Akyuu.Render
     syncLines,
     findingLines,
     findingJSON,
+    compareLines,
+    compareJSON,
     verifyLines,
     edgeName,
     dirName,
@@ -29,13 +31,14 @@ where
 
 import Akyuu.Cache (SyncReport (added, removed), snippetClose, snippetOpen)
 import Akyuu.Check (Finding (findingIds, findingKind, findingRelated, findingSeverity, findingWhy), kindName, severityName)
+import Akyuu.Compare (Comparison (cmpOnlyA, cmpOnlyB, cmpShared), canDropA, canDropB)
 import Akyuu.Error (describe, describeParse)
 import Akyuu.Error qualified as Error
 import Akyuu.GC (RunReport (swept), SweepReport (deleted, trashed))
 import Akyuu.Graph (Dir (In, Out), EdgeType)
 import Akyuu.Id (Id, render)
-import Akyuu.Memory (Memory, edgeToHeader, renderMemory)
-import Akyuu.Ops (VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
+import Akyuu.Memory (Memory (memAgent, memCreated, memKind), edgeToHeader, renderMemory)
+import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, matches))
 import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Data.Aeson (Value, object, (.=))
@@ -47,6 +50,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
+import Data.Time (defaultTimeLocale, formatTime)
 
 -- | A memory in the file format of the store, as text. The store holds
 -- UTF-8, so the decode cannot fail.
@@ -204,3 +208,54 @@ findingJSON f =
       "related" .= map render (findingRelated f),
       "why" .= findingWhy f
     ]
+
+-- Compare --------------------------------------------------------------
+
+-- | The text of @compare@: who the two memories are, how much they share,
+-- the sentences that only one of them has, and whether either can be dropped
+-- in favour of the other.
+compareLines :: CompareReport -> [Text]
+compareLines (CompareReport a b c) =
+  [side "A" a, side "B" b, "shared: " <> T.pack (show (round (100 * cmpShared c) :: Int)) <> "% of word triples"]
+    <> only "A" (cmpOnlyA c)
+    <> only "B" (cmpOnlyB c)
+    <> [drop' "A" "B" (canDropA c), drop' "B" "A" (canDropB c)]
+  where
+    side tag (CompareSide i m rs) =
+      tag
+        <> " "
+        <> render i
+        <> (if null rs then "" else " (" <> T.intercalate ", " (map nameText rs) <> ")")
+        <> "  kind: "
+        <> memKind m
+        <> "  agent: "
+        <> memAgent m
+        <> "  created: "
+        <> T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (memCreated m))
+    only tag xs =
+      ("only in " <> tag <> " (" <> T.pack (show (length xs)) <> "):") : ["  - " <> x | x <- xs]
+    drop' from to ok
+      | ok = from <> " can be dropped in favour of " <> to <> ": all its text is in " <> to <> "."
+      | otherwise = from <> " cannot be dropped in favour of " <> to <> ": it has text that " <> to <> " lacks."
+
+-- | The same facts as JSON.
+compareJSON :: CompareReport -> Value
+compareJSON (CompareReport a b c) =
+  object
+    [ "a" .= side a,
+      "b" .= side b,
+      "shared" .= cmpShared c,
+      "onlyA" .= cmpOnlyA c,
+      "onlyB" .= cmpOnlyB c,
+      "canDropA" .= canDropA c,
+      "canDropB" .= canDropB c
+    ]
+  where
+    side (CompareSide i m rs) =
+      object
+        [ "id" .= render i,
+          "refs" .= map nameText rs,
+          "kind" .= memKind m,
+          "agent" .= memAgent m,
+          "created" .= formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (memCreated m)
+        ]

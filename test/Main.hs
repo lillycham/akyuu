@@ -6,6 +6,7 @@ import Akyuu.Id (Id, IdParseError (BadHex, BadLength, BadPrefix), fromDigest, ha
 import CLITests (cliTests)
 import CacheTests (cacheTests)
 import CheckTests (checkTests)
+import CompareTests (compareTests)
 import Control.Exception (IOException, bracket, try)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -32,7 +33,7 @@ import Test.Tasty.QuickCheck (conjoin, testProperty, (===), (==>))
 import WebTests (webTests)
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, opsTests, cliTests, mcpTests, webTests, seedTests]
+main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, compareTests, opsTests, cliTests, mcpTests, webTests, seedTests]
 
 idTests :: TestTree
 idTests =

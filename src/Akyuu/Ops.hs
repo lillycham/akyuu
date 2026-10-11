@@ -42,6 +42,9 @@ module Akyuu.Ops
     runGC,
     reindexCache,
     checkStore,
+    CompareSide (..),
+    CompareReport (..),
+    compareMemories,
 
     -- * Verify
     VerifyReport (..),
@@ -54,6 +57,8 @@ import Akyuu.Cache (Cache, SyncReport, closeCache, openCache)
 import Akyuu.Cache qualified as Cache
 import Akyuu.Check (CheckOptions, Finding)
 import Akyuu.Check qualified as Check
+import Akyuu.Compare (Comparison)
+import Akyuu.Compare qualified as Compare
 import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), fromSupersede)
 import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
@@ -501,3 +506,39 @@ checkStore env o = runExceptT $ do
   roots <- gc (GC.readRoots GC.defaultPolicy (envRefs env) s)
   bodies <- liftIO (traverse (\i -> fmap ((,) i . memBody) . either (const Nothing) Just <$> Store.get s i) (Set.toAscList (Graph.nodes g)))
   pure (Check.check o (Check.Inputs g (Map.fromList (catMaybes bodies)) roots))
+
+-- Compare --------------------------------------------------------------
+
+-- | One memory in a comparison: the memory and the refs that point at it now.
+data CompareSide = CompareSide
+  { sideId :: Id,
+    sideMemory :: Memory,
+    sideRefs :: [Name]
+  }
+  deriving (Eq, Show)
+
+-- | Two memories, and what each one says that the other one lacks.
+data CompareReport = CompareReport
+  { crFirst :: CompareSide,
+    crSecond :: CompareSide,
+    crResult :: Comparison
+  }
+  deriving (Eq, Show)
+
+-- | Read two memories and compare their text ('Akyuu.Compare.compareText').
+--
+-- It reads and checks both memories ('getMemory'), so a memory that GC
+-- deleted gives 'Pruned' with the memories that replace it. It writes
+-- nothing and does not sync the cache. The refs are the current values.
+compareMemories :: Env -> Id -> Id -> IO (Either AkyuuError CompareReport)
+compareMemories env a b = runExceptT $ do
+  ma <- ExceptT (getMemory env a)
+  mb <- ExceptT (getMemory env b)
+  named <- ExceptT (listRefValues env)
+  let held i = sort [n | (n, x) <- named, x == i]
+  pure
+    CompareReport
+      { crFirst = CompareSide a ma (held a),
+        crSecond = CompareSide b mb (held b),
+        crResult = Compare.compareText (memBody ma) (memBody mb)
+      }

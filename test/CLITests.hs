@@ -2,7 +2,7 @@
 
 module CLITests (cliTests) where
 
-import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, CheckStore, GC, Get, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Search, Serve, Supersede, Unpin, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, CheckStore, Compare, GC, Get, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Search, Serve, Supersede, Unpin, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
 import Akyuu.Check (FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Check qualified as Check
 import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
@@ -131,6 +131,13 @@ parseCases =
         (cliCommand a, cliCommand b) @?= (Mcp (Just n), Mcp Nothing),
       testCase "mcp refuses a policy ref that is not a ref name" $ do
         _ <- fails ["mcp", "--policy-ref", "Not A Name"]
+        pure (),
+      testCase "compare takes two ids and --json" $ do
+        a <- parses ["compare", i1, i2]
+        b <- parses ["compare", "--json", take 11 i1, i2]
+        (cliCommand a, cliCommand b) @?= (Compare (Full (nid 1)) (Full (nid 2)) False, Compare (Prefix (T.pack (take 11 i1))) (Full (nid 2)) True),
+      testCase "compare needs two ids" $ do
+        _ <- fails ["compare", i1]
         pure (),
       testCase "gc takes the policy flags" $ do
         c <- parses ["gc", "--dry-run", "--keep-generations", "2", "--grace", "30m", "--trash-ttl", "1d"]
@@ -289,6 +296,20 @@ runCases =
           none <- run env ["check", "--strict", "--severity", "problem", "--kind", "hub"]
           outOk none @?= True
           T.lines (decodeUtf8 (outBytes none)) @?= ["No findings."],
+      testCase "compare shows the sentence that only one memory has, and the drop guard" $
+        withOpsEnv $ \_ env -> do
+          let add body = do
+                o <- run env ["add", "--kind", "fact", "--agent", "claude", "--body", body]
+                pure (T.strip (decodeUtf8 (outBytes o)))
+          a <- add "The port is private. Do not commit game data."
+          b <- add "The port is private."
+          r <- run env ["compare", T.unpack a, T.unpack b]
+          let ls = T.lines (decodeUtf8 (outBytes r))
+          assertBool "A has its own sentence" ("  - Do not commit game data." `elem` ls)
+          assertBool "A cannot be dropped" (any (T.isPrefixOf "A cannot be dropped") ls)
+          assertBool "B can be dropped" (any (T.isPrefixOf "B can be dropped") ls)
+          j <- run env ["compare", "--json", T.unpack a, T.unpack b]
+          T.isInfixOf "\"canDropB\":true" (decodeUtf8 (outBytes j)) @?= True,
       testCase "pin, pins and unpin" $
         withOpsEnv $ \_ env -> do
           o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "keep me")))

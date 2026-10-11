@@ -39,10 +39,10 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, dryRunGC, getMemory, listPinned, listRefValues, neighboursOf, parseDuration, parseIdSpec, pinMemory, readRef, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, dryRunGC, getMemory, listPinned, listRefValues, neighboursOf, parseDuration, parseIdSpec, pinMemory, readRef, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (edgeName, findingJSON, findingLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, runLines, searchLines, syncLines, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, runLines, searchLines, syncLines, unpinLines, verifyLines)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Web.Page qualified as Page
 import Akyuu.Web.Read qualified as Read
@@ -137,6 +137,8 @@ data Command i
     Pins
   | Search SearchOptions Text
   | Neighbours i
+  | -- | Two memories to compare, and 'True' for JSON.
+    Compare i i Bool
   | -- | 'True' for @--dry-run@, and the policy of the run.
     GC Bool Policy
   | Reindex
@@ -215,6 +217,7 @@ commandParser =
       <> cmd "pins" (pure Pins) "Print the id of each pinned memory."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
       <> cmd "neighbours" neighboursP "Show the edges of a memory, in both directions."
+      <> cmd "compare" compareP "Show what each of two memories says that the other lacks."
       <> cmd "gc" gcP "Collect the memories that nothing needs."
       <> cmd "reindex" (pure Reindex) "Throw the cache away and read the whole store again."
       <> cmd "verify" (pure Verify) "Check every object, edge and ref of the store."
@@ -263,6 +266,11 @@ commandParser =
         <*> option (atLeast 0) (long "hops" <> metavar "N" <> value (searchHops defaultSearchOptions) <> showDefault <> help "How many edges away from a hit to look.")
         <*> many (option kindReader (long "follow" <> metavar "KIND" <> help "Follow only this kind of edge. Repeat for more. The default is all kinds."))
     neighboursP = Neighbours <$> argument idReader (metavar "ID")
+    compareP =
+      Compare
+        <$> argument idReader (metavar "ID_A")
+        <*> argument idReader (metavar "ID_B")
+        <*> switch (long "json" <> help "Print the comparison as JSON.")
     mcpP = Mcp <$> optional (option nameReader (long "policy-ref" <> metavar "NAME" <> help "The ref that holds the policy of this store. The default is $AKYUU_POLICY_REF, then policy/memory."))
     checkP =
       CheckArgs
@@ -419,6 +427,9 @@ runCommand env c = runExceptT $ case c of
   Pins -> ok . pinListLines <$> ExceptT (listPinned env)
   Search o q -> ok . searchLines <$> ExceptT (searchMemories env o q)
   Neighbours i -> ok . neighbourLines <$> ExceptT (neighboursOf env i)
+  Compare a b j -> do
+    r <- ExceptT (compareMemories env a b)
+    pure (if j then Output (BL.toStrict (encode (compareJSON r)) <> "\n") True False else ok (compareLines r))
   GC True p -> ok . planLines <$> ExceptT (dryRunGC env p)
   GC False p -> ok . runLines <$> ExceptT (runGC env p)
   Reindex -> ok . syncLines <$> ExceptT (reindexCache env)
