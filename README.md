@@ -76,6 +76,26 @@ snapshot points to an object in it.
 To restore, copy the directories of a snapshot into an empty root and run
 `akyuu --root ROOT reindex`. Then `akyuu --root ROOT verify` checks the store.
 
+## Versioning
+
+`akyuu-version [--root DIR] [--message TEXT]` keeps the memories in a git
+repository in the root of the store. It holds `store`, `refs`, `pins`,
+`reviewed` and `tombstones`. The cache, the locks and `trash` are not in it
+(a `.gitignore` is made). One run makes one commit of what changed, and none if
+nothing did. The message says what changed: `3 memories added, 1 removed, 2
+refs changed`.
+
+The history is the history of the memory. A memory that GC removed is still in
+git, and a ref that moved can be put back. It is also a copy that can go to a
+remote: add one with `git -C ROOT remote add …` and push, or run a job. The
+script never pushes.
+
+Forgetting: a memory that you asked to forget stays in the history. To remove it
+for good, rewrite the history by hand.
+
+With the home-manager module: `programs.akyuu.versioning.enable = true;` runs it
+daily at 04:15, after GC (03:30) and the backup (04:00).
+
 ## Checks
 
 `nix flake check` runs the unit tests and a test of `akyuu-backup` in the Nix

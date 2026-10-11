@@ -24,6 +24,7 @@ let
   logs = "${home}/Library/Logs";
 
   backupPackage = self.packages.${system}.akyuu-backup;
+  versionPackage = self.packages.${system}.akyuu-version;
 
   calendar = hour: minute: [{ Hour = hour; Minute = minute; }];
 
@@ -95,6 +96,12 @@ in
       };
     };
 
+    versioning = {
+      enable = mkEnableOption "a daily commit of the memories to a git repository in the root of the store (akyuu-version)";
+      hour = mkOption { type = types.ints.between 0 23; default = 4; description = "Hour of the run."; };
+      minute = mkOption { type = types.ints.between 0 59; default = 15; description = "Minute of the run. The default is after GC and the backup."; };
+    };
+
     backup = {
       enable = mkEnableOption "a daily snapshot of the store (akyuu-backup)";
       directory = mkOption {
@@ -119,7 +126,7 @@ in
 
   config = mkIf cfg.enable (mkMerge [
     {
-      home.packages = [ cfg.package ] ++ optional cfg.backup.enable backupPackage;
+      home.packages = [ cfg.package ] ++ optional cfg.backup.enable backupPackage ++ optional cfg.versioning.enable versionPackage;
       home.sessionVariables.AKYUU_ROOT = cfg.root;
       home.sessionVariables.AKYUU_POLICY_REF = mkIf (cfg.policyRef != null) cfg.policyRef;
       home.sessionVariables.AKYUU_TIERS_REF = mkIf (cfg.tiersRef != null) cfg.tiersRef;
@@ -145,6 +152,24 @@ in
           StartCalendarInterval = calendar cfg.gc.hour cfg.gc.minute;
           StandardOutPath = "${logs}/akyuu-gc.log";
           StandardErrorPath = "${logs}/akyuu-gc.log";
+          ProcessType = "Background";
+          LowPriorityIO = true;
+        };
+      };
+    })
+
+    (mkIf (pkgs.stdenv.hostPlatform.isDarwin && cfg.versioning.enable) {
+      launchd.agents.akyuu-version = {
+        enable = true;
+        config = {
+          Label = "akyuu-version";
+          ProgramArguments = [
+            "${versionPackage}/bin/akyuu-version"
+            "--root" cfg.root
+          ];
+          StartCalendarInterval = calendar cfg.versioning.hour cfg.versioning.minute;
+          StandardOutPath = "${logs}/akyuu-version.log";
+          StandardErrorPath = "${logs}/akyuu-version.log";
           ProcessType = "Background";
           LowPriorityIO = true;
         };
