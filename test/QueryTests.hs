@@ -5,7 +5,7 @@ module QueryTests (queryTests) where
 import Akyuu.Cache (Hit (Hit, hitId), closeCache, index, openCache)
 import Akyuu.Graph (Dir (In, Out), Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, predecessors, singleton, successors, withinHops)
 import Akyuu.Id (Id)
-import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind))
+import Akyuu.Memory (Memory)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (Neighbour, neighbourDir, neighbourId, neighbourKind), SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), SearchResult (SearchResult, context, matches), defaultSearchOptions, headsFirst, neighbourList, neighbours, resolve, search, searchResult)
 import Akyuu.Store (add, openStore)
 import Control.Exception (bracket)
@@ -13,7 +13,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Support (nid, right, withTempDir)
+import Support (nid, right, testMemory, withTempDir)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import Test.Tasty.QuickCheck (Gen, Property, Testable, chooseInt, conjoin, counterexample, elements, forAll, listOf, sublistOf, testProperty, (===))
@@ -186,13 +186,7 @@ properties =
 
 memWith :: Text -> [Edge] -> Memory
 memWith body es =
-  Memory
-    { memKind = "fact",
-      memCreated = posixSecondsToUTCTime 1791201600,
-      memAgent = "claude",
-      memEdges = Set.fromList es,
-      memBody = body
-    }
+  testMemory "fact" (posixSecondsToUTCTime 1791201600) "claude" (Set.fromList es) body
 
 ioCases :: TestTree
 ioCases =

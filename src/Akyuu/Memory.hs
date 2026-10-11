@@ -25,11 +25,18 @@
 -- * The text is UTF-8. Lines end with a line feed only.
 --
 -- 'renderMemory' writes one canonical form. The 'Id' of a memory is the hash
--- of that form. 'parseMemory' is more relaxed: it accepts the headers in any
--- order. A file that 'renderMemory' did not write can therefore have an
--- 'Id' that differs from the 'Id' of the memory that it holds.
+-- of that form. 'parseMemory' accepts only that form: a file with the headers
+-- in another order, a repeated edge line, or any other change of the bytes is
+-- 'NotCanonical'. So for every file that 'parseMemory' accepts,
+--  m == bytes@, and the 'Id' of the memory is the hash of the file.
+--
+-- A 'Memory' is made with 'mkMemory', which checks the rules of its fields.
+-- The constructor is not exported.
 module Akyuu.Memory
-  ( Memory (..),
+  ( Memory (memKind, memCreated, memAgent, memEdges, memBody),
+    MemoryError (..),
+    mkMemory,
+    validField,
     MemoryParseError (..),
     renderMemory,
     parseMemory,
@@ -45,6 +52,7 @@ import Akyuu.Id (Id, IdParseError, hashBytes)
 import Akyuu.Id qualified as Id
 import Data.Bifunctor (Bifunctor (first))
 import Data.ByteString (ByteString)
+import Data.Char (isSpace)
 import Data.Foldable (traverse_)
 import Data.Map (Map)
 import Data.Map qualified as Map
@@ -54,6 +62,7 @@ import Data.Text (Text, pack)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, parseTimeM)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 
 -- | The format of the @created@ header, for example @2026-10-05T12:00:00Z@.
 -- 'renderMemory' and 'parseTime' both use it, so they cannot disagree.
@@ -102,7 +111,48 @@ data MemoryParseError
   | -- | The value of an edge header is not a valid 'Id'.
     -- The fields are the header name and the reason.
     BadLink Text IdParseError
+  | -- | The file is a valid memory, but it is not in the canonical form that
+    -- 'renderMemory' writes: the headers are in another order, an edge line
+    -- is repeated or not in order, or the bytes differ in another way.
+    NotCanonical
   deriving (Eq, Show)
+
+-- | The reason that 'mkMemory' rejects a field.
+data MemoryError
+  = -- | A field has a value that the format cannot hold: it is empty, it has
+    -- more than one line, or it has a space at either end. The fields are the
+    -- header name and the value.
+    InvalidField Text Text
+  deriving (Eq, Show)
+
+-- | Does a value fit the @kind@ or @agent@ header? It must not be empty, must
+-- have one line, and must have no white space at either end. A line feed in
+-- a kind would write a second header line.
+validField :: Text -> Bool
+validField v =
+  not (T.null v)
+    && not (T.any (`elem` ['\n', '\r']) v)
+    && not (isSpace (T.head v))
+    && not (isSpace (T.last v))
+
+-- | Make a memory. This is the only way to make one, apart from 'parseMemory'.
+--
+-- The kind and the agent must pass 'validField'. The time is cut to whole
+-- seconds, because 'renderMemory' keeps whole seconds only, so the memory
+-- that this function returns is equal to the one that the store reads back.
+mkMemory :: Text -> UTCTime -> Text -> Set Edge -> Text -> Either MemoryError Memory
+mkMemory k t a es b
+  | not (validField k) = Left (InvalidField "kind" k)
+  | not (validField a) = Left (InvalidField "agent" a)
+  | otherwise =
+      Right
+        Memory
+          { memKind = k,
+            memCreated = posixSecondsToUTCTime (fromInteger (floor (utcTimeToPOSIXSeconds t))),
+            memAgent = a,
+            memEdges = es,
+            memBody = b
+          }
 
 -- | The name of the header for a kind of edge.
 -- 'renderMemory' writes this name, and 'parseEdges' reads it.
@@ -225,11 +275,13 @@ parseEdges m = Set.fromList . concat <$> traverse forKind [minBound .. maxBound]
 
 -- | Read a memory from the bytes of a file.
 --
--- The headers can be in any order. The function reports the first problem
--- that it finds, and each problem has its own 'MemoryParseError'.
+-- The headers must be in the canonical order of 'renderMemory'. The function
+-- reports the first problem that it finds, and each problem has its own
+-- 'MemoryParseError'. A file that is valid but not canonical gives 'NotCanonical'.
 --
--- For every memory @m@ that follows the rules of 'Memory',
--- @parseMemory (renderMemory m) == Right m@.
+-- For every memory @m@ that 'mkMemory' made,
+-- @parseMemory (renderMemory m) == Right m@. For every file @bs@ with
+-- @parseMemory bs == Right m@, @renderMemory m == bs@.
 parseMemory :: ByteString -> Either MemoryParseError Memory
 parseMemory bs = do
   text <- first (const BadEncoding) $ decodeUtf8' bs
@@ -241,14 +293,8 @@ parseMemory bs = do
   agent' <- single "agent" groups
   created' <- parseTime createdText
   edges' <- parseEdges groups
-  pure
-    Memory
-      { memKind = kind',
-        memCreated = created',
-        memAgent = agent',
-        memEdges = edges',
-        memBody = body
-      }
+  m <- first (\(InvalidField n v) -> BadHeaderValue n v) (mkMemory kind' created' agent' edges' body)
+  if renderMemory m == bs then Right m else Left NotCanonical
 
 -- | The 'Id' of a memory: the hash of its canonical form.
 memoryId :: Memory -> Id

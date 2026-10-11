@@ -6,7 +6,7 @@ import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (About, DerivedFrom, Ref
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, IdParseError (BadLength, BadPrefix), fromDigest, hashBytes)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind), MemoryParseError (BadEncoding, BadHeaderValue, BadLink, DuplicateHeader, MalformedHeader, MissingBlankLine, MissingHeader, UnknownHeader), memoryGraph, memoryId, parseMemory, renderMemory)
+import Akyuu.Memory (Memory (memBody, memCreated, memEdges), MemoryError (InvalidField), MemoryParseError (BadEncoding, BadHeaderValue, BadLink, DuplicateHeader, MalformedHeader, MissingBlankLine, MissingHeader, NotCanonical, UnknownHeader), memoryGraph, memoryId, mkMemory, parseMemory, renderMemory, validField)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Maybe (fromMaybe)
@@ -16,6 +16,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Support (testMemory)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import Test.Tasty.QuickCheck (Arbitrary (arbitrary, shrink), Gen, Property, Testable, choose, conjoin, elements, forAll, forAllShrink, listOf, listOf1, oneof, shrinkList, shuffle, testProperty, (=/=), (===), (==>))
@@ -45,13 +46,7 @@ noon = posixSecondsToUTCTime 1791201600
 -- The memory of the examples. It has edges of two kinds, and nothing else.
 fixture :: Memory
 fixture =
-  Memory
-    { memKind = "fact",
-      memCreated = noon,
-      memAgent = "claude",
-      memEdges = Set.fromList [Edge About (nid 2), Edge Supersedes (nid 1)],
-      memBody = "Lilly prefers worktrees.\n"
-    }
+  testMemory "fact" noon "claude" (Set.fromList [Edge About (nid 2), Edge Supersedes (nid 1)]) "Lilly prefers worktrees.\n"
 
 -- The canonical form of 'fixture', written by hand.
 fixtureFile :: Text
@@ -122,7 +117,7 @@ parseTests =
     "parseMemory"
     [ testCase "reads the canonical form of a memory" $
         parseMemory (bytes fixtureFile) @?= Right fixture,
-      testCase "accepts the headers in any order" $
+      testCase "rejects the headers in another order" $
         parseMemory
           ( file
               [ "agent: claude",
@@ -132,13 +127,32 @@ parseTests =
                 "kind: fact"
               ]
           )
-          @?= Right fixture {memBody = "body\n"},
+          @?= Left NotCanonical,
       testCase "collects the lines of a repeated edge header" $
         fmap memEdges (parseMemory (file (required ++ ["about: " <> idText 1, "about: " <> idText 2])))
           @?= Right (Set.fromList [Edge About (nid 1), Edge About (nid 2)]),
-      testCase "joins two equal edge lines into one edge" $
-        fmap memEdges (parseMemory (file (required ++ ["about: " <> idText 1, "about: " <> idText 1])))
-          @?= Right (Set.singleton (Edge About (nid 1))),
+      testCase "rejects two equal edge lines, because the canonical form has one" $
+        parseMemory (file (required ++ ["about: " <> idText 1, "about: " <> idText 1]))
+          @?= Left NotCanonical,
+      testCase "rejects edge lines that are not in order" $
+        parseMemory (file (required ++ ["about: " <> idText 2, "about: " <> idText 1]))
+          @?= Left NotCanonical,
+      testCase "mkMemory accepts a valid memory" $
+        mkMemory "fact" noon "claude" Set.empty "b" @?= Right (testMemory "fact" noon "claude" Set.empty "b"),
+      testCase "mkMemory refuses an empty, padded or multi-line kind or agent" $ do
+        mkMemory "" noon "claude" Set.empty "" @?= Left (InvalidField "kind" "")
+        mkMemory " fact" noon "claude" Set.empty "" @?= Left (InvalidField "kind" " fact")
+        mkMemory "fact" noon "a\nb" Set.empty "" @?= Left (InvalidField "agent" "a\nb")
+        mkMemory "fact" noon "claude " Set.empty "" @?= Left (InvalidField "agent" "claude ")
+        mkMemory "fact" noon "a\rb" Set.empty "" @?= Left (InvalidField "agent" "a\rb"),
+      testCase "mkMemory cuts the time to whole seconds" $
+        fmap memCreated (mkMemory "fact" (posixSecondsToUTCTime 1791201600.75) "claude" Set.empty "")
+          @?= Right noon,
+      testCase "a value that has a space inside is valid" $
+        (validField "a b", validField "", validField " a", validField "a ") @?= (True, False, False, False),
+      testCase "parseMemory refuses a kind with a space at the start" $
+        parseMemory (file ["kind:  fact", "created: 2026-10-05T12:00:00Z", "agent: claude"])
+          @?= Left (BadHeaderValue "kind" " fact"),
       testCase "reads the four kinds of edge" $
         fmap
           memEdges
@@ -248,7 +262,7 @@ genBody = T.intercalate "\n" <$> listOf (oneof [elements tricky, T.pack <$> arbi
 
 genMemory :: Gen Memory
 genMemory =
-  Memory
+  testMemory
     <$> genWord
     <*> genTime
     <*> genWord
@@ -269,10 +283,15 @@ properties =
     "properties"
     [ testProperty "parseMemory (renderMemory m) == Right m" $ forMemory $ \m ->
         parseMemory (renderMemory m) === Right m,
-      testProperty "the headers can be in any order" $ forMemory $ \m ->
+      testProperty "headers in another order are refused, and the same order is accepted" $ forMemory $ \m ->
         let (headers, rest) = splitFile (renderMemory m)
          in forAll (shuffle headers) $ \headers' ->
-              parseMemory (BS.intercalate "\n" (headers' ++ [BS.empty]) <> "\n" <> rest) === Right m,
+              parseMemory (BS.intercalate "\n" (headers' ++ [BS.empty]) <> "\n" <> rest)
+                === (if headers' == headers then Right m else Left NotCanonical),
+      testProperty "a file that parses is its own canonical form" $ forMemory $ \m ->
+        forAll (shuffle (fst (splitFile (renderMemory m)))) $ \headers' ->
+          let bs = BS.intercalate "\n" (headers' ++ [BS.empty]) <> "\n" <> snd (splitFile (renderMemory m))
+           in either (const True) (\p -> renderMemory p == bs) (parseMemory bs),
       testProperty "two memories that differ have different files" $ forMemory $ \m1 ->
         forMemory $ \m2 ->
           m1 /= m2 ==> renderMemory m1 =/= renderMemory m2,

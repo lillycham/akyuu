@@ -328,11 +328,14 @@ Not done:
 
 ## Open decisions
 
-- [ ] **Smart constructor for `Memory`.** `memKind` and `memAgent` must be non-empty, one line, no spaces at the ends.
-      Today this is a precondition on `renderMemory` that nothing checks. Consider `mkMemory :: … -> Either MemoryError Memory`.
-      For now the CLI and the MCP server check `kind` and `agent` at the input, with `Ops.checkField`.
-- [ ] **Order of headers.** `parseMemory` accepts any order, so a hand-edited file can have a different `Id` from the memory it holds.
-      Decide whether to accept only the canonical form.
+- [x] **Smart constructor for `Memory`.** Done: `mkMemory :: Text -> UTCTime -> Text -> Set Edge -> Text -> Either MemoryError Memory`.
+      `Akyuu.Memory` no longer exports the constructor, only the field readers. `kind` and `agent` must pass `validField`,
+      and the time is cut to whole seconds, so a made memory equals what the store reads back. `parseMemory` uses it too.
+      `Ops.checkField` and `Ops.buildMemory` call it. Tests use `Support.testMemory`.
+      A record update (`m {memKind = ""}`) can still break the rule. Nothing in the code does it.
+- [x] **Order of headers.** Done: `parseMemory` accepts only the canonical form. A file with the headers in another order,
+      a repeated or unsorted edge line, or any other change gives `NotCanonical`. So for every file that parses,
+      `renderMemory m == bytes`, and the `Id` of the memory is the hash of the file. All 55 objects of the live store pass.
 - [ ] **Forks.** Two memories that supersede the same one are both `heads`. Choose a policy: latest by time, or keep both and flag it.
 - [x] **Several agents in one store.** Decided: ref names are `agent/topic`. Memories keep `agent` as a plain header.
 - [x] **`fsync`.** Done: `atomicWrite` flushes the temporary file before the rename and the directory after it.

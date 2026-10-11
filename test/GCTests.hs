@@ -6,7 +6,7 @@ import Akyuu.Cache (Cache, cachedIds, closeCache, openCache)
 import Akyuu.GC (GCError (CorruptTombstone, GCLocked, GCRefs), Observed (Observed), Policy (Policy, gracePeriod, keepGenerations, trashTTL), Reason (HeldByPin, HeldByRef, HeldByTemp, IsYoung, RetainedBy), Roots (Roots, rootPins, rootRefs, rootTemps), RunReport (planned, swept), SweepReport (SweepReport, deleted, trashed), Tombstone (Tombstone), TombstoneParseError (BadTombstone, TombstoneNotUtf8), Why (Why, whyIsNode, whyLive, whyPath, whyReasons), allRoots, collect, defaultPolicy, dryRun, explain, explainAll, gcLockPath, listPins, listTombstones, listTrash, lookupTombstone, parseTombstone, pin, pinPath, plan, readRoots, recheck, renderTombstone, retains, snapshot, sweep, sweepAndSync, tombstonePath, unpin, withGCLock)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, nodes, reachable, singleton, successors)
 import Akyuu.Id (Id)
-import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind))
+import Akyuu.Memory (Memory)
 import Akyuu.Refs (Expected (Unchecked), RefError (CorruptRef), Refs, mkName, openRefs, refPath, setRef)
 import Akyuu.Store (Store, add, objectPath, openStore, trashPath)
 import Control.Concurrent (forkIO)
@@ -22,7 +22,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Time (UTCTime, addUTCTime, getCurrentTime, nominalDay)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
-import Support (nid, right, withTempDir)
+import Support (nid, right, testMemory, withTempDir)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, setModificationTime)
 import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
@@ -650,13 +650,7 @@ withEnv act = withTempDir $ \dir -> do
 
 memWith :: Text -> [Edge] -> Memory
 memWith body es =
-  Memory
-    { memKind = "fact",
-      memCreated = t0,
-      memAgent = "claude",
-      memEdges = Set.fromList es,
-      memBody = body
-    }
+  testMemory "fact" t0 "claude" (Set.fromList es) body
 
 mem :: Text -> Memory
 mem body = memWith body []

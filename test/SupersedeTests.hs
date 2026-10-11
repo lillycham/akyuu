@@ -4,7 +4,7 @@ module SupersedeTests (supersedeTests) where
 
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Supersedes))
 import Akyuu.Id (Id)
-import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind))
+import Akyuu.Memory (Memory, memEdges)
 import Akyuu.Refs (Expected (MustBeAbsent), Name, Ref (current, history), RefError (NoSuchRef, Stale), Refs, getRef, mkName, openRefs, setRef)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (SupersedeError (SupersedeRef), supersede, supersedeFrom)
@@ -16,7 +16,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Support (right, withTempDir)
+import Support (right, testMemory, withTempDir)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
@@ -34,13 +34,7 @@ supersedeTests =
 -- A memory with this body and these edges. Everything else is fixed.
 memWith :: Text -> [Edge] -> Memory
 memWith body es =
-  Memory
-    { memKind = "fact",
-      memCreated = posixSecondsToUTCTime 1791201600,
-      memAgent = "claude",
-      memEdges = Set.fromList es,
-      memBody = body
-    }
+  testMemory "fact" (posixSecondsToUTCTime 1791201600) "claude" (Set.fromList es) body
 
 mem :: Text -> Memory
 mem body = memWith body []

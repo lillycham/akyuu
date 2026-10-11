@@ -4,7 +4,7 @@ module StoreTests (storeTests) where
 
 import Akyuu.Id (Id, hashBytes)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind), memoryId, renderMemory)
+import Akyuu.Memory (Memory, memoryId, renderMemory)
 import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), add, exists, get, getVerified, list, objectPath, openStore, storeRoot, trash, verify)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -14,7 +14,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import MemoryTests (genMemory, shrinkMemory)
-import Support (nid, right, withTempDir)
+import Support (nid, right, testMemory, withTempDir)
 import System.Directory
   ( createDirectoryIfMissing,
     doesDirectoryExist,
@@ -75,13 +75,7 @@ isBadMemory _ _ = False
 -- A small memory. Only the body changes between memories.
 mem :: Text -> Memory
 mem body =
-  Memory
-    { memKind = "fact",
-      memCreated = posixSecondsToUTCTime 1791201600,
-      memAgent = "claude",
-      memEdges = Set.empty,
-      memBody = body
-    }
+  testMemory "fact" (posixSecondsToUTCTime 1791201600) "claude" (Set.empty) body
 
 -- Bytes that are not a memory.
 garbage :: ByteString

@@ -1,10 +1,17 @@
--- | Helpers that more than one test module uses.
-module Support (withTempDir, right, nid) where
+{-# LANGUAGE OverloadedStrings #-}
 
+-- | Helpers that more than one test module uses.
+module Support (withTempDir, right, nid, testMemory) where
+
+import Akyuu.Graph (Edge)
 import Akyuu.Id (Id, fromDigest)
+import Akyuu.Memory (Memory, mkMemory)
 import Control.Exception (bracket)
 import Data.ByteString qualified as BS
 import Data.Maybe (fromMaybe)
+import Data.Set (Set)
+import Data.Text (Text)
+import Data.Time (UTCTime)
 import System.Directory
   ( createDirectory,
     getTemporaryDirectory,
@@ -33,3 +40,8 @@ right = either (\e -> assertFailure ("unexpected Left: " ++ show e)) pure
 -- An 'Id' for a small number. Different numbers give different 'Id' values.
 nid :: Int -> Id
 nid n = fromMaybe (error "nid: not 32 bytes") (fromDigest (BS.replicate 32 (fromIntegral n)))
+
+-- A memory for a test. It stops the test with an error if a field is not
+-- valid, so a test never builds a memory that the store would refuse.
+testMemory :: Text -> UTCTime -> Text -> Set Edge -> Text -> Memory
+testMemory k t a es b = either (error . ("testMemory: " ++) . show) id (mkMemory k t a es b)

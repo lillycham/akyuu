@@ -69,7 +69,7 @@ import Akyuu.Graph (Edge, Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind), MemoryParseError)
+import Akyuu.Memory (Memory (memBody, memEdges), MemoryError (InvalidField), MemoryParseError, mkMemory, validField)
 import Akyuu.Query (Neighbour, SearchOptions, SearchResult)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (Expected, Name, Ref (current), RefError, Refs, openRefs)
@@ -83,7 +83,8 @@ import Control.Exception (finally)
 import Control.Monad (forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE, withExceptT)
-import Data.Char (isDigit, isHexDigit, isSpace)
+import Data.Bifunctor (first)
+import Data.Char (isDigit, isHexDigit)
 import Data.Either (partitionEithers)
 import Data.List (sort, sortOn)
 import Data.Map.Strict qualified as Map
@@ -93,7 +94,6 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import System.Directory (doesDirectoryExist)
 
 -- The environment ------------------------------------------------------
@@ -159,12 +159,8 @@ data NewMemory = NewMemory
 -- The smart constructor for 'Memory' is still an open decision.
 checkField :: Text -> Text -> Either AkyuuError Text
 checkField header v
-  | T.null v = bad
-  | T.any (`elem` ['\n', '\r']) v = bad
-  | isSpace (T.head v) || isSpace (T.last v) = bad
-  | otherwise = Right v
-  where
-    bad = Left (BadField header v)
+  | validField v = Right v
+  | otherwise = Left (BadField header v)
 
 -- | Make a memory, created at this time. This function is pure.
 --
@@ -172,19 +168,8 @@ checkField header v
 -- keeps whole seconds only. The memory then equals what the store reads
 -- back.
 buildMemory :: UTCTime -> NewMemory -> Either AkyuuError Memory
-buildMemory t n = do
-  k <- checkField "kind" (newKind n)
-  a <- checkField "agent" (newAgent n)
-  pure
-    Memory
-      { memKind = k,
-        memCreated = wholeSeconds t,
-        memAgent = a,
-        memEdges = newEdges n,
-        memBody = newBody n
-      }
-  where
-    wholeSeconds = posixSecondsToUTCTime . fromInteger . floor . utcTimeToPOSIXSeconds
+buildMemory t n =
+  first (\(InvalidField h v) -> BadField h v) (mkMemory (newKind n) t (newAgent n) (newEdges n) (newBody n))
 
 -- | 'buildMemory' at the time now.
 buildNow :: NewMemory -> ExceptT AkyuuError IO Memory

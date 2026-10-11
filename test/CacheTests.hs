@@ -5,7 +5,7 @@ module CacheTests (cacheTests) where
 import Akyuu.Cache (Cache, CacheError (CacheSQL, CacheStore), Hit (hitId, hitSnippet), Summary (Summary, sumFirstLine, sumId), SyncReport (SyncReport, added, removed), cachePath, cachedIds, closeCache, firstLine, forget, ftsQuery, index, indexedBody, loadGraph, openCache, reindex, search, snippetClose, snippetOpen, summaries, sync)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, dangling, nodes)
 import Akyuu.Id (Id)
-import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind), memoryGraph, memoryId)
+import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memEdges, memKind), memoryGraph, memoryId)
 import Akyuu.Store (Store, StoreError (BadMemory), add, objectPath, openStore, trash)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
@@ -21,7 +21,7 @@ import Data.Text qualified as T
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Database.SQLite.Simple (Error (ErrorBusy), Only (fromOnly), SQLError (sqlError), execute_, query_, withConnection)
 import MemoryTests (genMemory, shrinkMemory)
-import Support (nid, right, withTempDir)
+import Support (nid, right, testMemory, withTempDir)
 import System.Directory (createDirectoryIfMissing, createFileLink, doesFileExist, removeFile)
 import System.FilePath (takeDirectory, (</>))
 import Test.Tasty (TestTree, testGroup)
@@ -57,13 +57,7 @@ withEnv act = withTempDir $ \dir -> do
 -- A memory with this body and these edges. Everything else is fixed.
 memWith :: Text -> [Edge] -> Memory
 memWith body es =
-  Memory
-    { memKind = "fact",
-      memCreated = posixSecondsToUTCTime 1791201600,
-      memAgent = "claude",
-      memEdges = Set.fromList es,
-      memBody = body
-    }
+  testMemory "fact" (posixSecondsToUTCTime 1791201600) "claude" (Set.fromList es) body
 
 mem :: Text -> Memory
 mem body = memWith body []

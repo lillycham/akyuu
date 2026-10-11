@@ -9,7 +9,7 @@ import Akyuu.GC (Tombstone (Tombstone))
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, singleton)
 import Akyuu.Id (Id, IdParseError (BadLength), hashBytes, render)
-import Akyuu.Memory (Memory (Memory))
+import Akyuu.Memory (Memory)
 import Akyuu.Ops (Env (envCache, envStore), IdSpec (Full, Prefix), NewMemory (NewMemory), addMemory, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBeAbsent), mkName)
@@ -41,7 +41,7 @@ import Network.HTTP.Types (statusCode)
 import Network.Wai qualified as Wai
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import OpsTests (note, withOpsEnv)
-import Support (nid, right)
+import Support (nid, right, testMemory)
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
@@ -495,7 +495,7 @@ storeCases =
       testCase "verify shows the dangling target and the drift of the cache" $
         withOpsEnv $ \_ env -> do
           _ <- smallStore env
-          fresh <- right =<< Store.add (envStore env) (Memory "fact" t0 "claude" Set.empty "not in the cache")
+          fresh <- right =<< Store.add (envStore env) (testMemory "fact" t0 "claude" Set.empty "not in the cache")
           (s, v) <- call env ["api", "verify"] []
           s @?= 200
           at ["ok"] v @?= Just (Bool False)
@@ -505,10 +505,10 @@ storeCases =
           strings (at ["drift", "cacheOnly"] v) @?= [],
       testCase "check lists a fork and names the refs" $
         withOpsEnv $ \_ env -> do
-          base <- right =<< Store.add (envStore env) (Memory "fact" t0 "claude" Set.empty "the old text of a note")
+          base <- right =<< Store.add (envStore env) (testMemory "fact" t0 "claude" Set.empty "the old text of a note")
           let sup = Set.singleton (Edge Supersedes base)
-          _ <- right =<< Store.add (envStore env) (Memory "fact" t0 "claude" sup "first new text")
-          _ <- right =<< Store.add (envStore env) (Memory "fact" t0 "claude" sup "second new text")
+          _ <- right =<< Store.add (envStore env) (testMemory "fact" t0 "claude" sup "first new text")
+          _ <- right =<< Store.add (envStore env) (testMemory "fact" t0 "claude" sup "second new text")
           (s, v) <- call env ["api", "check"] []
           s @?= 200
           [at ["kind"] x | x <- items (at ["findings"] v), at ["severity"] x == Just "problem"] @?= [Just "fork"]
@@ -516,14 +516,14 @@ storeCases =
       testCase "a memory that the cache does not have is in the graph, marked" $
         withOpsEnv $ \_ env -> do
           _ <- smallStore env
-          fresh <- right =<< Store.add (envStore env) (Memory "fact" t0 "claude" Set.empty "not in the cache\nsecond")
+          fresh <- right =<< Store.add (envStore env) (testMemory "fact" t0 "claude" Set.empty "not in the cache\nsecond")
           (_, v) <- call env ["api", "graph"] [("all", Just "1")]
           [(at ["inCache"] x, at ["line"] x) | x <- items (at ["nodes"] v), at ["id"] x == Just (String (render fresh))]
             @?= [(Just (Bool False), Just "not in the cache")],
       testCase "no endpoint writes to the store, the refs, the pins or the cache" $
         withOpsEnv $ \dir env -> do
           (v1, _, _) <- smallStore env
-          _ <- right =<< Store.add (envStore env) (Memory "fact" t0 "claude" Set.empty "not in the cache")
+          _ <- right =<< Store.add (envStore env) (testMemory "fact" t0 "claude" Set.empty "not in the cache")
           treeBefore <- treeOf dir
           cachedBefore <- right =<< cachedIds (envCache env)
           let paths =
