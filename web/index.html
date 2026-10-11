@@ -265,6 +265,50 @@ const Akyuu = (function () {
   };
   Heap.prototype.size = function () { return this.a.length; };
 
+  // Order the columns so that the edges are short: the sum over all edges of
+  // the distance between their two columns is small. `adj[c]` maps each linked
+  // column to the number of edges. This is a linear arrangement problem. Two
+  // steps: barycenter sweeps (each column goes to the mean place of its
+  // neighbours), then swaps of neighbours that help. The result is never worse
+  // than the order in time, and it is the same every time. Returns, for each
+  // column, its new place.
+  function orderColumns(ncol, adj) {
+    const cost = (pos) => {
+      let s = 0;
+      for (let c = 0; c < ncol; c++) for (const [d, w] of adj[c]) if (d > c) s += w * Math.abs(pos[c] - pos[d]);
+      return s;
+    };
+    const ids = Array.from({ length: ncol }, (_, i) => i);
+    let pos = ids.slice(), best = pos.slice(), bestCost = cost(pos);
+    for (let sweep = 0; sweep < 10; sweep++) {
+      const bary = pos.map((p, c) => {
+        let w = 0, s = 0;
+        for (const [d, k] of adj[c]) { w += k; s += k * pos[d]; }
+        return w ? s / w : p;
+      });
+      const next = new Array(ncol);
+      ids.slice().sort((x, y) => bary[x] - bary[y] || pos[x] - pos[y]).forEach((c, i) => { next[c] = i; });
+      pos = next;
+      const k = cost(pos);
+      if (k < bestCost) { bestCost = k; best = pos.slice(); }
+    }
+    pos = best.slice();
+    const at = new Array(ncol);
+    pos.forEach((p, c) => { at[p] = c; });
+    for (let pass = 0; pass < 6; pass++) {
+      let moved = false;
+      for (let i = 0; i + 1 < ncol; i++) {
+        const u = at[i], v = at[i + 1];
+        let delta = 0;
+        for (const [n, w] of adj[u]) if (n !== v) delta += w * (Math.abs(pos[n] - (i + 1)) - Math.abs(pos[n] - i));
+        for (const [n, w] of adj[v]) if (n !== u) delta += w * (Math.abs(pos[n] - i) - Math.abs(pos[n] - (i + 1)));
+        if (delta < 0) { at[i] = v; at[i + 1] = u; pos[u] = i + 1; pos[v] = i; moved = true; }
+      }
+      if (!moved) break;
+    }
+    return pos;
+  }
+
   // The layered layout. Edges point from a newer memory to an older one, so
   // the graph is a DAG and needs no force layout:
   //
@@ -278,7 +322,12 @@ const Akyuu = (function () {
   // 4. Rows: go down the order. A node starts a new row if its column is
   //    taken in the current row, or if it has an edge to a node in it. So
   //    time runs down and every edge points down.
-  function layout(graph) {
+  // 5. Column order: the rows do not depend on which column is which, so the
+  //    columns can change places now. Edges between far columns cross more
+  //    gutters and more lines. So the columns are ordered to make the edges
+  //    short (see orderColumns). A chain stays in its column, and each cell
+  //    still holds one node. `opts.reorder === false` skips this step.
+  function layout(graph, opts) {
     const byId = new Map();
     for (const n of graph.nodes) byId.set(n.id, n);
     const ins = new Map(), outs = new Map();
@@ -347,7 +396,22 @@ const Akyuu = (function () {
       usedCols.add(col); inRow.add(n.id);
       pos.set(n.id, { col: col, row: row, seq: seq.get(n.id) });
     }
-    return { pos: pos, order: order.map(n => n.id), columns: Math.max(colEnd.length, 1),
+    // 5. column order
+    const ncol = Math.max(colEnd.length, 1);
+    let colAt = null;   // the column that each old column becomes
+    if (!(opts && opts.reorder === false) && ncol > 2) {
+      const adj = [];
+      for (let c = 0; c < ncol; c++) adj.push(new Map());
+      for (const e of graph.edges) {
+        const a = pos.get(e.src), b = pos.get(e.dst);
+        if (!a || !b || a.col === b.col) continue;
+        adj[a.col].set(b.col, (adj[a.col].get(b.col) || 0) + 1);
+        adj[b.col].set(a.col, (adj[b.col].get(a.col) || 0) + 1);
+      }
+      colAt = orderColumns(ncol, adj);
+      for (const [id, p] of pos) pos.set(id, { col: colAt[p.col], row: p.row, seq: p.seq });
+    }
+    return { pos: pos, order: order.map(n => n.id), columns: ncol, colAt: colAt,
              rows: order.length ? row + 1 : 0, chains: chains };
   }
 
