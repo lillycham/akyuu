@@ -324,6 +324,13 @@ Not done:
 - The routing is not seen in a browser: the real SVG rendering, the corner shapes, the hover and the colours are not checked.
 - After the hops, the window has no cap. A memory with thousands of edges can pull them all into the view.
 - One unreadable object stops the graph view, as it stops `GC.snapshot`. The health view still shows it.
+- [ ] The check report is hard to find: it is at the bottom of the Health tab, after the eight cards of verify.
+      Make Check its own tab, between GC and Health. Show the findings first, an "all clear" line when there are none,
+      and a badge on the tab when there is a problem. Add a line to `test/check-page.js` for the tab.
+- [ ] The memory graph does not scale to the viewport. A store of a few hundred memories draws wider than the window
+      and needs a lot of scrolling. Fit the drawing to the viewport at the start (a scale from the size of the drawing
+      and the size of the canvas), with zoom and pan, and a "fit" button. Keep the text readable: below a minimum scale,
+      show the window of the graph and not a smaller drawing.
 - `explain` reads the whole snapshot for each request. This is fast enough at 3000 memories.
 
 ## Open decisions
