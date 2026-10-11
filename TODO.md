@@ -153,6 +153,7 @@ Decided:
 
 - [x] `search`: FTS hit, then `withinHops` to widen it to a neighbourhood.
 - [x] Show `neighbours` with the direction (`Out` or `In`) and the kind. `Out` edges come first.
+- [x] `resolve :: Id -> Graph -> Set Id`: the heads that replace an `Id`, also for one that GC deleted.
 - [ ] Later: ranking, and embeddings as a derived index keyed by `Id`. They cache perfectly because objects never change.
 
 ### CLI (`app/Main.hs`)
@@ -177,7 +178,7 @@ Decided:
 - `get` uses `getVerified`, so it checks the hash. `get ID` prints the stored file exactly, to a pipe or a file.
   If stdout is a terminal, it adds one line feed when the body does not end with one (`terminalBytes`, `Output.outEndLine`).
   The prompt of the shell then does not end up on the last line of the body, and scripts still get the exact bytes.
-  An `Id` that GC deleted gives "GC deleted it at …" from its tombstone.
+  An `Id` that GC deleted gives "GC deleted it at …" from its tombstone, and the memories that replace it (`Query.resolve`).
 - An id on the command line can be the start of one (`IdSpec`, `Ops.parseIdSpec`). `sha256-` is optional, the case does not matter,
   and at least 4 hex digits are needed. A whole id (`sha256-` and 64 digits) is used as it is, with no look at the store.
   A prefix is matched against the memories in the store now (`Ops.resolveId`). No match gives `NoSuchPrefix`.
@@ -342,6 +343,43 @@ Not done:
 - [x] **Dangling targets in `reachable`.** The result can include them. Decided: GC does not rely on it either way.
       `plan` takes the live set away from `nodes g`, so a dangling target in the live set has no effect. A test and a property check this.
 - [ ] **Automatic supersession.** Today an agent says so explicitly. A consolidation pass that finds superseded memories is a separate layer that emits `supersede` operations.
+      See "Consolidation pass" below for the plan.
+- [x] **A link to a memory that GC deleted.** Done in part. `Query.resolve` follows `Supersedes` edges backwards from an old `Id` to the memories that replace it.
+      It works after GC, because the edge of the newer memory stays in the cache as a dangling target. `get` on a deleted memory names the replacements
+      (`Pruned` holds them, and the web API sends them in the 410 text). A fork gives every head.
+      Not done: the chain breaks when a middle memory is deleted too, because its own edge goes with it. The fix is a tombstone that records the successors
+      at trash time (a second line in the tombstone, and old tombstones must still parse). Do it if this happens in practice: it needs 6 or more supersedes of one ref plus 7 days.
+      A link to a ref always resolves, because the ref is the stable name. Use `derived_from` or `refines` from a live memory to keep an old text alive.
+
+## Future work
+
+Ideas, not decisions. None of this is started.
+
+### Consolidation pass
+
+Two phases, so that no result depends on the attention of a model.
+
+1. **Detection, with no LLM.** Cheap checks, deterministic or based on embeddings, that flag candidates. It is exhaustive.
+   - Identical or near-identical text (the `ultrakill-macos` and `values` pairs of 2026-10-11 are examples).
+   - One ref name that points at several live hashes.
+   - Unreferenced nodes: no ref, no pin, no retaining edge.
+   - Links to superseded versions (the profile situation in the graph).
+   - Nodes with the same project path.
+2. **Judgement, with an LLM.** For each flagged pair or group, the model rules: duplicate, supersedes, or both true.
+   It only sees the cases that detection hands it. Its output is a `supersede` or a merged memory, written with the normal tools.
+
+Detection can be pure functions over the `Graph` and the cache, so it can sit next to `GC.plan` and have a dry run.
+Embeddings are a derived index keyed by `Id` (see the Query item "Later"), so they cache without any invalidation.
+
+### Weighted connections
+
+Give a stronger connection more weight in search context and in the graph view:
+
+- **Degree discount.** Score a link by about `1 / log(inbound links of the target)`, so a hub like the profile counts for less.
+- **Hop decay.** Weight a direct hit above a one-hop neighbour, and cap at one or two hops. `searchHops` is 1 by default now.
+- **Tiers instead of links.** The profile and the memory policy need not be reachable by links. They can be an always-loaded tier that every session gets.
+  Then no memory needs a link to them, and the graph is cleaner to look at (`about` edges to the profile are the main source of hubs today).
+- **Recency of confirmation** as a mild boost.
 
 ## Clean-up
 
