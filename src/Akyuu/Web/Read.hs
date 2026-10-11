@@ -32,7 +32,7 @@ where
 
 import Akyuu.Cache (Summary (Summary, sumId))
 import Akyuu.Cache qualified as Cache
-import Akyuu.Error (AkyuuError (BadInput, CacheFailed, GCFailed, Pruned, RefFailed, StoreFailed), describe)
+import Akyuu.Error (AkyuuError (BadInput, CacheFailed, GCFailed, RefFailed, StoreFailed), describe)
 import Akyuu.GC (Observed (Observed), Policy (keepGenerations), defaultPolicy)
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (EdgeType (Supersedes))
@@ -40,7 +40,7 @@ import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind))
-import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, getMemory, resolveId, verifyStore)
+import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, getMemory, missing, resolveId, verifyStore)
 import Akyuu.Query (SearchOptions)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (RefError)
@@ -148,13 +148,6 @@ readGraph env w = runExceptT $ do
     Just i | i `Set.notMember` (Graph.nodes g <> Graph.dangling g) -> missing env i
     _ -> pure ()
   pure (graphViewJSON (graphView w d))
-
--- | The error for an 'Id' that is not here: 'Pruned' if GC left a
--- tombstone, or else 'NotFound'.
-missing :: Env -> Id -> ExceptT AkyuuError IO a
-missing env i = do
-  t <- gc (GC.lookupTombstone (envStore env) i)
-  throwE (maybe (StoreFailed (NotFound i)) (Pruned i) t)
 
 -- Stats --------------------------------------------------------------------
 

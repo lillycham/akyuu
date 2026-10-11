@@ -23,6 +23,7 @@ module Akyuu.Ops
     -- * Operations
     addMemory,
     getMemory,
+    missing,
     supersedeMemory,
     readRef,
     setRefTo,
@@ -202,10 +203,20 @@ addMemory env n = runExceptT $ do
 
 -- | The error for an 'Id' that is not in the store: 'Pruned' if GC left a
 -- tombstone for it, or else 'NotFound'.
+--
+-- 'Pruned' also holds the memories that replace the deleted one
+-- ('Akyuu.Query.resolve'). The graph comes from 'Akyuu.GC.snapshot', which
+-- writes nothing, so a read-only caller can use this. If the graph cannot be
+-- read, the set is empty and the error is still 'Pruned'.
 missing :: Env -> Id -> ExceptT AkyuuError IO a
 missing env i = do
   t <- gc (GC.lookupTombstone (envStore env) i)
-  throwE (maybe (StoreFailed (NotFound i)) (Pruned i) t)
+  case t of
+    Nothing -> throwE (StoreFailed (NotFound i))
+    Just tomb -> do
+      snap <- liftIO (GC.snapshot (envCache env) (envStore env))
+      let successors = either (const Set.empty) (Query.resolve i . fst) snap
+      throwE (Pruned i tomb successors)
 
 -- | Read a memory, and check its hash ('Akyuu.Store.getVerified').
 -- A memory that GC deleted gives 'Pruned'.

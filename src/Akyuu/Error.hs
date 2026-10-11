@@ -24,6 +24,8 @@ import Akyuu.Refs (Name, NameError (BadSegment, EmptyName), RefError (CorruptRef
 import Akyuu.Store (StoreError (BadMemory, Corrupt, NotFound, StoreIO))
 import Akyuu.Supersede (SupersedeError (SupersedeRef, SupersedeStore))
 import Control.Exception (IOException, displayException)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, formatTime)
@@ -54,7 +56,9 @@ data AkyuuError
   | -- | The root directory of the store does not exist.
     RootMissing FilePath
   | -- | The memory is not in the store, and GC deleted it at this time.
-    Pruned Id Tombstone
+    -- The set holds the memories that replace it now (see
+    -- 'Akyuu.Query.resolve'). It is empty if nothing is known.
+    Pruned Id Tombstone (Set Id)
   | -- | The text is neither a full 'Id' nor a usable prefix of one. See
     -- 'Akyuu.Ops.parseIdSpec'.
     BadIdSpec Text
@@ -89,7 +93,13 @@ describe err = case err of
   BadInput t -> t
   NoRoot -> "No store is given. Use --root DIR, or set AKYUU_ROOT."
   RootMissing p -> "The store directory " <> quote (T.pack p) <> " does not exist. Make it first."
-  Pruned i t -> "The memory " <> render i <> " is gone: GC deleted it at " <> time t <> "."
+  Pruned i t newer ->
+    "The memory "
+      <> render i
+      <> " is gone: GC deleted it at "
+      <> time t
+      <> "."
+      <> replaced (Set.toAscList newer)
   BadIdSpec t ->
     quote t
       <> " is not an id or the start of one. Give the whole id (sha256- and 64 hex digits),"
@@ -182,3 +192,9 @@ quote t = "'" <> t <> "'"
 
 io :: IOException -> Text
 io = T.pack . displayException
+
+-- | The end of the text of 'Pruned': which memories replace the deleted one.
+replaced :: [Id] -> Text
+replaced [] = ""
+replaced [i] = " A newer memory replaces it: " <> render i <> "."
+replaced is = " Newer memories replace it: " <> T.intercalate ", " (map render is) <> "."

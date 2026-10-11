@@ -214,7 +214,7 @@ routeCases =
               resStatus r @?= s
               (body r >>= at ["error"]) @?= Just (String (describe err))
         check (StoreFailed (NotFound (nid 1))) 404
-        check (Pruned (nid 1) (Tombstone t0)) 410
+        check (Pruned (nid 1) (Tombstone t0) Set.empty) 410
         check (NoSuchPrefix "sha256-0101") 404
         check (AmbiguousPrefix "sha256-01" [nid 1]) 400
         check (CacheFailed Cache.CacheLocked) 500,

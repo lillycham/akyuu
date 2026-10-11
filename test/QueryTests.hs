@@ -6,7 +6,7 @@ import Akyuu.Cache (Hit (Hit, hitId), closeCache, index, openCache)
 import Akyuu.Graph (Dir (In, Out), Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, predecessors, singleton, successors, withinHops)
 import Akyuu.Id (Id)
 import Akyuu.Memory (Memory (Memory, memAgent, memBody, memCreated, memEdges, memKind))
-import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (Neighbour, neighbourDir, neighbourId, neighbourKind), SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), SearchResult (SearchResult, context, matches), defaultSearchOptions, headsFirst, neighbourList, neighbours, search, searchResult)
+import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (Neighbour, neighbourDir, neighbourId, neighbourKind), SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), SearchResult (SearchResult, context, matches), defaultSearchOptions, headsFirst, neighbourList, neighbours, resolve, search, searchResult)
 import Akyuu.Store (add, openStore)
 import Control.Exception (bracket)
 import Data.Set (Set)
@@ -25,6 +25,7 @@ queryTests =
     [ searchResultCases,
       headsFirstCases,
       neighbourCases,
+      resolveCases,
       properties,
       ioCases
     ]
@@ -244,3 +245,33 @@ ioCases =
             map matchId (matches r) @?= [iOld]
             map matchSupersededBy (matches r) @?= [Set.singleton iNew]
     ]
+
+-- Resolve --------------------------------------------------------------
+
+resolveCases :: TestTree
+resolveCases =
+  testGroup
+    "resolve"
+    [ testCase "a current memory resolves to itself" $
+        resolve c chain @?= Set.singleton c,
+      testCase "an old memory resolves to the end of the chain" $
+        resolve a chain @?= Set.singleton c,
+      testCase "a deleted memory resolves through the edge that stayed" $
+        -- a is not a node: only the edge of b names it.
+        resolve a (build [(b, [(Supersedes, a)])]) @?= Set.singleton b,
+      testCase "a deleted middle memory still gives the end" $
+        -- b is deleted, so its edge to a is gone. c still names b.
+        resolve b (build [(c, [(Supersedes, b)])]) @?= Set.singleton c,
+      testCase "a fork gives every head" $
+        resolve a (build [(a, []), (b, [(Supersedes, a)]), (c, [(Supersedes, a)])])
+          @?= Set.fromList [b, c],
+      testCase "an unknown memory gives the empty set" $
+        resolve x chain @?= Set.empty,
+      testCase "an edge that is not Supersedes does not replace" $
+        resolve a (build [(a, []), (b, [(About, a)])]) @?= Set.singleton a,
+      testCase "a cycle ends" $
+        resolve a (build [(a, [(Supersedes, b)]), (b, [(Supersedes, a)])]) @?= Set.empty
+    ]
+  where
+    -- c supersedes b, b supersedes a.
+    chain = build [(a, []), (b, [(Supersedes, a)]), (c, [(Supersedes, b)])]

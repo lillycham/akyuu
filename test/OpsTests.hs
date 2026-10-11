@@ -3,12 +3,13 @@
 module OpsTests (opsTests, withOpsEnv, note) where
 
 import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
-import Akyuu.GC (Policy (gracePeriod), Tombstone (Tombstone), defaultPolicy)
+import Akyuu.GC (Policy (gracePeriod, trashTTL), Tombstone (Tombstone), defaultPolicy)
+import Akyuu.GC qualified as GC
 import Akyuu.Graph (Dir (In), Edge (Edge), EdgeType (About, Refines, Supersedes))
 import Akyuu.Id (Id, render)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memBody, memCreated, memEdges, memKind), parseMemory, renderMemory)
-import Akyuu.Ops (Env (envStore), IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets), addMemory, buildMemory, checkField, dryRunGC, getMemory, listRefNames, listRefValues, neighboursOf, parseDuration, parseIdSpec, readRef, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env (envCache, envStore), IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets), addMemory, buildMemory, checkField, dryRunGC, getMemory, listRefNames, listRefValues, neighboursOf, parseDuration, parseIdSpec, readRef, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (Match (matchId), Neighbour (Neighbour), SearchResult (context, matches), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBeAbsent, Unchecked), Ref (Ref), RefError (Locked, NoSuchRef, Stale), mkName)
 import Akyuu.Store (StoreError (NotFound), objectPath)
@@ -19,6 +20,7 @@ import Data.List (sort)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (addUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Support (nid, right, withTempDir)
 import System.Directory (createDirectoryIfMissing)
@@ -152,8 +154,30 @@ opCases =
           BS.writeFile (dir </> "tombstones" </> T.unpack (render (nid 7))) "pruned: 2026-10-10T12:00:00Z\n"
           r <- getMemory env (nid 7)
           case r of
-            Left (Pruned i (Tombstone _)) -> i @?= nid 7
+            Left (Pruned i (Tombstone _) _) -> i @?= nid 7
             other -> assertFailure ("expected Pruned, got " <> show other),
+      testCase "a deleted memory that was superseded names the newer memory" $
+        withOpsEnv $ \_ env -> do
+          n <- right (mkName "claude/notes")
+          v1 <- right =<< addMemory env (note "v1" [])
+          _ <- right =<< setRefTo env n MustBeAbsent v1
+          v2 <- right =<< supersedeMemory env n Nothing (note "v2" [])
+          now <- getCurrentTime
+          let p = defaultPolicy {gracePeriod = 0, trashTTL = 0}
+              doomed = Set.singleton v1
+          -- The first run moves v1 to trash. The second one deletes it.
+          _ <- right =<< GC.sweepAndSync (envCache env) (envStore env) p (addUTCTime 2 now) doomed
+          _ <- right =<< GC.sweepAndSync (envCache env) (envStore env) p (addUTCTime 4 now) Set.empty
+          r <- getMemory env v1
+          case r of
+            Left e@(Pruned i _ newer) -> do
+              i @?= v1
+              newer @?= Set.singleton v2
+              assertBool "the text names the newer memory" (render v2 `T.isInfixOf` describe e)
+            other -> assertFailure ("expected Pruned, got " <> show other)
+          -- The edge of v2 stays, so the deleted memory still has a neighbour.
+          ns <- right =<< neighboursOf env v1
+          ns @?= [Neighbour In Supersedes v2],
       testCase "setRefTo refuses an Id that is not in the store" $
         withOpsEnv $ \_ env -> do
           n <- right (mkName "claude/notes")

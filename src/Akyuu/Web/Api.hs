@@ -171,7 +171,7 @@ statusOf :: AkyuuError -> Int
 statusOf e = case e of
   StoreFailed (NotFound _) -> 404
   NoSuchPrefix _ -> 404
-  Pruned _ _ -> 410
+  Pruned {} -> 410
   BadId _ _ -> 400
   BadIdSpec _ -> 400
   AmbiguousPrefix _ _ -> 400

@@ -25,6 +25,9 @@ module Akyuu.Query
     Neighbour (..),
     neighbourList,
     neighbours,
+
+    -- * Resolve
+    resolve,
   )
 where
 
@@ -169,3 +172,33 @@ neighbourList i g =
 -- | 'neighbourList' over the graph of the cache.
 neighbours :: Cache -> Id -> IO (Either CacheError [Neighbour])
 neighbours c i = fmap (neighbourList i) <$> Cache.loadGraph c
+
+-- Resolve --------------------------------------------------------------
+
+-- | The memories that now stand for an 'Id'. This function is pure.
+--
+-- It follows the @Supersedes@ edges backwards, from an older memory to the
+-- memories that replace it, until it reaches memories that nothing replaces.
+-- It returns those ends. An 'Id' that nothing replaces gives itself if it is a
+-- memory in the graph.
+--
+-- The 'Id' does not have to be in the graph. The edge of the newer memory
+-- stays in the graph after GC deleted the older one, so a deleted memory
+-- still resolves while a newer memory exists. A fork gives more than one
+-- memory: this function does not choose. A memory that is neither in the
+-- graph nor replaced gives the empty set.
+--
+-- The chain breaks if a middle memory is deleted too, because its own edge
+-- goes with it. The ends that are reached are still current memories.
+resolve :: Id -> Graph -> Set Id
+resolve i g = go (Set.singleton i) [i] Set.empty
+  where
+    go _ [] ends = ends
+    go seen (n : ns) ends =
+      case Set.toList (Graph.predecessors Supersedes n g) of
+        []
+          | n `Set.member` Graph.nodes g -> go seen ns (Set.insert n ends)
+          | otherwise -> go seen ns ends
+        ps ->
+          let new = filter (`Set.notMember` seen) ps
+           in go (foldr Set.insert seen new) (new <> ns) ends
