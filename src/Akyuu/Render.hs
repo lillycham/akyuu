@@ -19,6 +19,8 @@ module Akyuu.Render
     planLines,
     runLines,
     syncLines,
+    findingLines,
+    findingJSON,
     verifyLines,
     edgeName,
     dirName,
@@ -26,6 +28,7 @@ module Akyuu.Render
 where
 
 import Akyuu.Cache (SyncReport (added, removed), snippetClose, snippetOpen)
+import Akyuu.Check (Finding (findingIds, findingKind, findingRelated, findingSeverity, findingWhy), kindName, severityName)
 import Akyuu.Error (describe, describeParse)
 import Akyuu.Error qualified as Error
 import Akyuu.GC (RunReport (swept), SweepReport (deleted, trashed))
@@ -35,7 +38,10 @@ import Akyuu.Memory (Memory, edgeToHeader, renderMemory)
 import Akyuu.Ops (VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, matches))
 import Akyuu.Refs (Name, Ref (current, history), nameText)
+import Data.Aeson (Value, object, (.=))
 import Data.List (sort)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -170,3 +176,31 @@ unpinLines i = ["unpinned " <> render i]
 -- | The pins: one 'Id' on each line. An empty list gives no lines.
 pinListLines :: [Id] -> [Text]
 pinListLines = map render
+
+-- Check ----------------------------------------------------------------
+
+-- | The findings of @check@. Each one is a line with the severity, the kind
+-- and the reason, then one line for each memory. A memory that a ref names
+-- shows the ref in brackets. An empty list gives one line that says so.
+findingLines :: [(Name, Id)] -> [Finding] -> [Text]
+findingLines _ [] = ["No findings."]
+findingLines refs fs = concatMap one fs
+  where
+    names :: Map Id [Text]
+    names = Map.fromListWith (flip (<>)) [(i, [nameText n]) | (n, i) <- refs]
+    label i = render i <> maybe "" (\ns -> " (" <> T.intercalate ", " ns <> ")") (Map.lookup i names)
+    one f =
+      ("[" <> severityName (findingSeverity f) <> "] " <> kindName (findingKind f) <> ": " <> findingWhy f)
+        : ["  " <> label i | i <- findingIds f]
+          <> ["  read: " <> label i | i <- findingRelated f]
+
+-- | One finding as JSON, for scripts and for the web page.
+findingJSON :: Finding -> Value
+findingJSON f =
+  object
+    [ "kind" .= kindName (findingKind f),
+      "severity" .= severityName (findingSeverity f),
+      "ids" .= map render (findingIds f),
+      "related" .= map render (findingRelated f),
+      "why" .= findingWhy f
+    ]

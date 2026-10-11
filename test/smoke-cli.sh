@@ -55,6 +55,8 @@ expect 0 gc --dry-run
 expect 0 gc
 expect 0 reindex
 expect 0 verify
+expect 0 check
+expect 0 check --json --severity problem
 
 # Failures and bad usage.
 expect 1 get sha256-0000000000000000000000000000000000000000000000000000000000000000

@@ -41,6 +41,7 @@ module Akyuu.Ops
     dryRunGC,
     runGC,
     reindexCache,
+    checkStore,
 
     -- * Verify
     VerifyReport (..),
@@ -51,6 +52,8 @@ where
 
 import Akyuu.Cache (Cache, SyncReport, closeCache, openCache)
 import Akyuu.Cache qualified as Cache
+import Akyuu.Check (CheckOptions, Finding)
+import Akyuu.Check qualified as Check
 import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), fromSupersede)
 import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
@@ -73,6 +76,7 @@ import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE
 import Data.Char (isDigit, isHexDigit, isSpace)
 import Data.Either (partitionEithers)
 import Data.List (sort, sortOn)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -480,3 +484,20 @@ verifyStore env = runExceptT $ do
     isKnown (Corrupt _) = True
     isKnown (BadMemory _ _) = True
     isKnown _ = False
+
+-- Check ----------------------------------------------------------------
+
+-- | The findings of 'Akyuu.Check.check' for this store.
+--
+-- It writes nothing, and it does not sync the cache: the graph comes from
+-- 'Akyuu.GC.snapshot', which adds the objects that the cache lacks. The
+-- bodies come from the store. An object that cannot be read is left out of
+-- the bodies, so no text check sees it: 'verifyStore' reports it. The roots
+-- are the refs and pins, with the default number of generations.
+checkStore :: Env -> CheckOptions -> IO (Either AkyuuError [Finding])
+checkStore env o = runExceptT $ do
+  let s = envStore env
+  (g, _) <- gc (GC.snapshot (envCache env) s)
+  roots <- gc (GC.readRoots GC.defaultPolicy (envRefs env) s)
+  bodies <- liftIO (traverse (\i -> fmap ((,) i . memBody) . either (const Nothing) Just <$> Store.get s i) (Set.toAscList (Graph.nodes g)))
+  pure (Check.check o (Check.Inputs g (Map.fromList (catMaybes bodies)) roots))

@@ -2,7 +2,9 @@
 
 module CLITests (cliTests) where
 
-import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), Cli (Cli, cliCommand), Command (Add, GC, Get, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Search, Serve, Supersede, Unpin, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, CheckStore, GC, Get, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Search, Serve, Supersede, Unpin, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.Check (FindingKind (Fork), Severity (Problem), defaultCheckOptions)
+import Akyuu.Check qualified as Check
 import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
 import Akyuu.GC (Policy (Policy, gracePeriod), defaultPolicy)
 import Akyuu.Graph (EdgeType (About, DerivedFrom, Refines))
@@ -128,6 +130,23 @@ parseCases =
       testCase "gc flags can come in any order, and each one is optional" $ do
         c <- parses ["gc", "--grace", "0s"]
         cliCommand c @?= GC False defaultPolicy {gracePeriod = 0},
+      testCase "check takes the options, kinds and level" $ do
+        c <- parses ["check", "--kind", "fork", "--severity", "problem", "--strict", "--json", "--near-threshold", "0.5", "--hub-degree", "9"]
+        cliCommand c
+          @?= CheckStore
+            CheckArgs
+              { caOptions = defaultCheckOptions {Check.nearThreshold = 0.5, Check.hubDegree = 9},
+                caKinds = [Fork],
+                caSeverity = Just Problem,
+                caStrict = True,
+                caJson = True
+              },
+      testCase "check refuses a threshold above 1" $ do
+        _ <- fails ["check", "--near-threshold", "2"]
+        pure (),
+      testCase "check refuses a kind that does not exist" $ do
+        _ <- fails ["check", "--kind", "nope"]
+        pure (),
       testCase "pin, unpin and pins" $ do
         cs <- traverse parses [["pin", i1], ["unpin", i2], ["pins"]]
         map cliCommand cs @?= [Pin (Full (nid 1)), Unpin (Full (nid 2)), Pins],
@@ -242,6 +261,26 @@ runCases =
           _ <- run env ["ref", "set", "a", T.unpack i, "--new"]
           l <- run env ["ref", "list"]
           T.lines (decodeUtf8 (outBytes l)) @?= ["a  " <> i, "b/x  " <> i],
+      testCase "check reports a fork, shows it with --json, and --strict fails on it" $
+        withOpsEnv $ \_ env -> do
+          let add body es = do
+                o <- run env (["add", "--kind", "fact", "--agent", "claude", "--body", body] <> es)
+                pure (T.strip (decodeUtf8 (outBytes o)))
+          old <- add "the old text" []
+          let sup = ["--supersedes", T.unpack old]
+          _ <- add "new one" sup
+          _ <- add "new two" sup
+          plain <- run env ["check"]
+          T.isInfixOf "[problem] fork:" (decodeUtf8 (outBytes plain)) @?= True
+          outOk plain @?= True
+          strict <- run env ["check", "--strict"]
+          outOk strict @?= False
+          json <- run env ["check", "--json", "--kind", "fork"]
+          T.isPrefixOf "[{" (decodeUtf8 (outBytes json)) @?= True
+          T.isInfixOf "\"kind\":\"fork\"" (decodeUtf8 (outBytes json)) @?= True
+          none <- run env ["check", "--strict", "--severity", "problem", "--kind", "hub"]
+          outOk none @?= True
+          T.lines (decodeUtf8 (outBytes none)) @?= ["No findings."],
       testCase "pin, pins and unpin" $
         withOpsEnv $ \_ env -> do
           o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "keep me")))
