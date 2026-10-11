@@ -902,18 +902,22 @@ const Akyuu = (function () {
     }
     const lay = layout(graph);
     const marks = opts.marks || new Map();
-    const { colX, width, tagsOf } = columnGeometry(graph, lay, marks);
-    const height = TOP + lay.rows * ROW_H + 30;
+    const plan = planRoutes(graph, lay);
+    const geo = columnGeometry(graph, lay, marks, plan.gutterTracks);
+    const { colX, width, tagsOf } = geo;
+    const routed = routeEdges(graph, lay, geo, plan);
+    const rowY = routed.rowY;
+    const height = routed.height + 30;
     const root = svg('svg', { class: 'graph', width: width, height: height, viewBox: '0 0 ' + width + ' ' + height });
     const defs = svg('defs');
     for (const k of Object.keys(EDGE_VAR)) {
-      const m = svg('marker', { id: 'arrow-' + k, viewBox: '0 0 10 10', refX: '9', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' });
+      const m = svg('marker', { id: 'arrow-' + k, viewBox: '0 0 10 10', refX: '10', refY: '5', markerUnits: 'userSpaceOnUse', markerWidth: '9', markerHeight: '9', orient: 'auto' });
       m.appendChild(svg('path', { d: 'M0,0 L10,5 L0,10 z', style: 'fill: var(--' + EDGE_VAR[k] + '); stroke: none' }));
       defs.appendChild(m);
     }
     root.appendChild(defs);
     const byId = new Map(graph.nodes.map(n => [n.id, n]));
-    const xy = (id) => { const p = lay.pos.get(id); return { x: colX[p.col], y: TOP + p.row * ROW_H }; };
+    const xy = (id) => { const p = lay.pos.get(id); return { x: colX[p.col], y: rowY[p.row] }; };
 
     // The time axis: a label where the day changes.
     let lastDay = null;
@@ -925,7 +929,7 @@ const Akyuu = (function () {
       const n = byId.get(id);
       const day = n.created ? String(n.created).slice(0, 10) : null;
       if (day && day !== lastDay) {
-        root.appendChild(svg('text', { class: 'date', x: 8, y: TOP + p.row * ROW_H + NODE_H / 2 + 4, text: day }));
+        root.appendChild(svg('text', { class: 'date', x: 8, y: rowY[p.row] + NODE_H / 2 + 4, text: day }));
         lastDay = day;
       }
     }
@@ -933,17 +937,21 @@ const Akyuu = (function () {
     const dimmed = (n) => opts.dim ? !!opts.dim(n) : false;
     const edgeLayer = svg('g');
     root.appendChild(edgeLayer);
-    for (const e of graph.edges) {
-      if (!lay.pos.has(e.src) || !lay.pos.has(e.dst)) continue;
-      const a = xy(e.src), b = xy(e.dst);
-      const sx = a.x + NODE_W / 2, sy = a.y + NODE_H, tx = b.x + NODE_W / 2, ty = b.y;
-      let d;
-      if (Math.abs(sx - tx) < 1) d = 'M' + sx + ',' + sy + ' L' + tx + ',' + (ty - 1);
-      else { const my = (ty - sy) / 2; d = 'M' + sx + ',' + sy + ' C' + sx + ',' + (sy + my) + ' ' + tx + ',' + (ty - my) + ' ' + tx + ',' + (ty - 1); }
+    // The routes come from routeEdges: horizontal and vertical runs with
+    // rounded corners, in the gutters and the row gaps.
+    const edgeEls = new Map();   // node id -> its edges, for the highlight
+    const nodeEls = new Map();   // node id -> its group
+    const touch = (id, o) => { if (!edgeEls.has(id)) edgeEls.set(id, []); edgeEls.get(id).push(o); };
+    for (const r of routed.routes.values()) {
+      const e = r.edge;
       const dim = dimmed(byId.get(e.src)) && dimmed(byId.get(e.dst));
-      const p = svg('path', { d: d, class: 'edge ' + e.kind + (dim ? ' dim' : ''), 'marker-end': 'url(#arrow-' + e.kind + ')' });
+      const base = 'edge ' + e.kind + (dim ? ' dim' : '');
+      const p = svg('path', { d: roundedPath(r.points, CORNER), class: base, 'marker-end': 'url(#arrow-' + e.kind + ')' });
       p.appendChild(svg('title', { text: e.kind + ': ' + shortId(e.src) + ' → ' + shortId(e.dst) }));
       edgeLayer.appendChild(p);
+      const o = { el: p, base: base, src: e.src, dst: e.dst };
+      touch(e.src, o);
+      touch(e.dst, o);
     }
 
     const seeds = new Set(opts.seeds || []);
