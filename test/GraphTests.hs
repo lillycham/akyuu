@@ -75,15 +75,6 @@ predOf "no-supersedes" = (/= Supersedes)
 predOf "about-only" = (== About)
 predOf _ = const True
 
--- What the tests can see of a graph. 'Graph' has no 'Eq' and its constructor
--- is private, so two graphs are equal when every query gives the same answer.
-observe :: Graph -> (Set Id, [(EdgeType, Id, Set Id, Set Id)], [Set (Dir, EdgeType, Id)])
-observe g =
-  ( nodes g
-  , [(k, i, successors k i g, predecessors k i g) | k <- kinds, i <- universe]
-  , [neighbours i g | i <- universe]
-  )
-
 -- The reference model: the same answers, from a plain list of edges.
 edgesOf :: [Memory] -> [(Id, EdgeType, Id)]
 edgesOf ms = [(i, k, t) | (i, es) <- ms, (k, t) <- es]
@@ -162,15 +153,15 @@ monoidTests =
         predecessors Supersedes a g @?= Set.singleton b
     , testProperty "mempty is a left and right identity" $ forMemories $ \ms ->
         let g = build ms
-         in conjoin [observe (mempty <> g) === observe g, observe (g <> mempty) === observe g]
+         in conjoin [mempty <> g === g, g <> mempty === g]
     , testProperty "<> is associative" $
         forMemories $ \m1 -> forMemories $ \m2 -> forMemories $ \m3 ->
-          observe ((build m1 <> build m2) <> build m3) === observe (build m1 <> (build m2 <> build m3))
+          (build m1 <> build m2) <> build m3 === build m1 <> (build m2 <> build m3)
     , testProperty "the order of the memories does not matter" $ forMemories $ \ms ->
-        forAll (shuffle ms) $ \ms' -> observe (build ms') === observe (build ms)
+        forAll (shuffle ms) $ \ms' -> build ms' === build ms
     , testProperty "two halves joined are the same as the whole" $ forMemories $ \ms ->
         forAll (choose (0, length ms)) $ \n ->
-          observe (build (take n ms) <> build (drop n ms)) === observe (build ms)
+          build (take n ms) <> build (drop n ms) === build ms
     ]
 
 queryTests :: TestTree
