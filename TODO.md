@@ -345,7 +345,7 @@ Not done:
 
 ## Clean-up
 
-- [ ] Remove the commented-out `breakOn'` in `src/Akyuu/Memory.hs`, or use it in `splitBody` and `splitHeader`.
+- [x] Remove the commented-out `breakOn'` in `src/Akyuu/Memory.hs`. Removed, not used: `splitBody` and `splitHeader` need the rest of the text on a miss (`MalformedHeader` holds the whole line), so `Maybe` would add code.
 - [ ] `Backward` in `WalkMode` (`src/Akyuu/Graph.hs`) is never built. Remove it, or add a test that uses it.
 - [ ] `Graph` now has `Eq`, so `observe` in `test/GraphTests.hs` can become plain `===`.
 - [ ] Run `ormolu` over the whole tree so the style is the same everywhere.

@@ -143,11 +143,6 @@ renderMemory m =
       let (e, i) = edgeHeader x
        in e <> ": " <> i
 
--- breakOn' :: Text -> Text -> Maybe (Text, Text)
--- breakOn' sep t = case T.breakOn sep t of
---   (_, rest) | T.null rest -> Nothing
---   (before, rest) -> Just (before, T.drop (T.length sep) rest)
-
 -- | Split a file at its first blank line. The result is the block of
 -- headers and the body.
 --
