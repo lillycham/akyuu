@@ -265,6 +265,18 @@ Decided:
 - Layout: time runs down. The order is newest first, but a memory is always below each memory that points at it.
   A memory and the memory that it supersedes share a lane. In a fork, the newest source keeps the lane and the other one branches.
   This is only for the drawing: the UI shows both heads and does not choose (see "Forks" below).
+- Edge routing: circuit-diagram style, with rounded corners (6 px). An edge never runs over a node box or a ref tag.
+  It uses only the gutter to the right of a column (vertical runs) and the gap between two rows (horizontal runs).
+  A clear edge inside one column is a straight line. An edge to the next row is a "Z" in one gap.
+  Any other edge leaves the source into the gap below its row, runs to a gutter, goes down, comes back in the gap above the target, and goes into its top.
+  The gutter is the one next to the target, or the next one if that one is much busier (the edges to a few old nodes would make one huge gutter).
+- Tracks are 6 px apart. A gutter is COL_GAP wide plus 6 px for each track. A row gap is 24 px, plus 6 px for each track after the first, so rows are no longer 60 px apart.
+  Runs with no common row share a track. Edges that share a gap or a gutter get their own track, ordered by the crossings that each pair would make.
+- Ports: the edges at the bottom or the top of a node are sorted by the x of the place where they go, spread along the box (at most 12 px apart, fewer when there are many, inside the box).
+  A straight edge has its port at the middle of the box on both ends, so it stays straight.
+- Column order: after the rows, the columns are ordered with barycenter sweeps and neighbour swaps, to make the edges short. Chains stay in their column.
+- Highlight: the edges of the hovered or selected node are bold, the others faint, and the boxes at the other ends get a frame. The kind styles and the filter dim stay.
+- The routing is in pure functions (`planRoutes`, `columnGeometry`, `routeEdges`, `roundedPath`), exported for the node checks.
 - Window: by default `/api/graph` shows the 200 newest heads and the nodes within 2 hops, with `truncated` and the counts.
   The page starts with the whole graph for a store with up to 1000 memories. It has "show all", a hops and a heads field, and "focus here".
   The GC drawing shows the whole graph up to 2000 nodes, and the window of the graph tab above that.
@@ -284,6 +296,9 @@ Decided:
 - [x] The GC and health views, and `GC.explain`.
 - [x] `seed --demo`. The tests use it as the fixture of the GC and health views.
 - [x] A store of 3000 memories: each endpoint answers in less than 0.12 seconds. `viz` makes a file of 4.2 MB in 0.6 seconds.
+- [x] Edge routing, port spread, tracks, column order and highlight. `test/check-routing.js` checks the routes in node
+      (axis-aligned runs, no run through a box or a tag, no shared run, ends on the box edges, time limits).
+      `test/check-page.js` runs the page in a fake DOM. `test/smoke-routing.sh` runs both on real exports.
 
 Not done:
 
@@ -291,7 +306,11 @@ Not done:
   That shows no runtime errors and no use of `innerHTML`. It does not show how the page looks.
 - `test/smoke-web.sh` is not part of `cabal test`. Run it by hand: `nix develop -c bash test/smoke-web.sh`.
 - The fingerprint does not see an `add` of an object that is already there: that only changes the file time of the object.
-- A graph with many standalone memories is tall and narrow: each one gets its own row. The layout does not reduce edge crossings.
+- A graph with many standalone memories is tall and narrow: each one gets its own row.
+- Edge crossings are fewer with the column order, but not minimal. Routed edges can cross more than the old curves did: a long edge crosses every line in the gaps and gutters that it passes.
+  Ideas: a better cost for the column order (the crossings, not the column distance), and doglegs in a gap to avoid the cycles in the track order.
+- A store with many edges to a few old memories makes wide gutters (one track per concurrent edge) and tall row gaps. Bundling edges would help.
+- The routing is not seen in a browser: the real SVG rendering, the corner shapes, the hover and the colours are not checked.
 - After the hops, the window has no cap. A memory with thousands of edges can pull them all into the view.
 - One unreadable object stops the graph view, as it stops `GC.snapshot`. The health view still shows it.
 - A memory body with `[` or `]` confuses the marks of a search snippet.
