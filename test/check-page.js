@@ -84,8 +84,24 @@ problems += checkLayout(synthetic(3000), 'synthetic 3000');
 const w = A.windowGraph(synthetic(3000), { hops: 2, limit: 50 });
 console.log('window of synthetic 3000: ' + w.shown.nodes + ' nodes, truncated ' + w.truncated);
 problems += checkLayout(w, 'window');
-const parts = A.snippetParts('a [b] c [d]');
+const O = '\u0001', C = '\u0002';
+const parts = A.snippetParts('a ' + O + 'b' + C + ' c ' + O + 'd' + C);
 if (JSON.stringify(parts) !== JSON.stringify([{ text: 'a ', mark: false }, { text: 'b', mark: true }, { text: ' c ', mark: false }, { text: 'd', mark: true }])) { console.log('snippetParts wrong'); problems++; }
+// A square bracket in a body is text, and not a mark.
+const brackets = A.snippetParts('see [x] and ' + O + 'Haskell' + C + ' [y]');
+if (JSON.stringify(brackets) !== JSON.stringify([{ text: 'see [x] and ', mark: false }, { text: 'Haskell', mark: true }, { text: ' [y]', mark: false }])) { console.log('snippetParts: a bracket is taken for a mark'); problems++; }
+if (A.snippetParts('only [x] here').some(p => p.mark)) { console.log('snippetParts: [x] is a mark'); problems++; }
+// The static search marks with the control characters, and takes a mark character of a body for text.
+const found = A.staticSearch({
+  s1: { body: 'see [x] and Haskell [y]', edges: [], created: '2026-01-01T00:00:00Z' },
+  s2: { body: 'a ' + O + 'fake' + C + ' mark and Haskell', edges: [], created: '2026-01-02T00:00:00Z' },
+}, 'haskell', 10);
+const snips = Object.fromEntries(found.matches.map(m => [m.id, m.snippet]));
+if (snips.s1 !== 'see [x] and ' + O + 'Haskell' + C + ' [y]') { console.log('staticSearch snippet of s1 wrong: ' + JSON.stringify(snips.s1)); problems++; }
+if (snips.s2 !== 'a �fake� mark and ' + O + 'Haskell' + C) { console.log('staticSearch snippet of s2 wrong: ' + JSON.stringify(snips.s2)); problems++; }
+// Two words, one inside the other: each position is marked once.
+const two = A.staticSearch({ s: { body: 'ab abc', edges: [], created: '2026-01-01T00:00:00Z' } }, 'ab abc', 10);
+if (two.matches[0].snippet !== O + 'ab' + C + ' ' + O + 'abc' + C) { console.log('staticSearch two words wrong: ' + JSON.stringify(two.matches[0].snippet)); problems++; }
 
 // ---- the export ------------------------------------------------------------
 const vizPath = process.argv[3];

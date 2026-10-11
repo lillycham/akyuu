@@ -28,6 +28,8 @@
 -- * A memory without edges has a @memories@ row and no @edges@ rows. The
 --   graph needs the row, to keep the memory as a node.
 -- * @bodies.rowid@ is @memories.rowid@. The table holds a copy of the body.
+--   The copy has U+FFFD in place of each @\\x01@ and @\\x02@, because 'search'
+--   uses these two characters as the marks of a snippet (see 'snippetOpen').
 --
 -- The rules of the cache:
 --
@@ -70,6 +72,9 @@ module Akyuu.Cache
     firstLine,
     Hit (..),
     search,
+    snippetOpen,
+    snippetClose,
+    indexedBody,
     ftsQuery,
   )
 where
@@ -138,7 +143,7 @@ data CacheError
 -- this number whenever a table changes. The next 'openCache' then deletes
 -- the old file and starts again.
 schemaVersion :: Int
-schemaVersion = 1
+schemaVersion = 2
 
 -- | The path of the cache file for a store: @\<root\>/cache.sqlite@.
 -- The root is the directory that 'Akyuu.Store.openStore' gets.
@@ -298,7 +303,14 @@ insertMemory c i m = do
         c
         "INSERT INTO edges (src, kind, dst) VALUES (?,?,?)"
         (render i, edgeToHeader (kind e), render (target e))
-    execute c "INSERT INTO bodies (rowid, body) VALUES (?,?)" (rowid, memBody m)
+    execute c "INSERT INTO bodies (rowid, body) VALUES (?,?)" (rowid, indexedBody (memBody m))
+
+-- | The text that goes in the full-text index: the body, with U+FFFD in place
+-- of the two characters that mark a snippet. Then a mark in a snippet always
+-- comes from 'search', and never from the body. The index is only for the
+-- search, so the loss is small: both characters are control characters.
+indexedBody :: Text -> Text
+indexedBody = T.map (\c -> if c == snippetOpen || c == snippetClose then '\xFFFD' else c)
 
 -- | Delete the three kinds of rows of a memory: its body, the edges that start
 -- at it, and its @memories@ row.
@@ -530,10 +542,21 @@ data Hit = Hit
   { -- | The memory.
     hitId :: Id,
     -- | A short piece of the body around the match. Each matching word is
-    -- inside square brackets, for example @Lilly prefers [Haskell] for the@.
+    -- between 'snippetOpen' and 'snippetClose'. The body does not hold these
+    -- two characters (the index has U+FFFD in their place), so no text of the
+    -- body can look like a mark. Show a snippet with 'Akyuu.Render.snippetText'.
     hitSnippet :: Text
   }
   deriving (Eq, Show)
+
+-- | The character before a matching word in a snippet: @\\x01@. It cannot be
+-- in the text of a snippet, see 'indexedBody'.
+snippetOpen :: Char
+snippetOpen = '\x01'
+
+-- | The character after a matching word in a snippet: @\\x02@.
+snippetClose :: Char
+snippetClose = '\x02'
 
 -- | Search the bodies of the memories.
 --
@@ -553,7 +576,7 @@ search (Cache c) q n
   where
     fq = ftsQuery q
     theQuery =
-      "SELECT memories.id, snippet(bodies, 0, '[', ']', '...', 10) \
+      "SELECT memories.id, snippet(bodies, 0, char(1), char(2), '...', 10) \
       \FROM bodies JOIN memories ON memories.rowid = bodies.rowid \
       \WHERE bodies MATCH ? \
       \ORDER BY bm25(bodies) \

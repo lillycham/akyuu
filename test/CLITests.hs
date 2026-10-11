@@ -262,6 +262,12 @@ runCases =
           c' <- right =<< resolveCommand env (cliCommand c)
           r <- runCommand env c'
           r @?= Left (StoreFailed (NotFound (nid 1)))
+    , testCase "search marks a match with brackets, and a bracket of the body has a backslash" $
+        withOpsEnv $ \_ env -> do
+          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "see [x] and Haskell [y]")))
+          let i = T.strip (decodeUtf8 (outBytes o))
+          s <- run env ["search", "haskell"]
+          T.lines (decodeUtf8 (outBytes s)) @?= [i <> "  see \\[x\\] and [Haskell] \\[y\\]"]
     , testCase "withNewline adds a line feed only when it is missing" $ do
         (withNewline "", withNewline "a", withNewline "a\n") @?= ("", "a\n", "a\n")
     ]

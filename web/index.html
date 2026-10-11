@@ -421,9 +421,15 @@ const Akyuu = (function () {
              rows: order.length ? row + 1 : 0, chains: chains };
   }
 
+  // The marks of a snippet are the control characters U+0001 and U+0002, the
+  // same as in the text index of the server (snippetOpen and snippetClose in
+  // Akyuu.Cache). A square bracket in a body is then plain text, not a mark.
+  const MARK_OPEN = '\u0001', MARK_CLOSE = '\u0002';
+
   // Search the bodies of the static export: every word must be in the body,
-  // case does not matter. The snippet marks the words with [ and ], like the
-  // text index of the server. Current memories come first.
+  // case does not matter. The snippet marks the words with MARK_OPEN and
+  // MARK_CLOSE, like the text index of the server. A mark character in a body
+  // becomes U+FFFD, as in the index. Current memories come first.
   function staticSearch(memories, q, limit) {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     const hits = [];
@@ -431,27 +437,28 @@ const Akyuu = (function () {
     for (const id of Object.keys(memories)) {
       const m = memories[id];
       if (!m || typeof m.body !== 'string') continue;
-      const low = m.body.toLowerCase();
+      const body = m.body.replace(/[\u0001\u0002]/g, '\uFFFD');
+      const low = body.toLowerCase();
       if (!words.every(w => low.indexOf(w) >= 0)) continue;
       const first = Math.min.apply(null, words.map(w => low.indexOf(w)));
-      const from = Math.max(0, first - 40), to = Math.min(m.body.length, first + 80);
-      let snip = m.body.slice(from, to);
-      for (const w of words) {
-        const re = new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-        snip = snip.replace(re, s => '[' + s + ']');
-      }
+      const from = Math.max(0, first - 40), to = Math.min(body.length, first + 80);
+      // One pass over all the words, the longest first, so that a word inside
+      // another word, or a word like "b", cannot mark the marks again.
+      const re = new RegExp(words.slice().sort((a, b) => b.length - a.length)
+        .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi');
+      const snip = body.slice(from, to).replace(re, s => MARK_OPEN + s + MARK_CLOSE);
       const supersededBy = (m.edges || []).filter(e => e.dir === 'in' && e.kind === 'supersedes').map(e => e.id);
-      hits.push({ id: id, snippet: (from > 0 ? '...' : '') + snip.replace(/\s+/g, ' ') + (to < m.body.length ? '...' : ''),
+      hits.push({ id: id, snippet: (from > 0 ? '...' : '') + snip.replace(/\s+/g, ' ') + (to < body.length ? '...' : ''),
                   supersededBy: supersededBy, created: m.created });
     }
     hits.sort((a, b) => (a.supersededBy.length > 0) - (b.supersededBy.length > 0) || newestFirst(a, b));
     return { query: q, matches: hits.slice(0, limit).map(h => ({ id: h.id, snippet: h.snippet, supersededBy: h.supersededBy })), context: [] };
   }
 
-  // Split a snippet at [ and ] into plain and marked parts.
+  // Split a snippet at the marks into plain and marked parts.
   function snippetParts(s) {
     const parts = [];
-    const re = /\[([^\]]*)\]/g;
+    const re = /\u0001([^\u0002]*)\u0002/g;
     let last = 0, m;
     while ((m = re.exec(s)) !== null) {
       if (m.index > last) parts.push({ text: s.slice(last, m.index), mark: false });

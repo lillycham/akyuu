@@ -57,6 +57,10 @@ Decided:
 - Tables: `memories`, `edges` (no foreign key on `dst`), and an FTS5 table that keeps a copy of each body.
 - GC calls `sync` after a sweep. It does not call `forget` itself.
 - `ftsQuery` quotes each word, so no input is an FTS5 syntax error. A NUL counts as white space.
+- A snippet marks a match with U+0001 and U+0002 (`snippetOpen`, `snippetClose`), and not with brackets, so a bracket in a body is never a mark.
+  The index holds U+FFFD in place of these two characters of a body, so a mark in a snippet always comes from `search`. `schemaVersion` is 2, so an old cache is made again.
+  `Render.snippetText` makes the text of the CLI and the MCP server: `[word]` for a match, and `\[` and `\]` for a bracket of the body.
+  The JSON of `/api/search` and the page keep the control characters: `snippetParts` of the page splits at them.
 - Errors: `CacheSQL`, `CacheIO`, `CacheLocked`, `CacheStore`, `CorruptCache`. `Akyuu.Fs.tryAs` catches the SQLite exception.
 - `openCache` runs under an exclusive `flock` on `cache.sqlite.lock`. It tries without waiting and retries for about 5 seconds, like the lock of Refs.
 - `reindex` reads the whole store first. Then it clears the tables and writes the new rows in one transaction.
@@ -68,7 +72,7 @@ To do, in this order:
 - [x] `index`, `forget`, `cachedIds`. Each one is one transaction.
 - [x] `loadGraph`: one `singleton` for each `memories` row, joined with `<>`.
 - [x] `sync`: read every new object first, then change the cache in one transaction. `reindex` is "empty it, then `sync`".
-- [x] `search`: `bm25` order, `snippet` with `[` and `]`, and a limit.
+- [x] `search`: `bm25` order, `snippet` with the marks U+0001 and U+0002 (see "Decided"), and a limit.
 - [x] Check that SQLite is built thread-safe, before several agents share one store. Done: a test checks that `PRAGMA compile_options` has `THREADSAFE=1` or `THREADSAFE=2`.
 
 ### `Akyuu.GC`
@@ -319,7 +323,6 @@ Not done:
 - The routing is not seen in a browser: the real SVG rendering, the corner shapes, the hover and the colours are not checked.
 - After the hops, the window has no cap. A memory with thousands of edges can pull them all into the view.
 - One unreadable object stops the graph view, as it stops `GC.snapshot`. The health view still shows it.
-- A memory body with `[` or `]` confuses the marks of a search snippet.
 - `explain` reads the whole snapshot for each request. This is fast enough at 3000 memories.
 
 ## Open decisions

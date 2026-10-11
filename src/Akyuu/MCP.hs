@@ -147,7 +147,7 @@ toolList =
       ),
     tool
       "search"
-      "Search the bodies of the memories for words. Each hit is a line with its id and a snippet, best first. Square brackets mark the matching words. 'superseded by ID' under a hit means that a newer memory replaces it: read the newer one. After 'context:' come the memories near the hits in the graph."
+      "Search the bodies of the memories for words. Each hit is a line with its id and a snippet, best first. Square brackets mark the matching words. A square bracket with a backslash before it is part of the text. 'superseded by ID' under a hit means that a newer memory replaces it: read the newer one. After 'context:' come the memories near the hits in the graph."
       ( objectSchema
           [ ("query", stringSchema "The words to find. A memory matches if it has all of them."),
             ("limit", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "default" .= searchLimit defaultSearchOptions, "description" .= ("The most hits to return." :: Text)]),

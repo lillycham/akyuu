@@ -456,6 +456,13 @@ storeCases =
           [at ["id"] m | m <- items (at ["matches"] v)] @?= [Just (String (render v2)), Just (String (render v1))]
           [strings (at ["supersededBy"] m) | m <- items (at ["matches"] v)] @?= [[], [render v2]]
           (render about `elem` strings (at ["context"] v)) @?= True
+    , testCase "search gives a snippet with marks that a bracket of the body cannot copy" $
+        withOpsEnv $ \_ env -> do
+          _ <- right =<< addMemory env (NewMemory "fact" "claude" Set.empty "see [x] and Haskell")
+          _ <- right =<< Cache.sync (envCache env) (envStore env)
+          (s, v) <- call env ["api", "search"] [("q", Just "haskell")]
+          s @?= 200
+          [at ["snippet"] m | m <- items (at ["matches"] v)] @?= [Just (String "see [x] and \SOHHaskell\STX")]
     , testCase "the plan is empty for a young store, and lists the young nodes" $
         withOpsEnv $ \_ env -> do
           _ <- smallStore env

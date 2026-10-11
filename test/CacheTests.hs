@@ -530,7 +530,7 @@ summaryTests =
               _ <- right =<< sync c s
               got <- right =<< summaries c
               let want =
-                    [ Summary i (memKind m) (memAgent m) (memCreated m) (firstLine (memBody m))
+                    [ Summary i (memKind m) (memAgent m) (memCreated m) (firstLine (indexedBody (memBody m)))
                     | (i, m) <- Map.toAscList (Map.fromList (zip is ms))
                     ]
               pure (got === want)
@@ -592,7 +592,23 @@ searchTests =
         withEnv $ \s c _ -> do
           _ <- addIndexed s c (mem "Lilly prefers Haskell for the memory store")
           [h] <- right =<< search c "haskell" 10
-          assertBool (T.unpack (hitSnippet h)) ("[Haskell]" `isInfixOf` T.unpack (hitSnippet h))
+          assertBool (T.unpack (hitSnippet h)) ("\SOHHaskell\STX" `isInfixOf` T.unpack (hitSnippet h))
+    , testCase "a bracket in the body is text, and not a mark" $
+        withEnv $ \s c _ -> do
+          _ <- addIndexed s c (mem "see [x] and [the Haskell] list")
+          [h] <- right =<< search c "haskell" 10
+          let t = hitSnippet h
+          assertBool (T.unpack t) ("[x]" `T.isInfixOf` t && "[the \SOHHaskell\STX]" `T.isInfixOf` t)
+          T.count (T.singleton snippetOpen) t @?= 1
+          T.count (T.singleton snippetClose) t @?= 1
+    , testCase "the marks in the body do not look like marks in the snippet" $
+        withEnv $ \s c _ -> do
+          _ <- addIndexed s c (mem "a \SOHfake\STX mark and a Haskell word")
+          [h] <- right =<< search c "haskell" 10
+          let t = hitSnippet h
+          T.count (T.singleton snippetOpen) t @?= 1
+          T.count (T.singleton snippetClose) t @?= 1
+          assertBool (T.unpack t) ("\xFFFD\&fake\xFFFD" `T.isInfixOf` t)
     , testCase "does not find a memory that was forgotten" $
         withEnv $ \s c _ -> do
           i <- addIndexed s c (mem "short lived")

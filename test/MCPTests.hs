@@ -202,6 +202,11 @@ runToolCases =
           T.isSuffixOf "\n\nLilly prefers Haskell" g @?= True
           ToolResult s False <- runTool env (CallSearch defaultSearchOptions "haskell")
           T.isPrefixOf i s @?= True
+    , testCase "search text has the same brackets as the CLI" $
+        withOpsEnv $ \_ env -> do
+          ToolResult i False <- runTool env (CallAdd (NewMemory "fact" "claude" Set.empty "see [x] and Haskell"))
+          ToolResult s False <- runTool env (CallSearch defaultSearchOptions "haskell")
+          s @?= i <> "  see \\[x\\] and [Haskell]"
     , testCase "a failed operation is a tool error with the CLI text" $
         withOpsEnv $ \_ env -> do
           r <- runTool env (CallGet (Right (nid 7)))

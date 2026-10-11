@@ -14,6 +14,7 @@ module Akyuu.Render
     unpinLines,
     pinListLines,
     searchLines,
+    snippetText,
     neighbourLines,
     planLines,
     runLines,
@@ -24,7 +25,7 @@ module Akyuu.Render
   )
 where
 
-import Akyuu.Cache (SyncReport (..))
+import Akyuu.Cache (SyncReport (..), snippetClose, snippetOpen)
 import Akyuu.Error (describe, describeParse)
 import Akyuu.Error qualified as Error
 import Akyuu.GC (RunReport (..), SweepReport (..))
@@ -72,12 +73,29 @@ searchLines :: SearchResult -> [Text]
 searchLines r = concatMap matchLines (matches r) <> contextLines
   where
     matchLines m =
-      (render (matchId m) <> "  " <> oneLine (matchSnippet m))
+      (render (matchId m) <> "  " <> oneLine (snippetText (matchSnippet m)))
         : ["  superseded by " <> render i | i <- Set.toAscList (matchSupersededBy m)]
     contextLines
       | Set.null (context r) = []
       | otherwise = "context:" : map render (Set.toAscList (context r))
     oneLine = T.unwords . T.words
+
+-- | A snippet as text for a person: each match is in square brackets, for
+-- example @Lilly prefers [Haskell] for the@.
+--
+-- A snippet from 'Akyuu.Cache.search' has the marks 'snippetOpen' and
+-- 'snippetClose'. A bracket in the text of the body gets a backslash, so a
+-- body with @[x]@ does not look like a match. The text has no other change.
+-- This function is pure.
+snippetText :: Text -> Text
+snippetText = T.concatMap f
+  where
+    f c
+      | c == snippetOpen = "["
+      | c == snippetClose = "]"
+      | c == '[' = "\\["
+      | c == ']' = "\\]"
+      | otherwise = T.singleton c
 
 -- | The edges of a memory, one on each line: the direction, the kind and
 -- the other 'Id', for example @out about sha256-…@.
