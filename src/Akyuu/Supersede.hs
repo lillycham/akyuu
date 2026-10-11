@@ -32,10 +32,10 @@ module Akyuu.Supersede
   )
 where
 
-import Akyuu.Graph (Edge (..), EdgeType (Supersedes))
+import Akyuu.Graph (Edge (Edge), EdgeType (Supersedes))
 import Akyuu.Id (Id)
-import Akyuu.Memory (Memory (..))
-import Akyuu.Refs (Expected (MustBe), Name, Ref (..), RefError, Refs, getRef, setRef)
+import Akyuu.Memory (Memory (memEdges))
+import Akyuu.Refs (Expected (MustBe), Name, Ref (current), RefError, Refs, getRef, setRef)
 import Akyuu.Store (Store, StoreError)
 import Akyuu.Store qualified as Store
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, withExceptT)

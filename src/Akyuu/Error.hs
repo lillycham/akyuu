@@ -16,18 +16,18 @@ module Akyuu.Error
   )
 where
 
-import Akyuu.Cache (CacheError (..))
-import Akyuu.GC (GCError (..), Tombstone (..), TombstoneParseError (..))
-import Akyuu.Id (Id, IdParseError (..), render)
-import Akyuu.Memory (MemoryParseError (..))
-import Akyuu.Refs (Name, NameError (..), RefError (..), RefParseError (..), nameText)
-import Akyuu.Store (StoreError (..))
-import Akyuu.Supersede (SupersedeError (..))
+import Akyuu.Cache (CacheError (CacheIO, CacheLocked, CacheSQL, CacheStore, CorruptCache))
+import Akyuu.GC (GCError (CorruptTombstone, GCCache, GCIO, GCLocked, GCRefs, GCStore), Tombstone (prunedAt), TombstoneParseError (BadTombstone, TombstoneNotUtf8))
+import Akyuu.Id (Id, IdParseError (BadHex, BadLength, BadPrefix), render)
+import Akyuu.Memory (MemoryParseError (BadEncoding, BadHeaderValue, BadLink, DuplicateHeader, MalformedHeader, MissingBlankLine, MissingHeader, UnknownHeader))
+import Akyuu.Refs (Name, NameError (BadSegment, EmptyName), RefError (CorruptRef, Locked, NameConflict, NoSuchRef, RefIO, Stale), RefParseError (BadRefLine, EmptyRef, NotUtf8), nameText)
+import Akyuu.Store (StoreError (BadMemory, Corrupt, NotFound, StoreIO))
+import Akyuu.Supersede (SupersedeError (SupersedeRef, SupersedeStore))
 import Control.Exception (IOException, displayException)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, formatTime)
-import Database.SQLite.Simple (SQLError (..))
+import Database.SQLite.Simple (SQLError (sqlErrorDetails))
 
 -- | Why a command failed.
 data AkyuuError

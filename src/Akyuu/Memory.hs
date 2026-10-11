@@ -39,7 +39,7 @@ module Akyuu.Memory
   )
 where
 
-import Akyuu.Graph (Edge (..), EdgeType (..), Graph)
+import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, IdParseError, hashBytes)
 import Akyuu.Id qualified as Id

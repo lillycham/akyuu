@@ -80,10 +80,10 @@ module Akyuu.Cache
 where
 
 import Akyuu.Fs (ignoreIO, tryAs)
-import Akyuu.Graph (Edge (..), EdgeType, Graph)
+import Akyuu.Graph (Edge (Edge, kind, target), EdgeType, Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, parse, render)
-import Akyuu.Memory (Memory (..), edgeToHeader)
+import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memEdges, memKind), edgeToHeader)
 import Akyuu.Store (Store, StoreError (NotFound))
 import Akyuu.Store qualified as Store
 import Control.Concurrent (threadDelay)

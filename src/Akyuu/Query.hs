@@ -28,7 +28,7 @@ module Akyuu.Query
   )
 where
 
-import Akyuu.Cache (Cache, CacheError, Hit (..))
+import Akyuu.Cache (Cache, CacheError, Hit (hitId, hitSnippet))
 import Akyuu.Cache qualified as Cache
 import Akyuu.Graph (Dir, EdgeType (Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
