@@ -15,7 +15,7 @@ import Akyuu.Query (SearchOptions (searchHops, searchLimit), defaultSearchOption
 import Akyuu.Refs (Expected (MustBeAbsent), mkName)
 import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Store qualified as Store
-import Akyuu.Web.Api (Endpoint (ExplainEndpoint, GraphEndpoint, MemoryEndpoint, PageEndpoint, PlanEndpoint, RefsEndpoint, SearchEndpoint, StatsEndpoint, TrashEndpoint, VerifyEndpoint), RouteError (BadParam), WebRequest (WebRequest, reqQuery), WebResponse (resBody, resHeaders, resStatus), parseEndpoint, route, runEndpoint)
+import Akyuu.Web.Api (Endpoint (CheckEndpoint, ExplainEndpoint, GraphEndpoint, MemoryEndpoint, PageEndpoint, PlanEndpoint, RefsEndpoint, SearchEndpoint, StatsEndpoint, TrashEndpoint, VerifyEndpoint), RouteError (BadParam), WebRequest (WebRequest, reqQuery), WebResponse (resBody, resHeaders, resStatus), parseEndpoint, route, runEndpoint)
 import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), GraphEdge (geDst, geSrc), GraphNode (gnId, gnInStore, gnStatus), GraphView (gvEdges, gvNodes, gvSeeds, gvTotalEdges, gvTotalNodes, gvTruncated), NodeStatus (HeadNode, MissingTarget, PrunedTarget, SupersededNode), Window (Window, winAll, winFocus, winHops, winLimit), defaultWindow, graphView, graphViewJSON, selectWindow)
 import Akyuu.Web.Page (dataMarker, indexPage, scriptSafeJSON, vizPage)
 import Akyuu.Web.Server (application, hostAllowed, toWebRequest)
@@ -174,6 +174,7 @@ routeCases =
         endpointOf ["api", "gc", "plan"] [] @?= Right PlanEndpoint
         endpointOf ["api", "trash"] [] @?= Right TrashEndpoint
         endpointOf ["api", "verify"] [] @?= Right VerifyEndpoint
+        endpointOf ["api", "check"] [] @?= Right CheckEndpoint
         endpointOf ["index.html"] [] @?= Right PageEndpoint,
       testCase "the graph has the default window" $
         endpointOf ["api", "graph"] [] @?= Right (GraphEndpoint defaultWindow),
@@ -502,6 +503,16 @@ storeCases =
           at ["drift", "inSync"] v @?= Just (Bool False)
           strings (at ["drift", "storeOnly"] v) @?= [render fresh]
           strings (at ["drift", "cacheOnly"] v) @?= [],
+      testCase "check lists a fork and names the refs" $
+        withOpsEnv $ \_ env -> do
+          base <- right =<< Store.add (envStore env) (Memory "fact" t0 "claude" Set.empty "the old text of a note")
+          let sup = Set.singleton (Edge Supersedes base)
+          _ <- right =<< Store.add (envStore env) (Memory "fact" t0 "claude" sup "first new text")
+          _ <- right =<< Store.add (envStore env) (Memory "fact" t0 "claude" sup "second new text")
+          (s, v) <- call env ["api", "check"] []
+          s @?= 200
+          [at ["kind"] x | x <- items (at ["findings"] v), at ["severity"] x == Just "problem"] @?= [Just "fork"]
+          at ["refs"] v @?= Just (object []),
       testCase "a memory that the cache does not have is in the graph, marked" $
         withOpsEnv $ \_ env -> do
           _ <- smallStore env
@@ -526,6 +537,7 @@ storeCases =
                   (["api", "gc", "explain", render v1], []),
                   (["api", "trash"], []),
                   (["api", "verify"], []),
+                  (["api", "check"], []),
                   ([], [])
                 ]
           forM_ paths $ \(p, q) -> do

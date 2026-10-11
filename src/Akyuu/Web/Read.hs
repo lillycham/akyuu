@@ -26,12 +26,14 @@ module Akyuu.Web.Read
     readExplain,
     readTrash,
     readVerify,
+    readCheck,
     readBundle,
   )
 where
 
 import Akyuu.Cache (Summary (Summary, sumId))
 import Akyuu.Cache qualified as Cache
+import Akyuu.Check (defaultCheckOptions)
 import Akyuu.Error (AkyuuError (BadInput, CacheFailed, GCFailed, RefFailed, StoreFailed), describe)
 import Akyuu.GC (Observed (Observed), Policy (keepGenerations), defaultPolicy)
 import Akyuu.GC qualified as GC
@@ -40,11 +42,12 @@ import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind))
-import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, getMemory, missing, resolveId, verifyStore)
+import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, checkStore, getMemory, listRefValues, missing, resolveId, verifyStore)
 import Akyuu.Query (SearchOptions)
 import Akyuu.Query qualified as Query
-import Akyuu.Refs (RefError)
+import Akyuu.Refs (RefError, nameText)
 import Akyuu.Refs qualified as Refs
+import Akyuu.Render (findingJSON)
 import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Store qualified as Store
 import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), NodeStatus (HeadNode, SupersededNode), RefEntry (RefEntry), Stats (Stats, statCached, statMemories, statNewest, statPins, statRefs, statTombstones, statTrash), Window (winAll, winFocus), defaultWindow, graphView, graphViewJSON, memoryJSON, planJSON, refHolds, refsJSON, searchJSON, statsJSON, timeJSON, trashJSON, verifyJSON, whyJSON)
@@ -289,6 +292,16 @@ readVerify env = runExceptT $ do
   r <- ExceptT (verifyStore env)
   pure (verifyJSON r cached stored)
 
+-- | The findings of 'Akyuu.Check.check' with the default options, and the
+-- names of the refs that point at each memory, so the page can show them.
+-- It writes nothing and does not sync the cache.
+readCheck :: Env -> IO (Either AkyuuError Value)
+readCheck env = runExceptT $ do
+  fs <- ExceptT (checkStore env defaultCheckOptions)
+  named <- ExceptT (listRefValues env)
+  let names = Map.fromListWith (flip (<>)) [(Id.render i, [nameText n]) | (n, i) <- named]
+  pure (object ["findings" .= map findingJSON fs, "refs" .= names])
+
 -- The static export ----------------------------------------------------------
 
 -- | Everything that the page shows, in one value, for @akyuu viz@.
@@ -308,6 +321,7 @@ readBundle env = do
   plan <- part (readPlan env)
   trash <- part (readTrash env)
   verify <- part (readVerify env)
+  checkV <- part (readCheck env)
   mems <- either (\e -> (errorValue e, errorValue e)) id <$> memories t
   pure $
     object
@@ -318,6 +332,7 @@ readBundle env = do
         "plan" .= plan,
         "trash" .= trash,
         "verify" .= verify,
+        "check" .= checkV,
         "memories" .= fst mems,
         "explain" .= snd mems
       ]

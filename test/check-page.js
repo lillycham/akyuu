@@ -111,7 +111,7 @@ if (vizPath) {
   const raw = dataOf(vhtml);
   if (!raw) throw new Error('no data in the export');
   viz = JSON.parse(raw);
-  for (const k of ['stats', 'graph', 'refs', 'plan', 'trash', 'verify', 'memories', 'explain']) {
+  for (const k of ['stats', 'graph', 'refs', 'plan', 'trash', 'verify', 'check', 'memories', 'explain']) {
     if (viz[k] && viz[k].error) { console.log('export part ' + k + ' has an error: ' + viz[k].error); problems++; }
   }
   problems += checkLayout(viz.graph, 'export graph');
@@ -225,6 +225,8 @@ async function runPage(html, label) {
   console.log('  explain: ' + explainText);
   console.log('  search: ' + searchText);
   console.log('  health: ' + dom.byId['health'].textContent.slice(0, 160).replace(/\s+/g, ' '));
+  const healthText = dom.byId['health'].textContent;
+  if (!healthText.includes('Check: problems') || !healthText.includes('Check: suggestions')) { console.log('  health has no check report'); errors.push('the health view lacks the check report'); }
   console.log('  gc: ' + dom.byId['gc-summary'].textContent.replace(/\s+/g, ' '));
   console.log('  errors: ' + errors.length + (errors.length ? ' ' + errors.map(e => e && e.stack || e).join('\n') : ''));
   return errors.length;

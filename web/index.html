@@ -891,6 +891,7 @@ const Akyuu = (function () {
       explain: (id) => get('/api/gc/explain/' + encodeURIComponent(id)),
       trash: () => get('/api/trash'),
       verify: () => get('/api/verify'),
+      check: () => get('/api/check'),
     };
   }
 
@@ -912,6 +913,7 @@ const Akyuu = (function () {
       explain: async (id) => found(part(data.explain)[id], 'The GC explanation of this id'),
       trash: async () => part(data.trash),
       verify: async () => part(data.verify),
+      check: async () => found(part(data.check), 'The check report'),
     };
   }
 
@@ -1441,6 +1443,25 @@ const Akyuu = (function () {
     box.appendChild(list('Pruned edge targets (this is normal)', v.pruned, ids, 'None.', false));
     box.appendChild(list('Bad refs', v.badRefs, (x) => [x.name + ': ' + x.why], 'None.', true));
     box.appendChild(list('Refs to a missing object', v.refsToMissing, (x) => [x.name + ' → ', idLink(x.id)], 'None.', true));
+    await loadCheck(box, list);
+  }
+
+  // The findings of the check: stale links, forks, duplicates and the rest.
+  async function loadCheck(box, list) {
+    let c;
+    try { c = await state.src.check(); } catch (e) { box.appendChild(el('div', { class: 'card' }, [el('h3', { text: 'Check' }), el('p', { class: 'muted', text: e.message })])); return; }
+    const names = c.refs || {};
+    const withName = (id) => [idLink(id), names[id] ? el('span', { class: 'muted', text: ' ' + names[id].join(', ') }) : ''];
+    const groups = [['problem', 'Check: problems', true], ['suggestion', 'Check: suggestions', false], ['info', 'Check: information', false]];
+    for (const [sev, title, bad] of groups) {
+      const fs = c.findings.filter(f => f.severity === sev);
+      box.appendChild(list(title, fs, (f) => {
+        const out = [el('span', { class: 'pill', text: f.kind }), ' ' + f.why, el('br', {})];
+        f.ids.forEach((id, n) => { if (n) out.push(' '); out.push(...withName(id)); });
+        if (f.related.length) { out.push(el('br', {}), 'read: '); f.related.forEach((id, n) => { if (n) out.push(' '); out.push(...withName(id)); }); }
+        return out;
+      }, 'None.', bad));
+    }
   }
 
   // ---- tabs, polling, start ------------------------------------------------------------

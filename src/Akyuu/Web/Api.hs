@@ -50,7 +50,7 @@ import Akyuu.Query (SearchOptions (searchHops, searchLimit), defaultSearchOption
 import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Web.Model (Window (Window, winAll, winFocus, winHops, winLimit), defaultWindow, statsJSON)
 import Akyuu.Web.Page (indexPage)
-import Akyuu.Web.Read (readExplain, readGraph, readMemory, readPlan, readRefs, readSearch, readStats, readTrash, readVerify)
+import Akyuu.Web.Read (readCheck, readExplain, readGraph, readMemory, readPlan, readRefs, readSearch, readStats, readTrash, readVerify)
 import Data.Aeson (Value, object, (.=))
 import Data.Aeson qualified as A
 import Data.Bifunctor (first)
@@ -100,6 +100,7 @@ data Endpoint
   | ExplainEndpoint Id
   | TrashEndpoint
   | VerifyEndpoint
+  | CheckEndpoint
   deriving (Eq, Show)
 
 -- | Why a request has no endpoint.
@@ -132,6 +133,7 @@ parseEndpoint req
       ["api", "gc", "explain", t] -> ExplainEndpoint <$> wholeId t
       ["api", "trash"] -> Right TrashEndpoint
       ["api", "verify"] -> Right VerifyEndpoint
+      ["api", "check"] -> Right CheckEndpoint
       _ -> Left NoRoute
   where
     path = case reverse (reqPath req) of
@@ -242,3 +244,4 @@ runEndpoint env e = case e of
   ExplainEndpoint i -> readExplain env i
   TrashEndpoint -> readTrash env
   VerifyEndpoint -> readVerify env
+  CheckEndpoint -> readCheck env
