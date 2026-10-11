@@ -50,6 +50,7 @@ library
                    , Akyuu.Store
                    , Akyuu.Refs
                    , Akyuu.Cache
+                   , Akyuu.Amend
                    , Akyuu.Check
                    , Akyuu.Compare
                    , Akyuu.Episode
@@ -89,6 +90,7 @@ test-suite akyuu-test
                     , CLITests
                     , MCPTests
                     , QueryTests
+                    , AmendTests
                     , CheckTests
                     , CompareTests
                     , ReviewTests

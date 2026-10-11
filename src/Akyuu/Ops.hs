@@ -25,6 +25,7 @@ module Akyuu.Ops
     getMemory,
     missing,
     supersedeMemory,
+    amendMemory,
     readRef,
     setRefTo,
     listRefNames,
@@ -63,6 +64,7 @@ module Akyuu.Ops
   )
 where
 
+import Akyuu.Amend qualified as Amend
 import Akyuu.Cache (Cache, SyncReport, closeCache, openCache)
 import Akyuu.Cache qualified as Cache
 import Akyuu.Check (CheckOptions, Finding)
@@ -74,11 +76,11 @@ import Akyuu.Episode qualified as Episode
 import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), fromSupersede)
 import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
-import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom), Graph)
+import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom, Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (memBody, memEdges), MemoryError (InvalidField), MemoryParseError, mkMemory, validField)
+import Akyuu.Memory (Memory (memAgent, memBody, memEdges, memKind), MemoryError (InvalidField), MemoryParseError, mkMemory, validField)
 import Akyuu.Query (Neighbour, SearchOptions, SearchResult)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (Expected, Name, Ref (current), RefError, Refs, openRefs)
@@ -249,6 +251,27 @@ supersedeMemory env n old new = runExceptT $ do
   withExceptT fromSupersede . ExceptT $ case old of
     Just o -> supersedeFrom (envStore env) (envRefs env) n o m
     Nothing -> supersede (envStore env) (envRefs env) n m
+
+-- | Change the memory of a ref by edits to its body ('Akyuu.Amend'), and
+-- return the new 'Id'. The kind, the agent and the edges of the old memory
+-- stay, except the edges of kind supersedes, and the new memory replaces the
+-- old one. With an agent, the new memory has that agent.
+--
+-- With @Just old@, the ref must point to @old@ now. With 'Nothing', the
+-- function reads the ref and checks that it has not moved when it writes.
+amendMemory :: Env -> Name -> Maybe Id -> Maybe Text -> [Amend.Edit] -> IO (Either AkyuuError Id)
+amendMemory env n expected agent es = runExceptT $ do
+  cur <- maybe (current <$> ExceptT (readRef env n)) pure expected
+  m <- ExceptT (getMemory env cur)
+  body <- either (throwE . BadInput . Amend.describeAmend) pure (Amend.applyEdits es (memBody m))
+  let new =
+        NewMemory
+          { newKind = memKind m,
+            newAgent = fromMaybe (memAgent m) agent,
+            newEdges = Set.filter (\(Edge t _) -> t /= Supersedes) (memEdges m),
+            newBody = body
+          }
+  ExceptT (supersedeMemory env n (Just cur) new)
 
 -- | Read a ref.
 readRef :: Env -> Name -> IO (Either AkyuuError Ref)

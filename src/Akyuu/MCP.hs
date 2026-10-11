@@ -40,12 +40,13 @@ module Akyuu.MCP
   )
 where
 
+import Akyuu.Amend qualified as Amend
 import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind, Severity, defaultCheckOptions, filterFindings, kindName, severityName)
 import Akyuu.Error (AkyuuError (BadId, BadName), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, parseIdSpec, readLog, readRef, resolveId, reviewPair, searchMemories, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, parseIdSpec, readLog, readRef, resolveId, reviewPair, searchMemories, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName)
 import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLines)
@@ -84,6 +85,9 @@ data ToolCall
     CallCompare Id Id
   | -- | Two memories, the agent that judged them, and a note.
     CallReview Id Id Text Text
+  | -- | Change the text of a ref's memory: the ref, the id that it must
+    -- point to now, the agent, and the edits.
+    CallAmend Name (Maybe Id) (Maybe Text) [Amend.Edit]
   | -- | The ref, and 'True' to show the older values too.
     CallRefGet Name Bool
   | CallRefSet Name Expected Id
@@ -166,6 +170,18 @@ toolList =
       ( objectSchema
           (("ref", refSchema) : ("expected", idSchema "The id that the ref must point to now.") : memoryProps)
           ["ref", "kind", "agent", "body"]
+      ),
+    tool
+      "amend"
+      "Change a little of the memory of a ref, without writing the whole text again. Each replacement gives text that occurs once in the memory, and the text to put in its place. A text that is not there, or that occurs more than once, is an error: give more text around it. Append adds text at the end. The kind, the agent and the edges stay, and the ref moves to a new memory that replaces the old one. Use supersede when you change the memory a lot."
+      ( objectSchema
+          [ ("ref", refSchema),
+            ("replace", object ["type" .= ("array" :: Text), "items" .= objectSchema [("from", stringSchema "The text to replace. It must occur exactly once."), ("to", stringSchema "The text to put in its place. It can be empty.")] ["from", "to"], "description" .= ("The replacements, applied in order." :: Text)]),
+            ("append", stringSchema "Text to add after the body, on a new line."),
+            ("expected", idSchema "The id that the ref must point to now."),
+            ("agent", stringSchema "The agent of the new memory. The default is the agent of the old one.")
+          ]
+          ["ref"]
       ),
     tool
       "search"
@@ -307,6 +323,10 @@ asBool :: Value -> Maybe Bool
 asBool (Bool b) = Just b
 asBool _ = Nothing
 
+asObject :: Value -> Maybe Args
+asObject (Object o) = Just o
+asObject _ = Nothing
+
 asList :: (Value -> Maybe a) -> Value -> Maybe [a]
 asList f (Array xs) = traverse f (foldr (:) [] xs)
 asList _ _ = Nothing
@@ -374,6 +394,14 @@ parseToolCall n args = case n of
     hops <- atLeast "hops" 0 (maybe (searchHops defaultSearchOptions) id h)
     follow <- maybe (pure (searchFollow defaultSearchOptions)) (fmap Set.fromList . traverse kindOf) f
     pure (CallSearch (SearchOptions limit hops follow) q)
+  "amend" -> do
+    r <- refArg args
+    e <- optIdArg args "expected"
+    ag <- optional' args "agent" asText "a string" >>= traverse (check . checkField "agent")
+    rs <- maybe [] id <$> optional' args "replace" (asList asObject) "a list of objects with from and to"
+    reps <- traverse (\o -> Amend.Replace <$> required o "from" asText "a string" <*> required o "to" asText "a string") rs
+    app <- optional' args "append" asText "a string"
+    pure (CallAmend r e ag (reps <> maybe [] (pure . Amend.Append) app))
   "neighbours" -> CallNeighbours <$> idArg args "id"
   "compare" -> CallCompare <$> idArg args "a" <*> idArg args "b"
   "review" -> do
@@ -517,6 +545,7 @@ runTool cfg env c = either failed id <$> go
       CallNeighbours i -> fmap (shorten . lines' "This memory has no edges." . neighbourLines) <$> neighboursOf env i
       CallCompare a b -> fmap (\r -> okText (T.intercalate "\n" (compareLines r)) False) <$> compareMemories env a b
       CallReview a b ag n -> fmap (const (okText ("reviewed " <> Id.render a <> " " <> Id.render b) False)) <$> reviewPair env a b ag n
+      CallAmend n e a es -> fmap (\i -> okText (Id.render i) False) <$> amendMemory env n e a es
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
       CallAppend n m -> fmap (\i -> okText (Id.render i) False) <$> appendEpisode env n m

@@ -31,6 +31,7 @@ module Akyuu.CLI
   )
 where
 
+import Akyuu.Amend qualified as Amend
 import Akyuu.Check (CheckOptions (CheckOptions, hubDegree, minWords, nearThreshold), Finding (findingSeverity), FindingKind, Severity (Problem), defaultCheckOptions, filterFindings, kindName, severityName)
 import Akyuu.Error (AkyuuError (BadInput, BadName), describe)
 import Akyuu.GC (Policy (Policy, gracePeriod, keepGenerations, trashTTL), defaultPolicy)
@@ -39,7 +40,7 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, parseDuration, parseIdSpec, pinMemory, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, parseDuration, parseIdSpec, pinMemory, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, syncLines, tierLines, unpinLines, verifyLines)
@@ -127,6 +128,9 @@ data Command i
   | -- | The ref, the 'Id' that the ref must point to now (@--expect@), and
     -- the new memory.
     Supersede Name (Maybe i) (MemoryArgs i)
+  | -- | Change the text of the memory of a ref: the ref, the 'Id' that it
+    -- must point to now, the agent of the new memory, and the edits.
+    Amend Name (Maybe i) (Maybe Text) [Amend.Edit]
   | -- | The ref, and 'True' to show its older values too.
     RefGet Name Bool
   | RefSet Name (Check i) i
@@ -224,6 +228,7 @@ commandParser =
     cmd "add" addP "Add a memory and print its id. The body comes from --body, --file or stdin."
       <> cmd "get" getP "Print a memory, by id (or the start of one) or by ref."
       <> cmd "supersede" supersedeP "Replace the memory of a ref with a new one, and print the new id."
+      <> cmd "amend" amendP "Change some text of the memory of a ref: replace one passage, or add text at the end. Prints the new id."
       <> cmd "ref" refP "Read, set or list refs."
       <> cmd "pin" (Pin <$> argument idReader (metavar "ID")) "Pin a memory, so that GC keeps it."
       <> cmd "unpin" (Unpin <$> argument idReader (metavar "ID")) "Remove the pin of a memory."
@@ -258,6 +263,16 @@ commandParser =
         <$> argument nameReader (metavar "NAME")
         <*> optional (option idReader (long "expect" <> metavar "ID" <> help "Fail if the ref does not point to ID now."))
         <*> memoryArgs
+    amendP =
+      amendArgs
+        <$> argument nameReader (metavar "NAME")
+        <*> optional (option idReader (long "expect" <> metavar "ID" <> help "Fail if the ref does not point to ID now."))
+        <*> optional (option (via (checkField "agent")) (long "agent" <> metavar "TEXT" <> help "The agent of the new memory. The default is the agent of the old one."))
+        <*> optional (strOption (long "from" <> metavar "TEXT" <> help "Text to replace. It must occur once."))
+        <*> optional (strOption (long "to" <> metavar "TEXT" <> help "The text to put in its place."))
+        <*> optional (strOption (long "append" <> metavar "TEXT" <> help "Text to add after the body."))
+    amendArgs n e a from to app =
+      Amend n e a (maybe [] (\f -> [Amend.Replace f (maybe "" id to)]) from <> maybe [] (pure . Amend.Append) app)
     refP =
       hsubparser $
         cmd "get" refGetP "Print the id that a ref points to."
@@ -457,6 +472,9 @@ runCommand env c = runExceptT $ case c of
   Supersede n old a -> do
     m <- newMemory a
     i <- ExceptT (supersedeMemory env n old m)
+    pure (ok [Id.render i])
+  Amend n e a es -> do
+    i <- ExceptT (amendMemory env n e a es)
     pure (ok [Id.render i])
   RefGet n h -> ok . refLines h <$> ExceptT (readRef env n)
   RefSet n chk i -> ok . refLines False <$> ExceptT (setRefTo env n (expected chk) i)

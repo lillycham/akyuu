@@ -3,6 +3,7 @@
 module Main (main) where
 
 import Akyuu.Id (Id, IdParseError (BadHex, BadLength, BadPrefix), fromDigest, hashBytes, hashFile, parse, render, toBytes, verify)
+import AmendTests (amendTests)
 import CLITests (cliTests)
 import CacheTests (cacheTests)
 import CheckTests (checkTests)
@@ -37,7 +38,7 @@ import TierTests (tierTests)
 import WebTests (webTests)
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, compareTests, reviewTests, tierTests, recallTests, episodeTests, opsTests, cliTests, mcpTests, webTests, seedTests]
+main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, amendTests, compareTests, reviewTests, tierTests, recallTests, episodeTests, opsTests, cliTests, mcpTests, webTests, seedTests]
 
 idTests :: TestTree
 idTests =

@@ -121,7 +121,7 @@ protocolCases =
         case r >>= at ["result", "tools"] of
           Just (Array ts) -> do
             let names = [n | t <- foldr (:) [] ts, Just (String n) <- [at ["name"] t]]
-            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list", "check", "compare", "review", "context", "append", "log"]
+            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list", "check", "compare", "review", "context", "append", "log", "amend"]
             mapM_ (\t -> (at ["inputSchema", "type"] t, isJust (at ["description"] t)) @?= (Just "object", True)) ts
           other -> assertFailure ("no tools: " <> show other),
       testCase "a tool call runs the tool" $ do
@@ -299,6 +299,25 @@ runToolCases =
       testCase "shortIds cuts whole ids and leaves the rest" $ do
         let full = "sha256-" <> T.replicate 64 "a"
         shortIds ("x " <> full <> " y sha256-abc") @?= "x sha256-" <> T.replicate 12 "a" <> " y sha256-abc",
+      testCase "amend changes one passage, keeps the edges and moves the ref" $
+        withOpsEnv $ \_ env -> do
+          ToolResult t False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "target"))
+          let tid = either (error . show) id (parse t)
+          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" (Set.singleton (Edge About tid)) "Lilly likes tea."))
+          n <- right (mkName "claude/tea")
+          _ <- runTool defaultMcpConfig env (CallRefSet n MustBeAbsent (either (error . show) id (parse i)))
+          call <- either (assertFailure . show) pure (parseToolCall "amend" (args [("ref", "claude/tea"), ("replace", Array (pure (object ["from" .= ("tea" :: Text), "to" .= ("coffee" :: Text)])))]))
+          ToolResult new False <- runTool defaultMcpConfig env call
+          ToolResult g False <- runTool defaultMcpConfig env (CallGet (Left n))
+          assertBool "new text" ("\n\nLilly likes coffee." `T.isSuffixOf` g)
+          assertBool "edge kept" (("about: " <> t) `T.isInfixOf` g)
+          assertBool "replaces" (("supersedes: " <> i) `T.isInfixOf` g)
+          assertBool "a new memory" (new /= i)
+          -- A text that is not there is an error, and the ref stays.
+          bad <- either (assertFailure . show) pure (parseToolCall "amend" (args [("ref", "claude/tea"), ("replace", Array (pure (object ["from" .= ("milk" :: Text), "to" .= ("x" :: Text)])))]))
+          ToolResult _ True <- runTool defaultMcpConfig env bad
+          ToolResult g2 False <- runTool defaultMcpConfig env (CallGet (Left n))
+          g2 @?= g,
       testCase "an empty search says so" $
         withOpsEnv $ \_ env -> do
           r <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "nothing")
