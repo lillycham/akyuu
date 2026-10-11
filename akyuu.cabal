@@ -2,7 +2,10 @@ cabal-version:      3.0
 name:               akyuu
 version:            0.1.0.0
 synopsis:           akyuu
-license:            NONE
+license:            MIT
+author:             Lilly Cham
+copyright:          2026 Lilly Cham
+license-file:       LICENSE
 build-type:         Simple
 extra-source-files: web/index.html
 
