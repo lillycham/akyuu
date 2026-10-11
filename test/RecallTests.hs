@@ -179,7 +179,7 @@ rankCases =
             typo <- right =<< searchWith c defaultTuning defaultSearchOptions "haksell"
             map matchId (matches typo) @?= [memoryId b]
             length (corrections typo) @?= 1
-            off <- right =<< searchWith c (Tuning {tuneFuzzy = False, tuneBoost = noBoost}) defaultSearchOptions "haksell"
+            off <- right =<< searchWith c defaultTuning {tuneFuzzy = False} defaultSearchOptions "haksell"
             matches off @?= []
     ]
   where

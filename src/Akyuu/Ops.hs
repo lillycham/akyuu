@@ -38,6 +38,12 @@ module Akyuu.Ops
     parseIdSpec,
     resolveId,
     searchMemories,
+    SearchMode (..),
+    searchMemoriesMode,
+    EmbedReport (..),
+    embedMissing,
+    EvalRow (..),
+    evalSearch,
     searchTuning,
     neighboursOf,
     parseDuration,
@@ -72,6 +78,7 @@ import Akyuu.Check (CheckOptions, Finding)
 import Akyuu.Check qualified as Check
 import Akyuu.Compare (Comparison)
 import Akyuu.Compare qualified as Compare
+import Akyuu.Embed qualified as Embed
 import Akyuu.Episode (Walk)
 import Akyuu.Episode qualified as Episode
 import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), fromSupersede)
@@ -88,11 +95,12 @@ import Akyuu.Refs (Expected, Name, Ref (current), RefError, Refs, openRefs)
 import Akyuu.Refs qualified as Refs
 import Akyuu.Review (Review (Review))
 import Akyuu.Review qualified as Review
+import Akyuu.SearchEval qualified as SearchEval
 import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), openStore)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersede, supersedeFrom)
 import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), parseManifest, placeLog, placeRefs, tierNames, tierRefs)
-import Control.Exception (finally)
+import Control.Exception (SomeException, finally, try)
 import Control.Monad (forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE, withExceptT)
@@ -108,6 +116,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
 import System.Directory (doesDirectoryExist)
+import System.Environment (lookupEnv)
+import Text.Read (readMaybe)
 
 -- The environment ------------------------------------------------------
 
@@ -211,7 +221,9 @@ gc = withExceptT GCFailed . ExceptT
 addMemory :: Env -> NewMemory -> IO (Either AkyuuError Id)
 addMemory env n = runExceptT $ do
   m <- buildNow n
-  store (Store.add (envStore env) m)
+  i <- store (Store.add (envStore env) m)
+  liftIO (embedNew env i (newBody n))
+  pure i
 
 -- | The error for an 'Id' that is not in the store: 'Pruned' if GC left a
 -- tombstone for it, or else 'NotFound'.
@@ -249,9 +261,11 @@ getMemory env i = runExceptT $ do
 supersedeMemory :: Env -> Name -> Maybe Id -> NewMemory -> IO (Either AkyuuError Id)
 supersedeMemory env n old new = runExceptT $ do
   m <- buildNow new
-  withExceptT fromSupersede . ExceptT $ case old of
+  i <- withExceptT fromSupersede . ExceptT $ case old of
     Just o -> supersedeFrom (envStore env) (envRefs env) n o m
     Nothing -> supersede (envStore env) (envRefs env) n m
+  liftIO (embedNew env i (newBody new))
+  pure i
 
 -- | Change the memory of a ref by edits to its body ('Akyuu.Amend'), and
 -- return the new 'Id'. The kind, the agent and the edges of the old memory
@@ -411,10 +425,132 @@ synced env = () <$ cache (Cache.sync (envCache env) (envStore env))
 
 -- | Search the memories ('Akyuu.Query.search'), after a sync of the cache.
 searchMemories :: Env -> SearchOptions -> Text -> IO (Either AkyuuError SearchResult)
-searchMemories env o q = runExceptT $ do
+searchMemories env = searchMemoriesMode env Fused
+
+-- | Give a new memory a vector, if an embedding command is set. This is for
+-- the next search, so it is best effort: a failure of any kind is ignored,
+-- and the wait is at most 5 seconds. @akyuu embed@ fills what this missed.
+embedNew :: Env -> Id -> Text -> IO ()
+embedNew env i body = do
+  me <- Embed.embedderFromEnv
+  forM_ me $ \e0 -> do
+    let e = e0 {Embed.embTimeout = min 5 (Embed.embTimeout e0)}
+    r <- try (Embed.runEmbedder e Embed.Document body) :: IO (Either SomeException (Either Text Embed.Vector))
+    case r of
+      Right (Right v) -> do
+        _ <- try (withVectors env (\vs -> Embed.putVector vs (Embed.embModel e) i v)) :: IO (Either SomeException (Either Text ()))
+        pure ()
+      _ -> pure ()
+
+-- | What a search uses: only the words ('TextOnly'), the words and the
+-- meaning together ('Fused'), or only the meaning ('MeaningOnly'). The last
+-- two need an embedding command ('Akyuu.Embed'); without one, or if it fails,
+-- the search is a text search and the result says why.
+data SearchMode = TextOnly | Fused | MeaningOnly
+  deriving (Eq, Show, Enum, Bounded)
+
+-- | 'searchMemories' with a mode.
+searchMemoriesMode :: Env -> SearchMode -> SearchOptions -> Text -> IO (Either AkyuuError SearchResult)
+searchMemoriesMode env mode o q = runExceptT $ do
   synced env
   t <- liftIO (searchTuning env)
-  cache (Query.searchWith (envCache env) t o q)
+  (sem, notes) <- liftIO (if mode == TextOnly then pure (Nothing, []) else meaningFor env (mode == MeaningOnly) q)
+  r <- cache (Query.searchWith (envCache env) t {Query.tuneSemantic = sem} o q)
+  pure r {Query.corrections = Query.corrections r <> notes}
+
+-- | Open the table of vectors of this store for an action.
+withVectors :: Env -> (Embed.VectorStore -> IO a) -> IO (Either Text a)
+withVectors env act = do
+  r <- Embed.openVectors (Embed.vectorsPath (Store.storeRoot (envStore env)))
+  case r of
+    Left why -> pure (Left why)
+    Right vs -> Right <$> (act vs `finally` Embed.closeVectors vs)
+
+-- | The memories nearest to a query in meaning, if the embedding command is
+-- set and works. The other result is the notes for the person.
+meaningFor :: Env -> Bool -> Text -> IO (Maybe Query.Semantic, [Cache.Correction])
+meaningFor env only q = do
+  me <- Embed.embedderFromEnv
+  case me of
+    Nothing -> pure (Nothing, [Cache.MeaningUnavailable "AKYUU_EMBED_COMMAND is not set." | only])
+    Just e -> do
+      stored <- withVectors env (\vs -> Embed.loadVectors vs (Embed.embModel e))
+      case stored of
+        Left why -> unavailable why
+        Right [] -> unavailable "No memory has a vector yet. Run: akyuu embed"
+        Right vs -> do
+          r <- Embed.runEmbedder e Embed.QueryText q
+          minScore <- maybe (-1) id . (>>= readMaybe) <$> lookupEnv "AKYUU_EMBED_MIN" :: IO Double
+          case r of
+            Left why -> unavailable why
+            Right v -> do
+              let ids = take 20 [i | (i, s) <- Embed.rankBySimilarity v vs, s >= minScore]
+              pure (Just (Query.Semantic ids only), [])
+  where
+    unavailable why = pure (Nothing, [Cache.MeaningUnavailable why])
+
+-- | What 'embedMissing' did.
+data EmbedReport = EmbedReport
+  { -- | Memories that got a vector now.
+    embedded :: Int,
+    -- | Memories that had one already.
+    already :: Int,
+    -- | Memories that could not be embedded, with the reason.
+    embedFailed :: [(Id, Text)]
+  }
+  deriving (Eq, Show)
+
+-- | Give a vector to each memory of the store that has none for the model
+-- of the embedder. It stops after 3 failures in a row, because then the
+-- command is most likely down.
+embedMissing :: Env -> Embed.Embedder -> IO (Either AkyuuError EmbedReport)
+embedMissing env e = runExceptT $ do
+  ids <- store (Store.list (envStore env))
+  r <- liftIO $ withVectors env $ \vs -> do
+    have <- Embed.storedIds vs (Embed.embModel e)
+    let todo = [i | i <- sort ids, i `Set.notMember` have]
+        loop n bad _ [] = pure (n, reverse bad)
+        loop n bad run (i : is)
+          | run >= (3 :: Int) = pure (n, reverse bad)
+          | otherwise = do
+              m <- getMemory env i
+              case m of
+                Left _ -> loop n bad run is
+                Right mem -> do
+                  v <- Embed.runEmbedder e Embed.Document (memBody mem)
+                  case v of
+                    Right vec -> Embed.putVector vs (Embed.embModel e) i vec >> loop (n + 1) bad 0 is
+                    Left why -> loop n ((i, why) : bad) (run + 1) is
+    (n, bad) <- loop (0 :: Int) [] 0 todo
+    pure (EmbedReport n (Set.size have) bad)
+  either (throwE . BadInput) pure r
+
+-- | One case of a search set, with the refs that each mode found.
+data EvalRow = EvalRow
+  { evalCase :: SearchEval.Case,
+    evalFound :: [(SearchMode, [Text])]
+  }
+  deriving (Eq, Show)
+
+-- | Run the cases of a set (the memory of a ref, 'Akyuu.SearchEval') in each
+-- mode, and name the refs that hold the hits. The set itself is left out
+-- (it has the words of every query), and so is a hit that no ref holds now
+-- (an old version, or an episode of a log). The caller takes the first @k@
+-- of the names. The search asks for 5 times @k@ hits first, so that the left
+-- out hits do not empty the list.
+evalSearch :: Env -> Name -> Int -> IO (Either AkyuuError [EvalRow])
+evalSearch env setRef k = runExceptT $ do
+  ref <- ExceptT (readRef env setRef)
+  m <- ExceptT (getMemory env (current ref))
+  held <- ExceptT (listRefValues env)
+  let names = Map.fromListWith (<>) [(i, [Refs.nameText n]) | (n, i) <- held]
+      opts = Query.defaultSearchOptions {Query.searchLimit = 5 * k}
+      self = current ref
+  forM (SearchEval.parseCases (memBody m)) $ \c -> do
+    found <- forM [minBound .. maxBound] $ \mode -> do
+      r <- ExceptT (searchMemoriesMode env mode opts (SearchEval.caseQuery c))
+      pure (mode, concatMap (\h -> if Query.matchId h == self then [] else Map.findWithDefault [] (Query.matchId h) names) (Query.matches r))
+    pure (EvalRow c found)
 
 -- | How a search of this store forgives and ranks: fuzzy on, a memory that a
 -- ref holds ranks higher, and a newer one ranks higher. If the refs cannot be
@@ -726,7 +862,9 @@ appendEpisode env n nm = runExceptT $ do
   let linked = [() | Edge k _ <- Set.toList (newEdges nm), k == DerivedFrom]
   unless (null linked) (throwE (BadInput "An episode links to the one before it with derived_from, and append adds that edge. Use about or refines for other links."))
   m <- buildNow nm
-  withExceptT fromSupersede (ExceptT (Episode.append (envStore env) (envRefs env) n m))
+  i <- withExceptT fromSupersede (ExceptT (Episode.append (envStore env) (envRefs env) n m))
+  liftIO (embedNew env i (newBody nm))
+  pure i
 
 -- | Read a log, newest episode first, up to a limit of episodes
 -- ('Akyuu.Episode.walk'). A ref that does not exist is an error.

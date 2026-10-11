@@ -39,6 +39,7 @@ library
                  , file-embed
                  , http-types
                  , network
+                 , process
                  , streaming-commons
                  , wai
                  , warp
@@ -54,8 +55,10 @@ library
                    , Akyuu.Check
                    , Akyuu.Compare
                    , Akyuu.Episode
+                   , Akyuu.Embed
                    , Akyuu.Fuzzy
                    , Akyuu.Review
+                   , Akyuu.SearchEval
                    , Akyuu.Tier
                    , Akyuu.Supersede
                    , Akyuu.GC
@@ -96,6 +99,7 @@ test-suite akyuu-test
                     , ReviewTests
                     , TierTests
                     , RecallTests
+                    , EmbedTests
                     , EpisodeTests
                     , RefsTests
                     , StoreTests

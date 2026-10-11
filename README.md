@@ -22,6 +22,8 @@ akyuu pin 08d4                      # GC keeps a pinned memory
 akyuu pins                          # the id of each pin (akyuu unpin ID removes one)
 akyuu context                       # the memories every session needs, in one call (the tier "always")
 akyuu amend me/notes --from tea --to coffee   # change one passage; the ref moves to a new memory (also --append TEXT)
+akyuu embed                         # vectors for search by meaning (docs/embeddings.md)
+akyuu search-eval                   # run a set of searches in each mode
 akyuu note "a small thing"          # an episode in the log that the manifest names for this directory
 akyuu compare 08d4 1c9b             # what each of two memories says that the other lacks
 akyuu review 08d4 1c9b --agent me   # both are true and different: check leaves the pair out

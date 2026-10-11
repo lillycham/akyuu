@@ -34,6 +34,13 @@
           text = builtins.readFile ./nix/backup.sh;
         };
 
+      embedOpenaiFor = pkgs:
+        pkgs.writeShellApplication {
+          name = "akyuu-embed-openai";
+          runtimeInputs = [ pkgs.curl pkgs.jq ];
+          text = builtins.readFile ./nix/embed-openai.sh;
+        };
+
       versionFor = pkgs:
         pkgs.writeShellApplication {
           name = "akyuu-version";
@@ -46,6 +53,7 @@
         akyuu = akyuuFor pkgs;
         akyuu-backup = backupFor pkgs;
         akyuu-version = versionFor pkgs;
+        akyuu-embed-openai = embedOpenaiFor pkgs;
         default = akyuuFor pkgs;
       });
 
@@ -87,6 +95,7 @@
         akyuu = akyuuFor final;
         akyuu-backup = backupFor final;
         akyuu-version = versionFor final;
+        akyuu-embed-openai = embedOpenaiFor final;
       };
 
       # A home-manager module: the binary, AKYUU_ROOT, and optional launchd

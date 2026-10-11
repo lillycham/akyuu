@@ -33,6 +33,7 @@ where
 
 import Akyuu.Amend qualified as Amend
 import Akyuu.Check (CheckOptions (CheckOptions, hubDegree, longLog, minWords, nearThreshold), Finding (findingSeverity), FindingKind, Severity (Problem), defaultCheckOptions, filterFindings, kindName, severityName)
+import Akyuu.Embed qualified as Embed
 import Akyuu.Error (AkyuuError (BadInput, BadName), describe)
 import Akyuu.GC (Policy (Policy, gracePeriod, keepGenerations, trashTTL), defaultPolicy)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
@@ -40,10 +41,10 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemoriesMode, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, syncLines, tierLines, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, syncLines, tierLines, unpinLines, verifyLines)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Tier (Place (Place))
 import Akyuu.Web.Page qualified as Page
@@ -159,7 +160,12 @@ data Command i
   | -- | Read a log: the ref, the most episodes ('Nothing' for the default),
     -- and 'True' for the bodies.
     Log Name (Maybe Int) Bool
-  | Search SearchOptions Text
+  | Search SearchMode SearchOptions Text
+  | -- | Give a vector to each memory that has none.
+    Embed
+  | -- | Run a set of searches (the ref), and show the refs found by each
+    -- mode in the first k hits.
+    SearchEvalCmd Name Int
   | Neighbours i
   | -- | Two memories to compare, and 'True' for JSON.
     Compare i i Bool
@@ -195,6 +201,10 @@ idReader = via parseIdSpec
 
 nameReader :: ReadM Name
 nameReader = via (\t -> first (BadName t) (mkName t))
+
+modeReader :: ReadM SearchMode
+modeReader = via $ \t ->
+  maybe (Left (BadInput ("'" <> t <> "' is not a mode. Use fused, text or meaning."))) Right (lookup t [("fused", Fused), ("text", TextOnly), ("meaning", MeaningOnly)])
 
 kindReader :: ReadM EdgeType
 kindReader = via $ \t ->
@@ -248,6 +258,8 @@ commandParser =
       <> cmd "log" logP "Print the episodes of a log, newest first."
       <> cmd "context" contextP "Print the memories of a tier (the profile, the policy and so on) in one call, for the start of a session."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
+      <> cmd "embed" (pure Embed) "Give a vector to each memory that has none, with the command in AKYUU_EMBED_COMMAND (search by meaning)."
+      <> cmd "search-eval" searchEvalP "Run a set of searches in each mode, and show which ones find the expected memories."
       <> cmd "neighbours" neighboursP "Show the edges of a memory, in both directions."
       <> cmd "compare" compareP "Show what each of two memories says that the other lacks."
       <> cmd "gc" gcP "Collect the memories that nothing needs."
@@ -300,13 +312,20 @@ commandParser =
             )
     searchP =
       Search
-        <$> searchOpts
+        <$> modeOpt
+        <*> searchOpts
         <*> (T.unwords <$> some (strArgument (metavar "WORDS...")))
+    modeOpt =
+      option modeReader (long "mode" <> metavar "MODE" <> value Fused <> showDefault <> help "fused (the default: words and meaning), text (words only) or meaning (meaning only). The last two kinds need AKYUU_EMBED_COMMAND.")
     searchOpts =
       (\l h ks -> SearchOptions l h (if null ks then searchFollow defaultSearchOptions else Set.fromList ks))
         <$> option (atLeast 1) (long "limit" <> short 'n' <> metavar "N" <> value (searchLimit defaultSearchOptions) <> showDefault <> help "The most hits to show.")
         <*> option (atLeast 0) (long "hops" <> metavar "N" <> value (searchHops defaultSearchOptions) <> showDefault <> help "How many edges away from a hit to look.")
         <*> many (option kindReader (long "follow" <> metavar "KIND" <> help "Follow only this kind of edge. Repeat for more. The default is all kinds."))
+    searchEvalP =
+      SearchEvalCmd
+        <$> option nameReader (long "set" <> metavar "NAME" <> value (either (error "name") id (mkName "policy/embedding-eval")) <> help "The ref of the set of searches. The default is policy/embedding-eval.")
+        <*> option (atLeast 1) (long "k" <> metavar "N" <> value 3 <> showDefault <> help "How many hits count.")
     neighboursP = Neighbours <$> argument idReader (metavar "ID")
     appendP = Append <$> argument nameReader (metavar "REF") <*> memoryArgs
     logP =
@@ -520,8 +539,13 @@ runCommand env c = runExceptT $ case c of
     who <- liftIO (maybe (maybe "agent" T.pack <$> lookupEnv "AKYUU_AGENT") pure agent)
     (n, i) <- ExceptT (noteEpisode env mr place NewMemory {newKind = kind, newAgent = who, newEdges = Set.empty, newBody = text})
     pure (ok ["noted in " <> nameText n <> " " <> Id.render i])
-  Search o q -> do
-    r <- ExceptT (searchMemories env o q)
+  Embed -> do
+    me <- liftIO Embed.embedderFromEnv
+    e <- maybe (ExceptT (pure (Left (BadInput "AKYUU_EMBED_COMMAND is not set. Set it to a command that reads a text on stdin and prints a vector (see docs/embeddings.md).")))) pure me
+    ok . embedLines (Embed.embModel e) <$> ExceptT (embedMissing env e)
+  SearchEvalCmd n k -> ok . evalLines k <$> ExceptT (evalSearch env n k)
+  Search mode o q -> do
+    r <- ExceptT (searchMemoriesMode env mode o q)
     held <- either (const Map.empty) heldBy <$> liftIO (listRefValues env)
     pure (ok (searchLinesWith held r))
   Neighbours i -> ok . neighbourLines <$> ExceptT (neighboursOf env i)

@@ -15,6 +15,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Word (Word8)
+import EmbedTests (embedTests)
 import EpisodeTests (episodeTests)
 import FsTests (fsTests)
 import GCTests (gcTests)
@@ -38,7 +39,7 @@ import TierTests (tierTests)
 import WebTests (webTests)
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, amendTests, compareTests, reviewTests, tierTests, recallTests, episodeTests, opsTests, cliTests, mcpTests, webTests, seedTests]
+main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, amendTests, compareTests, reviewTests, tierTests, recallTests, embedTests, episodeTests, opsTests, cliTests, mcpTests, webTests, seedTests]
 
 idTests :: TestTree
 idTests =

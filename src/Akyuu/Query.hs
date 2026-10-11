@@ -14,6 +14,7 @@
 module Akyuu.Query
   ( -- * Search
     SearchOptions (..),
+    Semantic (..),
     defaultSearchOptions,
     Match (..),
     SearchResult (..),
@@ -37,8 +38,9 @@ module Akyuu.Query
   )
 where
 
-import Akyuu.Cache (Cache, CacheError, Correction, Hit (hitId, hitSnippet))
+import Akyuu.Cache (Cache, CacheError, Correction (AddedByMeaning), Hit (Hit, hitId, hitSnippet))
 import Akyuu.Cache qualified as Cache
+import Akyuu.Embed (fuse)
 import Akyuu.Graph (Dir, EdgeType (Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
@@ -46,6 +48,7 @@ import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT)
 import Data.List (partition, sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (mapMaybe)
 import Data.Ord (Down (Down))
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -165,13 +168,26 @@ data Tuning = Tuning
     -- never changed.
     tuneFuzzy :: Bool,
     -- | The signals that reorder the hits.
-    tuneBoost :: Boost
+    tuneBoost :: Boost,
+    -- | Memories in the order of their meaning, from 'Akyuu.Embed'. 'Nothing'
+    -- is a text search only.
+    tuneSemantic :: Maybe Semantic
+  }
+  deriving (Eq, Show)
+
+-- | A ranking by meaning, and how to use it.
+data Semantic = Semantic
+  { -- | The memories nearest to the query, nearest first.
+    semRanked :: [Id],
+    -- | 'True': return only these. 'False': fuse them with the text hits
+    -- ('Akyuu.Embed.fuse').
+    semOnly :: Bool
   }
   deriving (Eq, Show)
 
 -- | Fuzzy on, and no boost: the order is the order of the text index.
 defaultTuning :: Tuning
-defaultTuning = Tuning {tuneFuzzy = True, tuneBoost = noBoost}
+defaultTuning = Tuning {tuneFuzzy = True, tuneBoost = noBoost, tuneSemantic = Nothing}
 
 -- | Signals from outside the text index that rank a hit higher.
 data Boost = Boost
@@ -225,8 +241,24 @@ searchWith c t o q = runExceptT $ do
     if tuneBoost t == noBoost || null hits
       then pure Map.empty
       else ExceptT (Cache.createdTimes c (map hitId hits))
-  let ranked = headsFirst g (rankHits (tuneBoost t) created hits)
-  pure (searchResult o g (take (searchLimit o) ranked)) {corrections = notes}
+  let textRanked = rankHits (tuneBoost t) created hits
+  (joined, byMeaning) <- case tuneSemantic t of
+    Nothing -> pure (textRanked, 0)
+    Just (Semantic ids only) -> do
+      let textIds = map hitId textRanked
+          order = if only then ids else fuse [textIds, ids]
+          absent = [i | i <- order, i `notElem` textIds]
+      firsts <- if null absent then pure Map.empty else Map.fromList . map (\s -> (Cache.sumId s, Cache.sumFirstLine s)) <$> ExceptT (Cache.summaries c)
+      let known = Map.fromList [(hitId h, h) | h <- textRanked]
+          make i = case Map.lookup i known of
+            Just h -> Just h
+            Nothing -> Hit i <$> Map.lookup i firsts
+          found = mapMaybe make order
+      pure (found, length [h | h <- found, hitId h `Map.notMember` known])
+  let ranked = headsFirst g joined
+      shown = take (searchLimit o) ranked
+      added = length [h | h <- shown, hitId h `notElem` map hitId hits]
+  pure (searchResult o g shown) {corrections = notes <> [AddedByMeaning added | byMeaning > 0, added > 0]}
 
 -- Neighbours -----------------------------------------------------------
 

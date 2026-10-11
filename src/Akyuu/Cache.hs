@@ -609,6 +609,12 @@ data Correction
   | -- | The word is near some terms (a typing mistake): it was searched as
     -- any of these terms. The terms are stems, because the index holds stems.
     SpelledAs Text [Text]
+  | -- | This many hits were added, or moved up, because their meaning is
+    -- near the query ('Akyuu.Embed'). The count is of the memories that the
+    -- text index did not return.
+    AddedByMeaning Int
+  | -- | The search by meaning was set but did not run. The text says why.
+    MeaningUnavailable Text
   deriving (Eq, Show)
 
 -- | 'search' that forgives a word that the index does not have.

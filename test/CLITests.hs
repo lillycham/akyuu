@@ -9,7 +9,7 @@ import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
 import Akyuu.GC (Policy (Policy, gracePeriod), defaultPolicy)
 import Akyuu.Graph (EdgeType (About, DerivedFrom, Refines))
 import Akyuu.Id (render)
-import Akyuu.Ops (IdSpec (Full, Prefix))
+import Akyuu.Ops (IdSpec (Full, Prefix), SearchMode (Fused))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Name, mkName)
 import Akyuu.Store (StoreError (NotFound))
@@ -106,10 +106,10 @@ parseCases =
         (cliCommand a, cliCommand b) @?= (RefGet n True, RefList),
       testCase "search joins the words and keeps the defaults" $ do
         c <- parses ["search", "lilly", "haskell"]
-        cliCommand c @?= Search defaultSearchOptions "lilly haskell",
+        cliCommand c @?= Search Fused defaultSearchOptions "lilly haskell",
       testCase "search options" $ do
         c <- parses ["search", "-n", "3", "--hops", "0", "--follow", "about", "--follow", "derived-from", "x"]
-        cliCommand c @?= Search (SearchOptions 3 0 (Set.fromList [About, DerivedFrom])) "x",
+        cliCommand c @?= Search Fused (SearchOptions 3 0 (Set.fromList [About, DerivedFrom])) "x",
       testCase "an id can be the start of one, with or without sha256-" $ do
         let pre = take 11 i1
             bare = drop 7 pre

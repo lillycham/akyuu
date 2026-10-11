@@ -25,6 +25,7 @@ let
 
   backupPackage = self.packages.${system}.akyuu-backup;
   versionPackage = self.packages.${system}.akyuu-version;
+  embedPackage = self.packages.${system}.akyuu-embed-openai;
 
   calendar = hour: minute: [{ Hour = hour; Minute = minute; }];
 
@@ -112,6 +113,45 @@ in
       };
     };
 
+    embed = {
+      enable = mkEnableOption "search by meaning: a command that makes vectors, set in the environment of akyuu (AKYUU_EMBED_COMMAND)";
+      command = mkOption {
+        type = types.str;
+        default = "${embedPackage}/bin/akyuu-embed-openai";
+        defaultText = "akyuu-embed-openai";
+        description = ''
+          The command: it reads a text on stdin and prints a vector (see
+          docs/embeddings.md). The default calls a server with the OpenAI
+          embeddings API, such as LM Studio, Ollama or llama-server.
+        '';
+      };
+      model = mkOption {
+        type = types.str;
+        example = "lmstudio:nomic-embed-text-v1.5";
+        description = ''
+          The key of the vectors. Vectors with another key are not compared,
+          so change it when you change the model or its runtime.
+        '';
+      };
+      apiModel = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "The model name that the server knows (AKYUU_EMBED_API_MODEL), for the default command.";
+      };
+      url = mkOption {
+        type = types.str;
+        default = "http://localhost:1234/v1/embeddings";
+        description = "The endpoint of the server, for the default command.";
+      };
+      minScore = mkOption {
+        type = types.nullOr types.float;
+        default = null;
+        description = "The lowest cosine similarity that counts as near (AKYUU_EMBED_MIN). It depends on the model: find it with akyuu search-eval.";
+      };
+      queryPrefix = mkOption { type = types.str; default = ""; description = "Text before a search, for models that want one (for example \"search_query: \")."; };
+      documentPrefix = mkOption { type = types.str; default = ""; description = "Text before a memory (for example \"search_document: \")."; };
+    };
+
     backup = {
       enable = mkEnableOption "a daily snapshot of the store (akyuu-backup)";
       directory = mkOption {
@@ -140,6 +180,21 @@ in
       home.sessionVariables.AKYUU_ROOT = cfg.root;
       home.sessionVariables.AKYUU_POLICY_REF = mkIf (cfg.policyRef != null) cfg.policyRef;
       home.sessionVariables.AKYUU_TIERS_REF = mkIf (cfg.tiersRef != null) cfg.tiersRef;
+    }
+
+    (mkIf cfg.embed.enable {
+      home.packages = [ embedPackage ];
+      home.sessionVariables = {
+        AKYUU_EMBED_COMMAND = cfg.embed.command;
+        AKYUU_EMBED_MODEL = cfg.embed.model;
+        AKYUU_EMBED_URL = cfg.embed.url;
+        AKYUU_EMBED_QUERY_PREFIX = cfg.embed.queryPrefix;
+        AKYUU_EMBED_DOCUMENT_PREFIX = cfg.embed.documentPrefix;
+      } // lib.optionalAttrs (cfg.embed.apiModel != null) { AKYUU_EMBED_API_MODEL = cfg.embed.apiModel; }
+        // lib.optionalAttrs (cfg.embed.minScore != null) { AKYUU_EMBED_MIN = toString cfg.embed.minScore; };
+    })
+
+    {
 
       home.activation.akyuuRoot = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
         run mkdir -p ${lib.escapeShellArg cfg.root}

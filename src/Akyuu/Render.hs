@@ -15,6 +15,8 @@ module Akyuu.Render
     pinListLines,
     searchLines,
     searchLinesWith,
+    embedLines,
+    evalLines,
     heldBy,
     refListLinesWith,
     shortIds,
@@ -36,7 +38,7 @@ module Akyuu.Render
   )
 where
 
-import Akyuu.Cache (Correction (PrefixOf, SpelledAs), SyncReport (added, removed), snippetClose, snippetOpen)
+import Akyuu.Cache (Correction (AddedByMeaning, MeaningUnavailable, PrefixOf, SpelledAs), SyncReport (added, removed), snippetClose, snippetOpen)
 import Akyuu.Check (Finding (findingIds, findingKind, findingRelated, findingSeverity, findingWhy), kindName, severityName)
 import Akyuu.Compare (Comparison (cmpOnlyA, cmpOnlyB, cmpShared), canDropA, canDropB)
 import Akyuu.Episode (Walk (Walk))
@@ -46,10 +48,11 @@ import Akyuu.GC (RunReport (swept), SweepReport (deleted, trashed))
 import Akyuu.Graph (Dir (In, Out), EdgeType)
 import Akyuu.Id (Id, render)
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader, renderMemory)
-import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, Present), ContextReport (ContextReport), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
+import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, Present), ContextReport (ContextReport), EmbedReport (already, embedFailed, embedded), EvalRow (evalCase, evalFound), SearchMode (Fused, MeaningOnly, TextOnly), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, corrections, matches))
 import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Akyuu.Review (Review (reviewAgent, reviewAt, reviewNote))
+import Akyuu.SearchEval (Case (caseCategory, caseGuess, caseQuery), passes)
 import Data.Aeson (Value, object, (.=))
 import Data.List (sort)
 import Data.Map.Strict (Map)
@@ -98,6 +101,8 @@ searchLinesWith held r = concatMap matchLines (matches r) <> contextLines <> map
   where
     correctionLine (PrefixOf w) = "note: no whole word " <> quoted w <> ", so it was searched as the start of a word."
     correctionLine (SpelledAs w ts) = "note: no word " <> quoted w <> ", so it was searched as " <> T.intercalate " or " (map quoted ts) <> "."
+    correctionLine (AddedByMeaning n) = "note: " <> T.pack (show n) <> " of these were found by meaning, not by the words."
+    correctionLine (MeaningUnavailable why) = "note: the search by meaning did not run, so this is a text search only. " <> why
     quoted t = "'" <> t <> "'"
     matchLines m =
       (render (matchId m) <> "  " <> oneLine (snippetText (matchSnippet m)))
@@ -186,6 +191,42 @@ count n noun = T.pack (show n) <> " " <> plural noun
 -- line at the first space. An empty list gives no lines.
 refListLines :: [(Name, Id)] -> [Text]
 refListLines = map (\(n, i) -> nameText n <> "  " <> render i)
+
+-- | What @embed@ did: the counts, and the memories that failed.
+embedLines :: Text -> EmbedReport -> [Text]
+embedLines model r =
+  ["failed " <> render i <> ": " <> why | (i, why) <- embedFailed r]
+    <> [ "embedded "
+           <> count (embedded r) "memory"
+           <> " with "
+           <> model
+           <> ", "
+           <> T.pack (show (already r))
+           <> " had one already"
+           <> (if null (embedFailed r) then "" else ", " <> T.pack (show (length (embedFailed r))) <> " failed")
+       ]
+
+-- | The result of a set of searches: one line for each case with the mark
+-- of each mode (@ found, @ not), then the number of passes of each mode
+-- for each category.
+evalLines :: Int -> [EvalRow] -> [Text]
+evalLines k rows = concatMap one rows <> [""] <> concatMap summary cats
+  where
+    modes = [minBound .. maxBound] :: [SearchMode]
+    modeName TextOnly = "text"
+    modeName Fused = "fused"
+    modeName MeaningOnly = "meaning"
+    verdict r m = maybe False (passes (evalCase r) . take k) (lookup m (evalFound r))
+    one r =
+      T.unwords [mark (verdict r m) <> modeName m | m <- modes] <> "  " <> caseCategory (evalCase r) <> " | " <> caseQuery (evalCase r) <> (if caseGuess (evalCase r) then " (?)" else "")
+        : ["    " <> modeName m <> ": " <> (if null fs then "(no hits)" else T.intercalate ", " (take k fs)) | (m, fs) <- evalFound r, not (verdict r m)]
+    mark True = "+"
+    mark False = "-"
+    cats = dedupe (map (caseCategory . evalCase) rows)
+    dedupe = foldr (\x acc -> x : filter (/= x) acc) []
+    summary c =
+      let rs = [r | r <- rows, caseCategory (evalCase r) == c]
+       in [c <> " (" <> T.pack (show (length rs)) <> "): " <> T.intercalate ", " [modeName m <> " " <> T.pack (show (length (filter (`verdict` m) rs))) | m <- modes]]
 
 -- | The refs that hold each memory now, from the list of refs.
 heldBy :: [(Name, Id)] -> Map Id [Name]
