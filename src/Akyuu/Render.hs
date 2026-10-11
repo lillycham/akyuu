@@ -10,6 +10,9 @@ module Akyuu.Render
   ( memoryText,
     refLines,
     refListLines,
+    pinLines,
+    unpinLines,
+    pinListLines,
     searchLines,
     neighbourLines,
     planLines,
@@ -137,3 +140,15 @@ count n noun = T.pack (show n) <> " " <> plural noun
 -- line at the first space. An empty list gives no lines.
 refListLines :: [(Name, Id)] -> [Text]
 refListLines = map (\(n, i) -> nameText n <> "  " <> render i)
+
+-- | The answer of @pin@: the word @pinned@ and the 'Id'.
+pinLines :: Id -> [Text]
+pinLines i = ["pinned " <> render i]
+
+-- | The answer of @unpin@: the word @unpinned@ and the 'Id'.
+unpinLines :: Id -> [Text]
+unpinLines i = ["unpinned " <> render i]
+
+-- | The pins: one 'Id' on each line. An empty list gives no lines.
+pinListLines :: [Id] -> [Text]
+pinListLines = map render

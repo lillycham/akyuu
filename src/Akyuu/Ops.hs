@@ -28,6 +28,9 @@ module Akyuu.Ops
     setRefTo,
     listRefNames,
     listRefValues,
+    pinMemory,
+    unpinMemory,
+    listPinned,
     IdSpec (..),
     parseIdSpec,
     resolveId,
@@ -253,6 +256,27 @@ listRefValues :: Env -> IO (Either AkyuuError [(Name, Id)])
 listRefValues env = runExceptT $ do
   names <- ExceptT (listRefNames env)
   forM names $ \n -> (,) n . current <$> ExceptT (readRef env n)
+
+-- | Pin a memory, so that GC keeps it. Pinning twice is the same as once.
+--
+-- "Akyuu.GC" allows a pin for an object that is not in the store. This
+-- function does not: the person gave an id, and an id that nothing has is
+-- most likely a typo. It gives the same error as 'setRefTo'.
+pinMemory :: Env -> Id -> IO (Either AkyuuError ())
+pinMemory env i = runExceptT $ do
+  there <- store (Store.exists (envStore env) i)
+  unless there (missing env i)
+  gc (GC.pin (envStore env) i)
+
+-- | Remove a pin. An id that is not pinned is not an error. The memory does
+-- not have to be in the store, so a person can remove the pin of a memory
+-- that GC deleted.
+unpinMemory :: Env -> Id -> IO (Either AkyuuError ())
+unpinMemory env i = runExceptT (gc (GC.unpin (envStore env) i))
+
+-- | All the pinned ids, sorted.
+listPinned :: Env -> IO (Either AkyuuError [Id])
+listPinned env = runExceptT (Set.toAscList <$> gc (GC.listPins (envStore env)))
 
 -- Ids that a person typed --------------------------------------------------
 

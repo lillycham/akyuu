@@ -187,19 +187,21 @@ Decided:
 - `supersede NAME` reads the ref. `supersede NAME --expect ID` uses `supersedeFrom`.
 - `add` allows `--supersedes ID` as a plain edge. It does not move a ref.
 - `neighbours` of an `Id` that is not a memory and has no edges is an error, not an empty list. A dangling target shows its edges.
+- `pin ID`, `unpin ID` and `pins`. `Ops.pinMemory` checks that the memory is in the store, like `ref set`, because an id that nothing has is most likely a typo.
+  `GC.pin` itself allows an object that is not there. `unpin` does not check, so a person can remove the pin of a deleted memory.
 - `gc` uses `defaultPolicy` and no temp roots. There are no flags for the policy yet.
 - `verify` reads and hashes every object itself, and builds the graph from them, not from the cache. It reports corrupt and unreadable objects,
   missing edge targets, bad refs, and refs to a missing object. A target with a tombstone is "pruned". That is normal, so it is not a problem.
 - `optparse-applicative` is a new library dependency. The Nix shell already had it. `akyuu.nix` is edited by hand to add it.
   A new run of `cabal2nix` would also add the test dependencies, and `nix build` would then run the tests. Lilly should decide that.
 
-- [x] `add`, `get`, `supersede`, `ref set|get|list`, `search`, `neighbours`, `gc [--dry-run]`, `reindex`, `verify`.
+- [x] `add`, `get`, `supersede`, `ref set|get|list`, `search`, `neighbours`, `gc [--dry-run]`, `reindex`, `verify`, `pin`, `unpin`, `pins`.
 - [x] Friendly error text from `AkyuuError`, not `Show`.
 - [x] Unit tests for the parser, the error text and `Akyuu.Ops`. `test/smoke-cli.sh` runs the executable against a temp store.
 
 Not done:
 
-- No `pin`, `unpin` or `init` commands, and no flags for the GC policy.
+- No `init` command, and no flags for the GC policy.
 - The smoke script is not part of `cabal test`. Run it by hand: `nix develop -c bash test/smoke-cli.sh`.
 - `get` does not show the edges of a memory in a separate form. Use `neighbours`.
 

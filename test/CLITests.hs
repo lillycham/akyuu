@@ -9,6 +9,7 @@ import Akyuu.Ops (IdSpec (..))
 import Akyuu.Id (render)
 import Akyuu.Query (SearchOptions (..), defaultSearchOptions)
 import Akyuu.Refs (Name, mkName)
+import Akyuu.Store (StoreError (..))
 import Data.Char (toUpper)
 import Data.List (isInfixOf)
 import Data.Set qualified as Set
@@ -120,6 +121,15 @@ parseCases =
     , testCase "an edge option takes a prefix too" $ do
         c <- parses ["add", "--kind", "fact", "--agent", "claude", "--about", take 11 i1, "--body", "x"]
         cliCommand c @?= Add (MemoryArgs "fact" "claude" [(About, Prefix (T.pack (take 11 i1)))] (BodyText "x"))
+    , testCase "pin, unpin and pins" $ do
+        cs <- traverse parses [["pin", i1], ["unpin", i2], ["pins"]]
+        map cliCommand cs @?= [Pin (Full (nid 1)), Unpin (Full (nid 2)), Pins]
+    , testCase "pin takes the start of an id" $ do
+        c <- parses ["pin", take 11 i1]
+        cliCommand c @?= Pin (Prefix (T.pack (take 11 i1)))
+    , testCase "pin needs an id" $ do
+        _ <- fails ["pin"]
+        pure ()
     , testCase "gc, gc --dry-run, reindex, verify, neighbours" $ do
         cs <- traverse parses [["gc"], ["gc", "--dry-run"], ["reindex"], ["verify"], ["neighbours", i1]]
         map cliCommand cs @?= [GC False, GC True, Reindex, Verify, Neighbours (Full (nid 1))]
@@ -219,6 +229,26 @@ runCases =
           _ <- run env ["ref", "set", "a", T.unpack i, "--new"]
           l <- run env ["ref", "list"]
           T.lines (decodeUtf8 (outBytes l)) @?= ["a  " <> i, "b/x  " <> i]
+    , testCase "pin, pins and unpin" $
+        withOpsEnv $ \_ env -> do
+          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "keep me")))
+          let i = T.strip (decodeUtf8 (outBytes o))
+          none <- run env ["pins"]
+          outBytes none @?= ""
+          p <- run env ["pin", T.unpack (T.take 12 i)]
+          T.lines (decodeUtf8 (outBytes p)) @?= ["pinned " <> i]
+          l <- run env ["pins"]
+          T.lines (decodeUtf8 (outBytes l)) @?= [i]
+          u <- run env ["unpin", T.unpack i]
+          T.lines (decodeUtf8 (outBytes u)) @?= ["unpinned " <> i]
+          l2 <- run env ["pins"]
+          outBytes l2 @?= ""
+    , testCase "pin of an id that is not in the store is an error" $
+        withOpsEnv $ \_ env -> do
+          c <- parses ["pin", i1]
+          c' <- right =<< resolveCommand env (cliCommand c)
+          r <- runCommand env c'
+          r @?= Left (StoreFailed (NotFound (nid 1)))
     , testCase "withNewline adds a line feed only when it is missing" $ do
         (withNewline "", withNewline "a", withNewline "a\n") @?= ("", "a\n", "a\n")
     ]

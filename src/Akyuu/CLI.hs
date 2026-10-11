@@ -125,6 +125,11 @@ data Command i
     RefGet Name Bool
   | RefSet Name (Check i) i
   | RefList
+  | -- | Pin a memory, so that GC keeps it.
+    Pin i
+  | Unpin i
+  | -- | Print the pins.
+    Pins
   | Search SearchOptions Text
   | Neighbours i
   | -- | 'True' for @--dry-run@.
@@ -197,6 +202,9 @@ commandParser =
       <> cmd "get" getP "Print a memory, by id (or the start of one) or by ref."
       <> cmd "supersede" supersedeP "Replace the memory of a ref with a new one, and print the new id."
       <> cmd "ref" refP "Read, set or list refs."
+      <> cmd "pin" (Pin <$> argument idReader (metavar "ID")) "Pin a memory, so that GC keeps it."
+      <> cmd "unpin" (Unpin <$> argument idReader (metavar "ID")) "Remove the pin of a memory."
+      <> cmd "pins" (pure Pins) "Print the id of each pinned memory."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
       <> cmd "neighbours" neighboursP "Show the edges of a memory, in both directions."
       <> cmd "gc" gcP "Collect the memories that nothing needs."
@@ -372,6 +380,9 @@ runCommand env c = runExceptT $ case c of
   RefGet n h -> ok . refLines h <$> ExceptT (readRef env n)
   RefSet n chk i -> ok . refLines False <$> ExceptT (setRefTo env n (expected chk) i)
   RefList -> ok . refListLines <$> ExceptT (listRefValues env)
+  Pin i -> ok (pinLines i) <$ ExceptT (pinMemory env i)
+  Unpin i -> ok (unpinLines i) <$ ExceptT (unpinMemory env i)
+  Pins -> ok . pinListLines <$> ExceptT (listPinned env)
   Search o q -> ok . searchLines <$> ExceptT (searchMemories env o q)
   Neighbours i -> ok . neighbourLines <$> ExceptT (neighboursOf env i)
   GC True -> ok . planLines <$> ExceptT (dryRunGC env)
