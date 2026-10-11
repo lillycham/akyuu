@@ -77,6 +77,14 @@ svg.graph .reftag text { fill: var(--accent); font-size: 11px; }
 svg.graph .reftag.ghost rect { stroke-dasharray: 3 2; stroke: var(--muted); fill: none; }
 svg.graph .reftag.ghost text { fill: var(--muted); }
 svg.graph .rootmark { font-size: 11px; fill: var(--accent); }
+svg.graph[data-overview="1"] .node > text:not(.rootmark) { display: none; }
+.canvas.panning { cursor: grabbing; user-select: none; }
+.zoombar { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; }
+.zoombar button { min-width: 2em; }
+nav .badge { background: var(--warn); color: #111; border-radius: 9px; padding: 0 6px; font-size: 11px; margin-left: 6px; font-weight: 600; }
+.finding h3 { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.finding .why { margin: 4px 0 8px; }
+.finding .ids { display: flex; flex-direction: column; gap: 3px; }
 .legend { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 4px 14px 8px; color: var(--muted); font-size: 12px; }
 .legend svg { vertical-align: middle; display: inline-block; }
 .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line); vertical-align: middle; margin-right: 3px; }
@@ -121,6 +129,7 @@ table.list td, table.list th { text-align: left; padding: 3px 6px; border-bottom
     <button data-tab="refs">Refs</button>
     <button data-tab="search">Search</button>
     <button data-tab="gc">GC</button>
+    <button data-tab="check">Check<span class="badge" id="check-badge" hidden>0</span></button>
     <button data-tab="health">Health</button>
   </nav>
   <span id="status">loading</span>
@@ -135,6 +144,7 @@ table.list td, table.list th { text-align: left; padding: 3px 6px; border-bottom
       <label title="How many of the newest heads to start from">heads <input id="w-limit" type="number" min="1" max="100000" value="200"></label>
       <label><input id="w-all" type="checkbox"> show all</label>
       <span id="w-focus"></span>
+      <span class="zoombar" data-for="graph-canvas"><button type="button" data-zoom="out" title="Zoom out">−</button><button type="button" data-zoom="in" title="Zoom in">+</button><button type="button" data-zoom="fit" title="Fit the drawing to the window">Fit</button><button type="button" data-zoom="one" title="Natural size">100%</button><span class="muted" data-zoom-label></span></span>
     </div>
     <div class="notice" id="graph-notice"></div>
     <div class="legend" id="legend"></div>
@@ -159,10 +169,21 @@ table.list td, table.list th { text-align: left; padding: 3px 6px; border-bottom
     <div class="toolbar" id="gc-summary"></div>
     <div class="notice" id="gc-notice"></div>
     <div class="legend" id="gc-legend"></div>
+    <div class="toolbar"><span class="zoombar" data-for="gc-canvas"><button type="button" data-zoom="out" title="Zoom out">−</button><button type="button" data-zoom="in" title="Zoom in">+</button><button type="button" data-zoom="fit" title="Fit the drawing to the window">Fit</button><button type="button" data-zoom="one" title="Natural size">100%</button><span class="muted" data-zoom-label></span></span></div>
     <div class="split">
       <div class="canvas" id="gc-canvas"></div>
       <div class="grid2" id="gc-lists"></div>
     </div>
+  </section>
+  <section class="view" id="view-check" hidden>
+    <div class="toolbar">
+      <label>kind <select id="c-kind"></select></label>
+      <label>level <select id="c-level"></select></label>
+      <button id="c-run" type="button">Check again</button>
+      <span class="muted" id="c-note"></span>
+    </div>
+    <div class="notice" id="c-summary"></div>
+    <div class="grid2" id="check-list"></div>
   </section>
   <section class="view" id="view-health" hidden>
     <div class="toolbar"><button id="h-run" type="button">Run verify again</button><span class="muted" id="h-note"></span></div>
@@ -818,7 +839,28 @@ const Akyuu = (function () {
     return d;
   }
 
-  const pure = { shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, planRoutes, routeEdges, roundedPath, NODE_W, NODE_H, ROW_H, COL_GAP, TRACK, TOP, LEFT };
+  // The smallest scale of the drawing. Below it the text cannot be read, so the
+  // page does not shrink further: a big graph scrolls.
+  const MIN_SCALE = 0.4, MAX_SCALE = 2;
+  // Below this scale the page hides the text of the nodes and keeps the boxes,
+  // the colours, the tags and the edges: an overview of the shape.
+  const OVERVIEW_BELOW = 0.55;
+
+  // The scale that fits a drawing of w by h in a canvas of cw by ch. A drawing
+  // that is smaller than the canvas is not enlarged. The result is never
+  // below min. A canvas with no size (not shown yet) gives 1.
+  function fitScale(w, h, cw, ch, min) {
+    if (!(w > 0 && h > 0 && cw > 0 && ch > 0)) return 1;
+    return Math.max(min, Math.min(cw / w, ch / h, 1));
+  }
+
+  // The scroll position after a change of scale, so that the point of the
+  // drawing under p (a distance from the edge of the canvas) stays under p.
+  function anchorScroll(scroll, oldScale, newScale, p) {
+    return Math.max(0, ((scroll + p) / oldScale) * newScale - p);
+  }
+
+  const pure = { fitScale, anchorScroll, MIN_SCALE, MAX_SCALE, OVERVIEW_BELOW, shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, planRoutes, routeEdges, roundedPath, NODE_W, NODE_H, ROW_H, COL_GAP, TRACK, TOP, LEFT };
   if (typeof document === 'undefined') return pure;
 
   // ---------------------------------------------------------------------
@@ -934,6 +976,9 @@ const Akyuu = (function () {
     hits: new Set(),
     lastSearch: null,
     verifyFingerprint: null,
+    check: null,
+    checkError: null,
+    checkFilter: { kind: '', level: '' },
   };
 
   const $ = (id) => document.getElementById(id);
@@ -987,7 +1032,7 @@ const Akyuu = (function () {
     const routed = routeEdges(graph, lay, geo, plan);
     const rowY = routed.rowY;
     const height = routed.height + 30;
-    const root = svg('svg', { class: 'graph', width: width, height: height, viewBox: '0 0 ' + width + ' ' + height });
+    const root = svg('svg', { class: 'graph', width: width, height: height, viewBox: '0 0 ' + width + ' ' + height, 'data-overview': '0' });
     const defs = svg('defs');
     for (const k of Object.keys(EDGE_VAR)) {
       const m = svg('marker', { id: 'arrow-' + k, viewBox: '0 0 10 10', refX: '10', refY: '5', markerUnits: 'userSpaceOnUse', markerWidth: '9', markerHeight: '9', orient: 'auto' });
@@ -1101,12 +1146,111 @@ const Akyuu = (function () {
     }
     light(state.selected);
     container.appendChild(root);
+    // The scale: fitted to the canvas, or the one that the person chose.
+    const view = viewOf(container);
+    view.natural = { w: width, h: height };
+    view.root = root;
+    const fit = fitScale(width, height, container.clientWidth, container.clientHeight, MIN_SCALE);
+    applyScale(container, view.mode === 'fit' ? fit : view.scale, null);
     if (opts.scrollTo && lay.pos.has(opts.scrollTo)) {
       const p = xy(opts.scrollTo);
-      container.scrollTo({ left: Math.max(0, p.x - 80), top: Math.max(0, p.y - 120) });
+      container.scrollTo({ left: Math.max(0, p.x * view.scale - 80), top: Math.max(0, p.y * view.scale - 120) });
+    } else if (view.mode === 'fit') {
+      container.scrollLeft = 0;
+      container.scrollTop = 0;
     } else {
       container.scrollLeft = keep.left;
       container.scrollTop = keep.top;
+    }
+    return { scale: view.scale, tooBig: width * view.scale > container.clientWidth + 1 || height * view.scale > container.clientHeight + 1 };
+  }
+
+  // ---- zoom ------------------------------------------------------------------
+
+  // The view of each canvas: fitted to it, or at a scale that the person chose.
+  const views = new Map();
+  function viewOf(c) {
+    let v = views.get(c);
+    if (!v) { v = { mode: 'fit', scale: 1, natural: null, root: null }; views.set(c, v); }
+    return v;
+  }
+  function zoomLabel(c) {
+    const v = viewOf(c);
+    for (const bar of document.querySelectorAll('.zoombar')) {
+      if (bar.dataset.for !== c.id) continue;
+      const lab = bar.querySelector('[data-zoom-label]');
+      if (lab) lab.textContent = Math.round(v.scale * 100) + '%' + (v.scale < OVERVIEW_BELOW ? ' · overview' : '');
+    }
+  }
+  // Set the scale of the drawing. The drawing keeps its natural viewBox, so
+  // the layout and the routes do not change. The point anchor (from the
+  // corner of the canvas) stays where it is, if one is given.
+  function applyScale(c, scale, anchor) {
+    const v = viewOf(c);
+    if (!v.natural || !v.root) return;
+    const old = v.scale;
+    v.scale = scale;
+    v.root.setAttribute('width', String(Math.round(v.natural.w * scale)));
+    v.root.setAttribute('height', String(Math.round(v.natural.h * scale)));
+    v.root.setAttribute('data-overview', scale < OVERVIEW_BELOW ? '1' : '0');
+    if (anchor) {
+      c.scrollLeft = anchorScroll(c.scrollLeft, old, scale, anchor.x);
+      c.scrollTop = anchorScroll(c.scrollTop, old, scale, anchor.y);
+    }
+    zoomLabel(c);
+  }
+  function fitCanvas(c) {
+    const v = viewOf(c);
+    v.mode = 'fit';
+    if (!v.natural) return;
+    applyScale(c, fitScale(v.natural.w, v.natural.h, c.clientWidth, c.clientHeight, MIN_SCALE), null);
+    c.scrollLeft = 0;
+    c.scrollTop = 0;
+  }
+  function zoomTo(c, scale, anchor) {
+    const v = viewOf(c);
+    v.mode = 'manual';
+    applyScale(c, Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale)), anchor || { x: (c.clientWidth || 0) / 2, y: (c.clientHeight || 0) / 2 });
+  }
+  function bindZoom(c) {
+    for (const bar of document.querySelectorAll('.zoombar')) {
+      if (bar.dataset.for !== c.id) continue;
+      for (const b of bar.querySelectorAll('[data-zoom]')) {
+        b.addEventListener('click', () => {
+          const v = viewOf(c);
+          const how = b.dataset.zoom;
+          if (how === 'fit') fitCanvas(c);
+          else if (how === 'one') zoomTo(c, 1);
+          else zoomTo(c, v.scale * (how === 'in' ? 1.25 : 0.8));
+        });
+      }
+    }
+    // ctrl or cmd and the wheel zoom around the pointer. A plain wheel scrolls.
+    c.addEventListener('wheel', (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const r = c.getBoundingClientRect ? c.getBoundingClientRect() : { left: 0, top: 0 };
+      zoomTo(c, viewOf(c).scale * Math.exp(-e.deltaY * 0.0015), { x: e.clientX - r.left, y: e.clientY - r.top });
+    }, { passive: false });
+    // Drag on an empty place to pan. A click on a node still selects it.
+    let drag = null;
+    c.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || (e.target && e.target.closest && e.target.closest('.node'))) return;
+      drag = { x: e.clientX, y: e.clientY, left: c.scrollLeft, top: c.scrollTop };
+      c.classList.add('panning');
+    });
+    c.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      c.scrollLeft = drag.left - (e.clientX - drag.x);
+      c.scrollTop = drag.top - (e.clientY - drag.y);
+    });
+    const stop = () => { drag = null; c.classList.remove('panning'); };
+    c.addEventListener('pointerup', stop);
+    c.addEventListener('pointercancel', stop);
+    c.addEventListener('pointerleave', stop);
+    // A new size of the canvas (the side panel opens) fits the drawing again.
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(() => { if (viewOf(c).mode === 'fit') fitCanvas(c); }).observe(c);
     }
   }
 
@@ -1166,7 +1310,10 @@ const Akyuu = (function () {
     const dim = (n) => (state.filter.kind && n.kind !== state.filter.kind) ||
       (state.filter.agent && n.agent !== state.filter.agent) || (chain && !chain.has(n.id));
     const anyFilter = state.filter.kind || state.filter.agent || state.filter.ref;
-    drawGraph($('graph-canvas'), g, { marks: refMarks(), seeds: g.seeds, halo: state.hits, dim: anyFilter ? dim : null, scrollTo: scrollTo });
+    const drawn = drawGraph($('graph-canvas'), g, { marks: refMarks(), seeds: g.seeds, halo: state.hits, dim: anyFilter ? dim : null, scrollTo: scrollTo });
+    if (drawn && drawn.tooBig && drawn.scale <= MIN_SCALE + 1e-9 && viewOf($('graph-canvas')).mode === 'fit') {
+      notice.textContent += ' The drawing is bigger than the window at the smallest scale (' + Math.round(MIN_SCALE * 100) + '%). Scroll, or use fewer heads or hops, or focus on a node.';
+    }
     legend($('legend'), g, state.hits.size ? [el('span', {}, [el('span', { class: 'swatch', style: 'background: var(--hit)' }), 'search hit'])] : []);
   }
 
@@ -1443,30 +1590,69 @@ const Akyuu = (function () {
     box.appendChild(list('Pruned edge targets (this is normal)', v.pruned, ids, 'None.', false));
     box.appendChild(list('Bad refs', v.badRefs, (x) => [x.name + ': ' + x.why], 'None.', true));
     box.appendChild(list('Refs to a missing object', v.refsToMissing, (x) => [x.name + ' → ', idLink(x.id)], 'None.', true));
-    await loadCheck(box, list);
   }
 
-  // The findings of the check: stale links, forks, duplicates and the rest.
-  async function loadCheck(box, list) {
-    let c;
-    try { c = await state.src.check(); } catch (e) { box.appendChild(el('div', { class: 'card' }, [el('h3', { text: 'Check' }), el('p', { class: 'muted', text: e.message })])); return; }
+  // ---- check -----------------------------------------------------------------------
+
+  const LEVELS = ['problem', 'suggestion', 'info'];
+  const LEVEL_TITLE = { problem: 'Problem', suggestion: 'Suggestion', info: 'Information' };
+
+  // Fetch the report of the check and show the count on the tab. The check
+  // reads every body, so the page asks for it only when the store changed.
+  async function loadCheck() {
+    try { state.check = await state.src.check(); state.checkError = null; }
+    catch (e) { state.check = null; state.checkError = e.message; }
+    const badge = $('check-badge');
+    const problems = state.check ? state.check.findings.filter(f => f.severity === 'problem').length : 0;
+    badge.textContent = String(problems);
+    badge.hidden = problems === 0;
+    renderCheck();
+  }
+
+  function renderCheck() {
+    const box = $('check-list');
+    const summary = $('c-summary');
+    box.replaceChildren();
+    summary.replaceChildren();
+    if (!state.check) {
+      summary.textContent = state.checkError || 'No report yet.';
+      return;
+    }
+    const c = state.check;
     const names = c.refs || {};
-    const withName = (id) => [idLink(id), names[id] ? el('span', { class: 'muted', text: ' ' + names[id].join(', ') }) : ''];
-    const groups = [['problem', 'Check: problems', true], ['suggestion', 'Check: suggestions', false], ['info', 'Check: information', false]];
-    for (const [sev, title, bad] of groups) {
-      const fs = c.findings.filter(f => f.severity === sev);
-      box.appendChild(list(title, fs, (f) => {
-        const out = [el('span', { class: 'pill', text: f.kind }), ' ' + f.why, el('br', {})];
-        f.ids.forEach((id, n) => { if (n) out.push(' '); out.push(...withName(id)); });
-        if (f.related.length) { out.push(el('br', {}), 'read: '); f.related.forEach((id, n) => { if (n) out.push(' '); out.push(...withName(id)); }); }
-        return out;
-      }, 'None.', bad));
+    const kinds = Array.from(new Set(c.findings.map(f => f.kind))).sort();
+    fillSelect($('c-kind'), kinds, state.checkFilter.kind);
+    fillSelect($('c-level'), LEVELS, state.checkFilter.level);
+    const count = (sev) => c.findings.filter(f => f.severity === sev).length;
+    if (!c.findings.length) {
+      summary.appendChild(el('span', { class: 'pill good', text: 'all clear' }));
+      summary.appendChild(document.createTextNode(' Nothing needs attention. The check looks for stale links, forks, duplicates and memories that nothing keeps.'));
+    } else {
+      summary.textContent = count('problem') + ' problems, ' + count('suggestion') + ' suggestions, ' + count('info') + ' notes.';
+    }
+    $('c-note').textContent = state.src.live ? ' The check reads the store and changes nothing.' : ' From the export.';
+    const shown = c.findings.filter(f => (!state.checkFilter.kind || f.kind === state.checkFilter.kind) &&
+      (!state.checkFilter.level || f.severity === state.checkFilter.level));
+    if (c.findings.length && !shown.length) {
+      box.appendChild(el('p', { class: 'pad muted', text: 'No finding matches the filter.' }));
+      return;
+    }
+    const withName = (id) => el('span', {}, [idLink(id), names[id] ? el('span', { class: 'muted', text: ' ' + names[id].join(', ') }) : '']);
+    for (const sev of LEVELS) {
+      for (const f of shown.filter(x => x.severity === sev)) {
+        const card = el('div', { class: 'card finding' }, [
+          el('h3', {}, [el('span', { class: 'pill ' + (sev === 'problem' ? 'bad' : ''), text: LEVEL_TITLE[sev] }), el('span', { class: 'pill', text: f.kind })]),
+          el('p', { class: 'why', text: f.why }),
+          el('div', { class: 'ids' }, f.ids.map(withName))]);
+        if (f.related.length) card.appendChild(el('div', { class: 'ids' }, [el('span', { class: 'muted', text: 'read instead:' })].concat(f.related.map(withName))));
+        box.appendChild(card);
+      }
     }
   }
 
   // ---- tabs, polling, start ------------------------------------------------------------
 
-  const TABS = ['graph', 'refs', 'search', 'gc', 'health'];
+  const TABS = ['graph', 'refs', 'search', 'gc', 'check', 'health'];
 
   function switchTab(tab) {
     state.tab = tab;
@@ -1475,6 +1661,7 @@ const Akyuu = (function () {
     if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab);
     if (tab === 'gc') loadGC();
     if (tab === 'health' && state.verifyFingerprint === null) loadHealth();
+    if (tab === 'check') renderCheck();
     if (tab === 'search') searchNotice();
     if (tab === 'refs') renderRefs();
     if (tab === 'graph') renderGraph();
@@ -1488,6 +1675,7 @@ const Akyuu = (function () {
   async function refreshAll() {
     try { state.refs = await state.src.refs(); } catch (e) { state.refs = { kept: 0, refs: [] }; }
     await loadGraph();
+    await loadCheck();
     if (state.tab === 'refs') renderRefs();
     if (state.tab === 'gc') await loadGC();
     if (state.tab === 'search') searchNotice();
@@ -1535,6 +1723,11 @@ const Akyuu = (function () {
       else if (first) renderGraph(first.id);
     });
     $('h-run').addEventListener('click', loadHealth);
+    $('c-run').addEventListener('click', loadCheck);
+    $('c-kind').addEventListener('change', (e) => { state.checkFilter.kind = e.target.value; renderCheck(); });
+    $('c-level').addEventListener('change', (e) => { state.checkFilter.level = e.target.value; renderCheck(); });
+    bindZoom($('graph-canvas'));
+    bindZoom($('gc-canvas'));
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
     const start = (location.hash || '#graph').slice(1);
     const first = TABS.indexOf(start) >= 0 ? start : 'graph';

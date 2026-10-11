@@ -123,6 +123,19 @@ if (vizPath) {
   }
 }
 
+// The scale of the drawing: it fits the canvas, is never enlarged, and never goes below the floor.
+{
+  const eq = (a, b, what) => { if (Math.abs(a - b) > 1e-9) { console.log('fitScale/anchorScroll wrong: ' + what + ': ' + a + ' vs ' + b); problems++; } };
+  eq(A.fitScale(500, 300, 1000, 600, 0.4), 1, 'a small drawing is not enlarged');
+  eq(A.fitScale(2000, 600, 1000, 600, 0.4), 0.5, 'a wide drawing fits the width');
+  eq(A.fitScale(1000, 1500, 1000, 600, 0.4), 0.4, 'a tall drawing fits the height');
+  eq(A.fitScale(8000, 600, 1000, 600, 0.4), 0.4, 'a very wide drawing stops at the floor');
+  eq(A.fitScale(800, 600, 0, 0, 0.4), 1, 'a canvas with no size gives 1');
+  eq(A.anchorScroll(100, 1, 2, 50), 250, 'the point under the pointer stays');
+  eq(A.anchorScroll(0, 1, 0.5, 100), 0, 'the scroll is never negative');
+  eq(A.MIN_SCALE, 0.4, 'the floor');
+  console.log('fitScale and anchorScroll: ok');
+}
 // ---- the whole page in a small fake DOM ----------------------------------------
 function makeDom() {
   const all = [];
@@ -139,6 +152,15 @@ function makeDom() {
     addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
     fire(t, ev) { for (const f of this.listeners[t] || []) f(Object.assign({ preventDefault() {}, target: this }, ev || {})); }
     scrollTo() {}
+    get classList() { const self = this; return { add: (c) => { self.attrs.class = ((self.attrs.class || '') + ' ' + c).trim(); }, remove: (c) => { self.attrs.class = (self.attrs.class || '').split(' ').filter(x => x !== c).join(' '); } }; }
+    getBoundingClientRect() { return { left: 0, top: 0 }; }
+    querySelector(q) { return this.querySelectorAll(q)[0] || null; }
+    querySelectorAll(q) {
+      const out = [];
+      const walk = (n) => { for (const c of n.children) { if (!c || !c.attrs) continue; if ((q === '[data-zoom]' && c.dataset.zoom) || (q === '[data-zoom-label]' && 'zoomLabel' in c.dataset)) out.push(c); walk(c); } };
+      walk(this);
+      return out;
+    }
   }
   class Text { constructor(t) { this.textContent = String(t); } }
   const byId = {};
@@ -150,18 +172,27 @@ function makeDom() {
     querySelectorAll: (q) => {
       if (q === '#tabs button') return tabs;
       if (q === '.view') return views;
+      if (q === '.zoombar') return bars;
       throw new Error('querySelectorAll ' + q);
     },
     addEventListener: () => {},
   };
   const ids = ['status', 'f-kind', 'f-agent', 'f-ref', 'w-hops', 'w-limit', 'w-all', 'w-focus', 'graph-notice', 'legend', 'graph-canvas',
     'refs-notice', 'refs-list', 'search-form', 's-q', 's-limit', 's-hops', 's-show', 'search-notice', 'search-results',
-    'gc-summary', 'gc-notice', 'gc-legend', 'gc-canvas', 'gc-lists', 'h-run', 'h-note', 'health', 'panel'];
+    'gc-summary', 'gc-notice', 'gc-legend', 'gc-canvas', 'gc-lists', 'h-run', 'h-note', 'health', 'panel',
+    'c-kind', 'c-level', 'c-run', 'c-note', 'c-summary', 'check-list', 'check-badge'];
   for (const id of ids) { const n = new Node('div'); n.setAttribute('id', id); byId[id] = n; }
   byId['s-limit'].value = '10'; byId['s-hops'].value = '1'; byId['w-hops'].value = '2'; byId['w-limit'].value = '200';
-  const tabs = ['graph', 'refs', 'search', 'gc', 'health'].map(t => { const b = new Node('button'); b.dataset.tab = t; return b; });
-  const views = ['graph', 'refs', 'search', 'gc', 'health'].map(t => { const v = new Node('section'); v.id = 'view-' + t; return v; });
-  return { document, all, byId, tabs, Node };
+  for (const id of ['graph-canvas', 'gc-canvas']) { byId[id].clientWidth = 1200; byId[id].clientHeight = 700; }
+  const bars = ['graph-canvas', 'gc-canvas'].map(id => {
+    const bar = new Node('span'); bar.setAttribute('data-for', id);
+    for (const z of ['out', 'in', 'fit', 'one']) { const b = new Node('button'); b.setAttribute('data-zoom', z); bar.appendChild(b); }
+    const lab = new Node('span'); lab.setAttribute('data-zoom-label', ''); bar.appendChild(lab);
+    return bar;
+  });
+  const tabs = ['graph', 'refs', 'search', 'gc', 'check', 'health'].map(t => { const b = new Node('button'); b.dataset.tab = t; return b; });
+  const views = ['graph', 'refs', 'search', 'gc', 'check', 'health'].map(t => { const v = new Node('section'); v.id = 'view-' + t; return v; });
+  return { document, all, byId, tabs, bars, Node };
 }
 
 async function runPage(html, label) {
@@ -226,7 +257,35 @@ async function runPage(html, label) {
   console.log('  search: ' + searchText);
   console.log('  health: ' + dom.byId['health'].textContent.slice(0, 160).replace(/\s+/g, ' '));
   const healthText = dom.byId['health'].textContent;
-  if (!healthText.includes('Check: problems') || !healthText.includes('Check: suggestions')) { console.log('  health has no check report'); errors.push('the health view lacks the check report'); }
+  if (healthText.includes('Check:')) { console.log('  health still has the check cards'); errors.push('the health view has check cards'); }
+  {
+    const summary = dom.byId['c-summary'].textContent;
+    console.log('  check: ' + summary.slice(0, 100).replace(/\s+/g, ' ') + ' · badge ' + (dom.byId['check-badge'].hidden ? 'hidden' : dom.byId['check-badge'].textContent));
+    if (!summary) errors.push('the check view has no summary');
+  }
+  {
+    // zoom: the drawing keeps its natural viewBox, and the scale is the size of the svg
+    const canvas = dom.byId['graph-canvas'];
+    const root = canvas.children.find(c => c.tagName === 'svg');
+    const bar = dom.bars[0];
+    const btn = (z) => bar.querySelectorAll('[data-zoom]').find(b => b.dataset.zoom === z);
+    const vb = root.attrs.viewBox.split(' ').map(Number);
+    const scale = () => Number(root.attrs.width) / vb[2];
+    const s0 = scale();
+    console.log('  zoom: natural ' + vb[2] + 'x' + vb[3] + ', fitted scale ' + s0.toFixed(2) + ', overview ' + root.attrs['data-overview']);
+    if (s0 < A.MIN_SCALE - 0.01 || s0 > 1.001) errors.push('the fitted scale is out of range: ' + s0);
+    if (Math.abs(Number(root.attrs.height) / vb[3] - s0) > 0.01) errors.push('the svg is not scaled in proportion');
+    btn('one').fire('click');
+    if (Math.abs(scale() - 1) > 0.01) errors.push('100% does not give scale 1');
+    btn('out').fire('click'); btn('out').fire('click'); btn('out').fire('click'); btn('out').fire('click');
+    if (scale() < A.MIN_SCALE - 0.01) errors.push('zoom out went below the floor');
+    if (scale() < A.OVERVIEW_BELOW && root.attrs['data-overview'] !== '1') errors.push('no overview mode below the threshold');
+    if (scale() >= A.OVERVIEW_BELOW && root.attrs['data-overview'] !== '0') errors.push('overview mode above the threshold');
+    btn('in').fire('click');
+    btn('fit').fire('click');
+    if (Math.abs(scale() - s0) > 0.01) errors.push('fit does not give the fitted scale again');
+    if (!bar.querySelector('[data-zoom-label]').textContent.includes('%')) errors.push('the zoom label has no percentage');
+  }
   console.log('  gc: ' + dom.byId['gc-summary'].textContent.replace(/\s+/g, ' '));
   console.log('  errors: ' + errors.length + (errors.length ? ' ' + errors.map(e => e && e.stack || e).join('\n') : ''));
   return errors.length;
