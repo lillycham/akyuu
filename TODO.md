@@ -348,7 +348,8 @@ Not done:
 - [x] Remove the commented-out `breakOn'` in `src/Akyuu/Memory.hs`. Removed, not used: `splitBody` and `splitHeader` need the rest of the text on a miss (`MalformedHeader` holds the whole line), so `Maybe` would add code.
 - [x] `Backward` in `WalkMode` (`src/Akyuu/Graph.hs`) is never built. Removed it: no test used it.
 - [x] `Graph` now has `Eq`, so `observe` in `test/GraphTests.hs` can become plain `===`.
-- [ ] Run `ormolu` over the whole tree so the style is the same everywhere.
+- [x] Run `ormolu` over the whole tree so the style is the same everywhere. Done with ormolu 0.8.0.2 (`nix develop -c ormolu --mode inplace $(git ls-files '*.hs')`).
+      Every file parsed. Run it again after an edit.
 - [x] Cache: `tryExisting` treats every `SQLError` as "not usable", and `openCache` then deletes the file.
       A busy or locked database (`ErrorBusy`, `ErrorLocked`) must not do that. Match only `ErrorNotADatabase` and `ErrorCorrupt`.
 - [x] Cache: set `PRAGMA busy_timeout` right after `open`, before `tryExisting` reads the version.
