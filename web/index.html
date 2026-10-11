@@ -427,8 +427,10 @@ const Akyuu = (function () {
   //
   // The tags sit to the right of their node. Each column is as wide as its
   // widest tags, so a tag never reaches the memories of the next column.
+  // After the tags comes the gutter of the column: COL_GAP of free space, and
+  // TRACK more for each track that the routing puts into it (`gutterTracks`).
   // This function is pure: the tests call it with no document.
-  function columnGeometry(graph, lay, marks) {
+  function columnGeometry(graph, lay, marks, gutterTracks) {
     const tagsOf = new Map();
     const colW = new Array(lay.columns).fill(NODE_W + COL_GAP);
     for (const n of graph.nodes) {
@@ -438,13 +440,308 @@ const Akyuu = (function () {
       const p = lay.pos.get(n.id);
       if (w > 0 && p) colW[p.col] = Math.max(colW[p.col], NODE_W + 6 + w + COL_GAP);
     }
-    const colX = [];
+    const colX = [], trackX0 = [];
     let acc = LEFT;
-    for (let c = 0; c < lay.columns; c++) { colX.push(acc); acc += colW[c]; }
-    return { colX: colX, width: acc + COL_GAP, tagsOf: tagsOf };
+    for (let c = 0; c < lay.columns; c++) {
+      colX.push(acc);
+      // The first track of the gutter: half of COL_GAP after the tags.
+      trackX0.push(acc + colW[c] - COL_GAP + COL_GAP / 2 + TRACK / 2);
+      acc += colW[c] + ((gutterTracks && gutterTracks[c]) || 0) * TRACK;
+    }
+    return { colX: colX, trackX0: trackX0, width: acc + COL_GAP, tagsOf: tagsOf };
   }
 
-  const pure = { shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, NODE_W, COL_GAP };
+  // ---- edge routing -------------------------------------------------------
+  //
+  // Circuit-diagram style: an edge is a chain of horizontal and vertical
+  // runs. It never crosses a node box or a ref tag, because it only uses
+  //
+  // - the GAP between two rows (horizontal runs), and
+  // - the GUTTER to the right of a column (vertical runs).
+  //
+  // Short edges: a clear edge inside one column is a straight line. An edge to
+  // the next row is a "Z" in the one gap between the rows. Every other edge
+  // leaves the bottom of its source into the gap below the row, runs to a
+  // gutter, goes down the gutter, comes back in the gap above the target's
+  // row, and goes down into the top of the target. The gutter is the one next
+  // to the target column, so the long run is in the gap of the source, where
+  // the edges of one node fan out in order.
+  //
+  // Room: each gutter and each gap has TRACKs, and the geometry grows by
+  // TRACK for each track that is used. The work goes in four steps:
+  //
+  // 1. planRoutes: the kind of each edge, and the track of each gutter run.
+  //    Edges whose rows (gaps) do not overlap share a track, so a gutter is
+  //    as wide as its most crowded row.
+  // 2. columnGeometry: the x positions, which now know the width of gutters.
+  // 3. routeEdges: ports, then the tracks of the gaps, then the row y
+  //    positions (they grow with the tracks), then the points.
+  //
+  // The ports of one node side are sorted by the x of the place where the
+  // edge goes (the gutter or the other node). Then the edges of one node do
+  // not cross each other.
+  const TRACK = 6;                 // distance between two tracks
+  const GAP_PAD = 12;              // free space above the first track and below the last
+  const ROW_GAP = ROW_H - NODE_H;  // a row gap with no track, or with one track
+  const CORNER = 6;                // radius of the rounded corners
+  const PORT_MAX = 12, PORT_PAD = 12, PIN_STEP = 6;
+  const KIND_RANK = { supersedes: 0, about: 1, 'derived-from': 2, refines: 3 };
+  const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+  function planRoutes(graph, lay) {
+    const colRows = [];
+    for (let c = 0; c < lay.columns; c++) colRows.push([]);
+    for (const p of lay.pos.values()) colRows[p.col].push(p.row);
+    for (const rows of colRows) rows.sort((x, y) => x - y);
+    // True when the column has no node in a row strictly between r0 and r1.
+    const clear = (col, r0, r1) => {
+      const rows = colRows[col];
+      let lo = 0, hi = rows.length;
+      while (lo < hi) { const m = (lo + hi) >> 1; if (rows[m] <= r0) lo = m + 1; else hi = m; }
+      return lo >= rows.length || rows[lo] >= r1;
+    };
+    const items = [], seen = new Map();
+    for (const e of graph.edges) {
+      const a = lay.pos.get(e.src), b = lay.pos.get(e.dst);
+      if (!a || !b || e.src === e.dst) continue;
+      let key = e.src + ' ' + e.kind + ' ' + e.dst;
+      const n = seen.get(key) || 0;
+      seen.set(key, n + 1);
+      if (n) key += ' #' + n;
+      const it = { key: key, edge: e, a: a.col, b: b.col, rs: a.row, rt: b.row, type: 'gutter', gutter: -1, track: -1 };
+      if (it.rt <= it.rs) it.type = 'odd';            // cannot happen: every edge points down
+      else if (it.a === it.b && clear(it.a, it.rs, it.rt)) it.type = 'straight';
+      else if (it.rt === it.rs + 1) it.type = 'z';
+      else it.gutter = it.a < it.b ? it.b - 1 : it.b;  // next to the target, on the side of the source
+      items.push(it);
+    }
+    // Choose the gutter of each long edge. The default is next to the
+    // target, but many edges can end at a few old nodes, and then one gutter
+    // would hold hundreds of tracks. So an edge may use another gutter
+    // within REACH columns of it, if that one is less busy over the rows of
+    // the edge. Long edges go first, because they are the hard ones.
+    const REACH = 1;   // how many columns away from the default an edge may go
+    const load = new Array(lay.columns).fill(null);
+    const loadOf = (c) => load[c] || (load[c] = new Int32Array(Math.max(lay.rows, 1)));
+    const long = items.filter(it => it.type === 'gutter')
+      .sort((x, y) => (y.rt - y.rs) - (x.rt - x.rs) || cmpStr(x.key, y.key));
+    for (const it of long) {
+      const c0 = it.gutter;
+      let best = c0, bestCost = Infinity;
+      for (let d = 0; d <= REACH; d++) {
+        for (const c of d === 0 ? [c0] : [c0 - d, c0 + d]) {
+          if (c < 0 || c >= lay.columns) continue;
+          const l = loadOf(c);
+          let m = 0;
+          for (let g = it.rs; g < it.rt; g++) if (l[g] > m) m = l[g];
+          // A far gutter makes the runs in the gaps longer, and they cross
+          // more lines. So move only to relieve a much busier gutter.
+          const cost = m + 10 * d;
+          if (cost < bestCost) { bestCost = cost; best = c; }
+        }
+      }
+      it.gutter = best;
+      const l = loadOf(best);
+      for (let g = it.rs; g < it.rt; g++) l[g]++;
+    }
+    // The tracks of each gutter. A run covers the gaps from the row of the
+    // source to the row above the target. The order of the tracks comes from
+    // assignLanes, with the crossings that two runs would make.
+    const byGutter = new Map();
+    for (const it of items) {
+      if (it.type !== 'gutter') continue;
+      if (!byGutter.has(it.gutter)) byGutter.set(it.gutter, []);
+      byGutter.get(it.gutter).push(it);
+    }
+    const gutterTracks = new Array(lay.columns).fill(0);
+    for (const [c, list] of byGutter) {
+      // A run lies on the left of the gutter when its node is in a column up to c.
+      const nets = list.map(it => ({ it: it, part: 0, lo: it.rs, hi: it.rt - 1, topL: it.a <= c, botL: it.b <= c }));
+      const active = (n, g) => n.lo <= g && g <= n.hi;
+      // A run from the left crosses the tracks on its left, a run from the
+      // right the tracks on its right, where they are active in its gap.
+      const cost = (i, j) => // i is left of j
+        (!i.topL && active(j, i.lo) ? 1 : 0) + (!i.botL && active(j, i.hi) ? 1 : 0) +
+        (j.topL && active(i, j.lo) ? 1 : 0) + (j.botL && active(i, j.hi) ? 1 : 0);
+      gutterTracks[c] = assignLanes(nets, 0, (p, q) => [cost(p, q), cost(q, p)]);
+      for (const n of nets) n.it.track = n.track;
+    }
+    return { items: items, gutterTracks: gutterTracks };
+  }
+
+  // Put runs in lanes. A run is an interval [lo, hi] of nets (x in a gap,
+  // gaps in a gutter). Two runs that are closer than `margin` need two lanes.
+  // `pairCost(A, B)` gives [the crossings if A comes first, if B comes first].
+  // Lane 0 is the top (or the left). A run that has to come first goes in a
+  // lane after every run that has to come before it, and then in the first
+  // lane with free room. Returns the number of lanes. Each net gets `.track`.
+  function assignLanes(nets, margin, pairCost) {
+    const n = nets.length;
+    if (!n) return 0;
+    nets.sort((p, q) => p.lo - q.lo || p.hi - q.hi || cmpStr(p.it.key, q.it.key) || p.part - q.part);
+    const preds = nets.map(() => []), after = nets.map(() => []), open = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      const A = nets[i];
+      for (let j = i + 1; j < n && nets[j].lo <= A.hi + margin; j++) {
+        const c = pairCost(A, nets[j]);
+        if (c[0] < c[1]) { after[i].push(j); preds[j].push(i); open[j]++; }
+        else if (c[1] < c[0]) { after[j].push(i); preds[i].push(j); open[i]++; }
+      }
+    }
+    // First the runs that nothing has to come before. On a cycle take the
+    // run with the fewest open predecessors.
+    const done = new Array(n).fill(false), order = [];
+    for (let s = 0; s < n; s++) {
+      let best = -1;
+      for (let i = 0; i < n; i++) if (!done[i] && (best < 0 || open[i] < open[best])) best = i;
+      done[best] = true;
+      order.push(best);
+      for (const j of after[best]) open[j]--;
+    }
+    const lanes = [], laneOf = new Array(n).fill(-1);
+    for (const i of order) {
+      const t = nets[i];
+      let k = 0;
+      for (const p of preds[i]) if (laneOf[p] >= 0) k = Math.max(k, laneOf[p] + 1);
+      for (;; k++) {
+        if (!lanes[k]) lanes[k] = [];
+        if (lanes[k].every(o => o.lo > t.hi + margin || t.lo > o.hi + margin)) break;
+      }
+      lanes[k].push(t);
+      laneOf[i] = k;
+      t.track = k;
+    }
+    return lanes.length;
+  }
+
+  // The tracks of one gap. A net is one horizontal run: it comes down from
+  // the node above (or from a gutter) at x `u`, runs along its track, and goes
+  // down to the node below (or into a gutter) at x `d`. When two runs overlap,
+  // the cheaper one goes on top: a net on top crosses the `d` leg of the other
+  // net if that leg is in its run, and the other net crosses the `u` leg of
+  // the net on top. One more rule is hard: when the `u` of A has the same x as
+  // the `d` of B, A must be on top, or the two legs would lie on one line.
+  function assignTracks(nets) {
+    for (const t of nets) { t.lo = Math.min(t.u, t.d); t.hi = Math.max(t.u, t.d); }
+    const inside = (x, t) => x >= t.lo - 0.5 && x <= t.hi + 0.5;
+    return assignLanes(nets, TRACK, (A, B) => {
+      let aTop = (inside(B.u, A) ? 1 : 0) + (inside(A.d, B) ? 1 : 0);
+      let bTop = (inside(A.u, B) ? 1 : 0) + (inside(B.d, A) ? 1 : 0);
+      if (Math.abs(A.u - B.d) < 0.5) bTop += 1000;
+      if (Math.abs(B.u - A.d) < 0.5) aTop += 1000;
+      return [aTop, bTop];
+    });
+  }
+
+  // Give each edge its route: a list of points {x, y}. `geo` comes from
+  // columnGeometry with the gutterTracks of `plan`. The result has the y
+  // position of each row (`rowY`), which grows when a gap needs more tracks.
+  function routeEdges(graph, lay, geo, plan) {
+    plan = plan || planRoutes(graph, lay);
+    const items = plan.items;
+    const cx = (col) => geo.colX[col] + NODE_W / 2;
+    const gutX = (it) => geo.trackX0[it.gutter] + it.track * TRACK;
+    // 1. Ports. Each end of an edge has a key: the x of the place where the
+    //    edge goes. Sorted by it, the edges of one node side do not cross.
+    const bottoms = new Map(), tops = new Map();
+    const add = (m, id, o) => { if (!m.has(id)) m.set(id, []); m.get(id).push(o); };
+    for (const it of items) {
+      let ks = 0, kt = 0;
+      if (it.type === 'gutter') ks = kt = gutX(it);
+      else { ks = cx(it.b); kt = cx(it.a); }
+      add(bottoms, it.edge.src, { it: it, key: ks });
+      add(tops, it.edge.dst, { it: it, key: kt });
+    }
+    const byKind = (p, q) => ((KIND_RANK[p.it.edge.kind] || 9) - (KIND_RANK[q.it.edge.kind] || 9)) || cmpStr(p.it.key, q.it.key);
+    // A straight edge needs the same x at both ends, so these ports are
+    // pinned to the middle of the box. The other ports are spread: one block
+    // that is centred, or (with pinned ports) a block on each side.
+    const place = (list, centre, set) => {
+      const pinned = list.filter(o => o.it.type === 'straight').sort(byKind);
+      const rest = list.filter(o => o.it.type !== 'straight').sort((p, q) => p.key - q.key || byKind(p, q));
+      const k = pinned.length, H = NODE_W / 2 - PORT_PAD;
+      pinned.forEach((o, i) => set(o.it, centre + (i - (k - 1) / 2) * PIN_STEP));
+      if (!k) {
+        const m = rest.length;
+        const s = Math.min(PORT_MAX, m > 1 ? 2 * H / (m - 1) : PORT_MAX);
+        rest.forEach((o, i) => set(o.it, centre + (i - (m - 1) / 2) * s));
+      } else {
+        const left = rest.filter(o => o.key < centre), right = rest.filter(o => o.key >= centre);
+        const half = (k - 1) / 2 * PIN_STEP;
+        const s = Math.max(2, Math.min(PORT_MAX, (H - half) / Math.max(left.length, right.length, 1)));
+        left.forEach((o, j) => set(o.it, centre - half - (left.length - j) * s));
+        right.forEach((o, j) => set(o.it, centre + half + (j + 1) * s));
+      }
+    };
+    for (const [id, list] of bottoms) place(list, cx(lay.pos.get(id).col), (it, x) => { it.sx = x; });
+    for (const [id, list] of tops) place(list, cx(lay.pos.get(id).col), (it, x) => { it.tx = x; });
+    // 2. The tracks of the gaps. Gap g lies below row g.
+    const gapNets = new Map();
+    const addNet = (g, net) => { if (!gapNets.has(g)) gapNets.set(g, []); gapNets.get(g).push(net); };
+    for (const it of items) {
+      if (it.type === 'z') { it.n1 = { it: it, part: 0, u: it.sx, d: it.tx }; addNet(it.rs, it.n1); }
+      else if (it.type === 'gutter') {
+        it.n1 = { it: it, part: 0, u: it.sx, d: gutX(it) }; addNet(it.rs, it.n1);
+        it.n2 = { it: it, part: 1, u: gutX(it), d: it.tx }; addNet(it.rt - 1, it.n2);
+      }
+    }
+    const gapTracks = new Array(Math.max(lay.rows - 1, 0)).fill(0);
+    for (const [g, nets] of gapNets) gapTracks[g] = assignTracks(nets);
+    // 3. The rows. A gap is ROW_GAP high, and TRACK more for each track after the first.
+    const rowY = [TOP];
+    for (let r = 0; r + 1 < lay.rows; r++) rowY.push(rowY[r] + NODE_H + ROW_GAP + Math.max(0, gapTracks[r] - 1) * TRACK);
+    const trackY = (g, k) => rowY[g] + NODE_H + GAP_PAD + k * TRACK;
+    // 4. The points.
+    const routes = new Map();
+    for (const it of items) {
+      const y0 = rowY[it.rs] + NODE_H, y1 = rowY[it.rt];
+      let pts;
+      if (it.type === 'z') {
+        const y = trackY(it.rs, it.n1.track);
+        pts = [{ x: it.sx, y: y0 }, { x: it.sx, y: y }, { x: it.tx, y: y }, { x: it.tx, y: y1 }];
+      } else if (it.type === 'gutter') {
+        const gx = gutX(it), ya = trackY(it.rs, it.n1.track), yb = trackY(it.rt - 1, it.n2.track);
+        pts = [{ x: it.sx, y: y0 }, { x: it.sx, y: ya }, { x: gx, y: ya }, { x: gx, y: yb }, { x: it.tx, y: yb }, { x: it.tx, y: y1 }];
+      } else pts = [{ x: it.sx, y: y0 }, { x: it.tx, y: y1 }];
+      routes.set(it.key, { key: it.key, edge: it.edge, kind: it.edge.kind, type: it.type, points: pts });
+    }
+    const last = lay.rows ? rowY[lay.rows - 1] + NODE_H : TOP;
+    return { routes: routes, rowY: rowY, gapTracks: gapTracks, gutterTracks: plan.gutterTracks, height: last };
+  }
+
+  // The SVG path of a route, with rounded corners. At each corner the path
+  // stops `r` before it and bends with a quadratic curve to `r` after it.
+  // A short run gives less than `r`, so two corners never overlap.
+  function roundedPath(points, r) {
+    const p = [];
+    for (const q of points) { const l = p[p.length - 1]; if (!l || l.x !== q.x || l.y !== q.y) p.push(q); }
+    // Drop a point that lies on a straight run.
+    const v = [];
+    p.forEach((q, i) => {
+      if (i > 0 && i < p.length - 1) {
+        const a = p[i - 1], b = p[i + 1];
+        if ((a.x === q.x && q.x === b.x) || (a.y === q.y && q.y === b.y)) return;
+      }
+      v.push(q);
+    });
+    const f = (n) => String(Math.round(n * 10) / 10);
+    const pt = (q) => f(q.x) + ',' + f(q.y);
+    if (!v.length) return '';
+    let d = 'M' + pt(v[0]);
+    for (let i = 1; i < v.length - 1; i++) {
+      const a = v[i - 1], c = v[i], b = v[i + 1];
+      const lin = Math.abs(c.x - a.x) + Math.abs(c.y - a.y), lout = Math.abs(b.x - c.x) + Math.abs(b.y - c.y);
+      const rr = Math.min(r, lin / 2, lout / 2);
+      const sgn = (n) => (n > 0 ? 1 : n < 0 ? -1 : 0);
+      const p1 = { x: c.x - sgn(c.x - a.x) * rr, y: c.y - sgn(c.y - a.y) * rr };
+      const p2 = { x: c.x + sgn(b.x - c.x) * rr, y: c.y + sgn(b.y - c.y) * rr };
+      d += ' L' + pt(p1) + ' Q' + pt(c) + ' ' + pt(p2);
+    }
+    if (v.length > 1) d += ' L' + pt(v[v.length - 1]);
+    return d;
+  }
+
+  const pure = { shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, planRoutes, routeEdges, roundedPath, NODE_W, NODE_H, ROW_H, COL_GAP, TRACK, TOP, LEFT };
   if (typeof document === 'undefined') return pure;
 
   // ---------------------------------------------------------------------
