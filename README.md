@@ -37,10 +37,16 @@ programs.akyuu = {
   enable = true;        # the binary, AKYUU_ROOT, and the store directory
   gc.enable = true;     # `akyuu gc` once a day, under launchd (03:30)
   backup.enable = true; # `akyuu-backup` once a day, under launchd (04:00)
+  # gc.keepGenerations = 5;  # older values of each ref that GC keeps
+  # gc.gracePeriod = "1h";   # GC keeps a memory younger than this
+  # gc.trashTTL = "7d";      # GC deletes trash files older than this
   # root = "~/.local/share/akyuu";
   # serve.enable = true;  # the web UI as a user service, on port 7420
 };
 ```
+
+The three `gc` options are passed to `akyuu gc` as `--keep-generations`, `--grace` and `--trash-ttl`.
+A time is a number and a unit (`s`, `m`, `h` or `d`). The values above are the defaults.
 
 Without home-manager: `nix profile install .#akyuu`, or `nix run .#akyuu -- --help`.
 The module writes launchd agents on macOS only. On Linux it installs the

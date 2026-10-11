@@ -111,7 +111,8 @@ Decided:
 - [x] Policy: keep the last N generations of a ref, and a grace period for new objects.
 - [x] `sweep`: two phases. Move to `trash/`, then delete after a TTL. Leave a tombstone, so a dangling link says "pruned".
 - [x] Roots: refs, pins, temp roots.
-- [ ] Run it from outside (launchd or cron) with `akyuu gc`. No daemon.
+- [x] Run it from outside (launchd or cron) with `akyuu gc`. No daemon. The home-manager module runs it under launchd, with the policy flags.
+      Not done: Linux timers (the module writes launchd agents only), and a test on a real switch.
 - [x] Tests: a superseded memory is collected, a retained one is not, a root survives, a dry run changes nothing.
       Also: a young object survives, the sweep is two-phase, a tombstone is left, and properties of `plan`.
 - [x] A re-added old object gets the grace period (`Store.add` touches the file).

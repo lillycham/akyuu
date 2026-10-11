@@ -26,6 +26,9 @@ let
   backupPackage = self.packages.${system}.akyuu-backup;
 
   calendar = hour: minute: [{ Hour = hour; Minute = minute; }];
+
+  # A length of time as `akyuu gc` reads it: a whole number and a unit.
+  durationType = types.strMatching "[0-9]+[smhd]";
 in
 {
   options.programs.akyuu = {
@@ -52,6 +55,21 @@ in
       enable = mkEnableOption "a daily run of `akyuu gc`";
       hour = mkOption { type = types.ints.between 0 23; default = 3; description = "Hour of the run."; };
       minute = mkOption { type = types.ints.between 0 59; default = 30; description = "Minute of the run."; };
+      keepGenerations = mkOption {
+        type = types.ints.unsigned;
+        default = 5;
+        description = "How many older values of each ref GC keeps, as well as the current one.";
+      };
+      gracePeriod = mkOption {
+        type = durationType;
+        default = "1h";
+        description = "GC keeps a memory that is younger than this. A number and a unit (s, m, h or d).";
+      };
+      trashTTL = mkOption {
+        type = durationType;
+        default = "7d";
+        description = "GC deletes a file in trash that is older than this. A number and a unit (s, m, h or d).";
+      };
     };
 
     backup = {
@@ -91,7 +109,14 @@ in
         enable = true;
         config = {
           Label = "akyuu-gc";
-          ProgramArguments = [ "${cfg.package}/bin/akyuu" "--root" cfg.root "gc" ];
+          ProgramArguments = [
+            "${cfg.package}/bin/akyuu"
+            "--root" cfg.root
+            "gc"
+            "--keep-generations" (toString cfg.gc.keepGenerations)
+            "--grace" cfg.gc.gracePeriod
+            "--trash-ttl" cfg.gc.trashTTL
+          ];
           StartCalendarInterval = calendar cfg.gc.hour cfg.gc.minute;
           StandardOutPath = "${logs}/akyuu-gc.log";
           StandardErrorPath = "${logs}/akyuu-gc.log";
