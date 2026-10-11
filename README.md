@@ -8,6 +8,65 @@ queryable and allows chains of memories and concepts to be followed.
 
 Akyuu can be interfaced with through a command-line tool `akyuu` or the MCP (Model Context Protocol) server.
 
+```sh
+export AKYUU_ROOT=~/.local/share/akyuu   # or pass --root DIR
+mkdir -p "$AKYUU_ROOT"                   # the root must exist
+
+akyuu add --kind fact --agent me --body "Nix for every tool."   # prints the id
+akyuu search nix                    # text search, with the memories near each hit
+akyuu get 08d4                      # the start of an id is enough
+akyuu supersede me/notes --kind fact --agent me --body "..."
+akyuu ref list                      # the name and the id of each ref
+akyuu gc --dry-run                  # what a GC run would collect
+akyuu serve                         # the read-only web UI on 127.0.0.1:7420
+akyuu seed --demo --root /tmp/demo  # a demo store, for the web UI
+```
+
+## Install
+
+With Nix and home-manager, take the flake as an input and import its module:
+
+```nix
+inputs.akyuu.url = "git+https://github.com/lillycham/akyuu";   # private: use git
+
+# in the home-manager configuration
+imports = [ inputs.akyuu.homeModules.default ];
+programs.akyuu = {
+  enable = true;        # the binary, AKYUU_ROOT, and the store directory
+  gc.enable = true;     # `akyuu gc` once a day, under launchd (03:30)
+  backup.enable = true; # `akyuu-backup` once a day, under launchd (04:00)
+  # root = "~/.local/share/akyuu";
+  # serve.enable = true;  # the web UI as a user service, on port 7420
+};
+```
+
+Without home-manager: `nix profile install .#akyuu`, or `nix run .#akyuu -- --help`.
+The module writes launchd agents on macOS only. On Linux it installs the
+package and sets `AKYUU_ROOT`.
+
+To give an agent the store, run the MCP server over stdio. For Claude Code:
+
+```sh
+claude mcp add --scope user akyuu -- akyuu --root ~/.local/share/akyuu mcp
+```
+
+## Backup
+
+`akyuu-backup --root DIR --dest DIR [--keep N]` makes a snapshot of `store`,
+`trash`, `tombstones`, `pins` and `refs`. It does not copy the cache, because
+`akyuu reindex` makes that again. A file that did not change is a hard link to
+the one in the last snapshot, so a snapshot of an unchanged store costs almost
+nothing. The objects are copied first and the refs last, so every ref in a
+snapshot points to an object in it.
+
+To restore, copy the directories of a snapshot into an empty root and run
+`akyuu --root ROOT reindex`. Then `akyuu --root ROOT verify` checks the store.
+
+## Checks
+
+`nix flake check` runs the unit tests and a test of `akyuu-backup` in the Nix
+sandbox. For day to day work, `nix develop -c cabal test`.
+
 ## Design
 
 Akyuu consists of 4 main "parts":
