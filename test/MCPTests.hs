@@ -6,12 +6,13 @@ import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind (Fork),
 import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
 import Akyuu.Id (IdParseError (BadHex), parse, render)
-import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (McpConfig), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallRefList, CallRefSet, CallReview, CallSearch), ToolResult (ToolResult), defaultMcpConfig, expandCall, handleLine, handleMessage, parseToolCall, resolvePrefix, runTool, supportedVersions)
+import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (mcpAgent, mcpPlace, mcpPolicyRef), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallNote, CallRefList, CallRefSet, CallReview, CallSearch), ToolResult (ToolResult), defaultMcpConfig, expandCall, handleLine, handleMessage, parseToolCall, resolvePrefix, runTool, supportedVersions)
 import Akyuu.Ops (NewMemory (NewMemory))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), mkName)
 import Akyuu.Render (shortIds)
 import Akyuu.Store (StoreError (NotFound))
+import Akyuu.Tier (Place (Place))
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
 import Data.Aeson qualified as A
 import Data.Aeson.Key qualified as K
@@ -97,7 +98,7 @@ protocolCases =
             assertBool "still explains supersede" ("supersede" `T.isInfixOf` t)
           other -> assertFailure ("expected instructions text, got " <> show other),
       testCase "the policy ref comes from the config" $ do
-        let r = runIdentity (handleMessage (McpConfig "team/how-we-remember" "policy/tiers") (pure . fake) (req (Number 1) "initialize" (object [])))
+        let r = runIdentity (handleMessage (defaultMcpConfig {mcpPolicyRef = "team/how-we-remember"}) (pure . fake) (req (Number 1) "initialize" (object [])))
         case r >>= at ["result", "instructions"] of
           Just (String t) -> do
             assertBool "names the configured ref" ("team/how-we-remember" `T.isInfixOf` t)
@@ -121,7 +122,7 @@ protocolCases =
         case r >>= at ["result", "tools"] of
           Just (Array ts) -> do
             let names = [n | t <- foldr (:) [] ts, Just (String n) <- [at ["name"] t]]
-            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list", "check", "compare", "review", "context", "append", "log", "amend"]
+            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list", "check", "compare", "review", "context", "append", "log", "amend", "note"]
             mapM_ (\t -> (at ["inputSchema", "type"] t, isJust (at ["description"] t)) @?= (Just "object", True)) ts
           other -> assertFailure ("no tools: " <> show other),
       testCase "a tool call runs the tool" $ do
@@ -220,10 +221,10 @@ toolCallCases =
         parseToolCall "log" (args [("ref", "agent/episodes"), ("limit", Number 3), ("full", Bool True)])
           @?= Right (CallLog n (Just 3) True),
       testCase "context reads the tier and the refs" $ do
-        parseToolCall "context" (args []) @?= Right (CallContext Nothing [])
+        parseToolCall "context" (args []) @?= Right (CallContext Nothing Nothing [])
         n <- right (mkName "claude/projects/x")
         parseToolCall "context" (args [("tier", "background"), ("refs", A.toJSON ["claude/projects/x" :: Text])])
-          @?= Right (CallContext (Just "background") [n]),
+          @?= Right (CallContext (Just "background") Nothing [n]),
       testCase "an unknown tool" $
         parseToolCall "rm" (args []) @?= Left (UnknownTool "rm")
     ]
@@ -318,6 +319,28 @@ runToolCases =
           ToolResult _ True <- runTool defaultMcpConfig env bad
           ToolResult g2 False <- runTool defaultMcpConfig env (CallGet (Left n))
           g2 @?= g,
+      testCase "context adds the refs of a directory, and note goes to its log" $
+        withOpsEnv $ \_ env -> do
+          let cfg = defaultMcpConfig {mcpPlace = Just (Place "/h" "/h/devel/p/src"), mcpAgent = "me"}
+              addRef r t = do
+                ToolResult i False <- runTool cfg env (CallAdd (NewMemory "fact" "claude" Set.empty t))
+                n <- right (mkName r)
+                _ <- runTool cfg env (CallRefSet n MustBeAbsent (either (error . show) id (parse i)))
+                pure ()
+          addRef "claude/profile" "profile text"
+          addRef "claude/proj" "project text"
+          addRef "policy/tiers" "always: claude/profile\nat ~/devel/p: claude/proj\nlog *: claude/log/general\nlog ~/devel/p: claude/log/p"
+          ToolResult c False <- runTool cfg env (CallContext Nothing Nothing [])
+          assertBool "profile" ("profile text" `T.isInfixOf` c)
+          assertBool "project" ("project text" `T.isInfixOf` c)
+          ToolResult c2 False <- runTool cfg env (CallContext Nothing (Just "/elsewhere") [])
+          assertBool "no project elsewhere" (not ("project text" `T.isInfixOf` c2))
+          ToolResult r False <- runTool cfg env (CallNote Nothing Nothing (NewMemory "note" "" Set.empty "a small thing"))
+          assertBool "named log" ("noted in claude/log/p " `T.isPrefixOf` r)
+          ToolResult l False <- runTool cfg env =<< either (assertFailure . show) pure (parseToolCall "log" (args [("ref", "claude/log/p")]))
+          assertBool "agent and text" ("me  note  a small thing" `T.isInfixOf` l)
+          ToolResult r2 False <- runTool cfg env (CallNote (Just "/tmp") (Just "x") (NewMemory "note" "" Set.empty "other"))
+          assertBool "default log" ("noted in claude/log/general " `T.isPrefixOf` r2),
       testCase "an empty search says so" $
         withOpsEnv $ \_ env -> do
           r <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "nothing")

@@ -53,6 +53,7 @@ module Akyuu.Ops
     ContextEntry (..),
     ContextReport (..),
     contextFor,
+    noteEpisode,
     CompareSide (..),
     CompareReport (..),
     compareMemories,
@@ -90,7 +91,7 @@ import Akyuu.Review qualified as Review
 import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), openStore)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersede, supersedeFrom)
-import Akyuu.Tier (TierError (BadTierName, BadTierRef, NoColon), parseManifest, tierNames, tierRefs)
+import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), parseManifest, placeLog, placeRefs, tierNames, tierRefs)
 import Control.Exception (finally)
 import Control.Monad (forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
@@ -652,13 +653,14 @@ data ContextReport = ContextReport
 -- | The context of a tier ('Akyuu.Tier').
 --
 -- The manifest is the memory that the first ref points at. The tier is a name
--- in it. The extra refs come after the refs of the tier, and a ref that is in
+-- in it. The refs of the @at@ lines for the place come after the refs of the
+-- tier, and the extra refs after them, and a ref that is in
 -- both comes once. A ref that does not exist gives 'Absent': one stale name
 -- must not hide the other memories. A manifest that is missing or invalid,
 -- and a tier that it does not have, are errors, with a text that says what
 -- to do. It writes nothing and does not sync the cache.
-contextFor :: Env -> Name -> Text -> [Name] -> IO (Either AkyuuError ContextReport)
-contextFor env manifestRef tier extra = runExceptT $ do
+contextFor :: Env -> Name -> Text -> Maybe Place -> [Name] -> IO (Either AkyuuError ContextReport)
+contextFor env manifestRef tier place extra = runExceptT $ do
   mref <- ExceptT (readRef env manifestRef)
   m <- ExceptT (getMemory env (current mref))
   manifest <- either (throwE . BadInput . manifestError) pure (parseManifest (memBody m))
@@ -668,7 +670,8 @@ contextFor env manifestRef tier extra = runExceptT $ do
       throwE . BadInput $
         "There is no tier " <> quoted tier <> " in the manifest. It has: " <> T.intercalate ", " (tierNames manifest) <> "."
   all' <- ExceptT (listRefValues env)
-  let wanted = nubOrd (names <> extra)
+  let here = maybe [] (`placeRefs` manifest) place
+      wanted = nubOrd (names <> here <> extra)
       held = Map.fromList all'
   entries <- forM wanted $ \n -> case Map.lookup n held of
     Nothing -> pure (Absent n)
@@ -690,6 +693,27 @@ contextFor env manifestRef tier extra = runExceptT $ do
       BadTierRef n r _ -> "The manifest has a bad ref name on line " <> T.pack (show n) <> ": " <> quoted r <> "."
 
 -- Episodes -------------------------------------------------------------
+
+-- | Append an episode to the log that the manifest names for a place
+-- (@log@ lines, see "Akyuu.Tier"), and return the ref and the new 'Id'. If no
+-- line contains the place, the error says how to add one.
+noteEpisode :: Env -> Name -> Place -> NewMemory -> IO (Either AkyuuError (Name, Id))
+noteEpisode env manifestRef place new = runExceptT $ do
+  mref <- ExceptT (readRef env manifestRef)
+  m <- ExceptT (getMemory env (current mref))
+  manifest <- either (throwE . BadInput . manifestText) pure (parseManifest (memBody m))
+  logRef <- case placeLog place manifest of
+    Just r -> pure r
+    Nothing ->
+      throwE . BadInput $
+        "The manifest has no log line for this directory. Add a line such as 'log *: claude/log/general' to the memory of the ref " <> Refs.nameText manifestRef <> "."
+  i <- ExceptT (appendEpisode env logRef new)
+  pure (logRef, i)
+  where
+    manifestText e = case e of
+      NoColon n l -> "The manifest has no ':' on line " <> T.pack (show n) <> ": '" <> l <> "'."
+      BadTierName n l -> "The manifest has a bad name on line " <> T.pack (show n) <> ": '" <> l <> "'."
+      BadTierRef n r _ -> "The manifest has a bad ref name on line " <> T.pack (show n) <> ": '" <> r <> "'."
 
 -- | Append an episode to the log that a ref names ('Akyuu.Episode.append').
 -- A ref that does not exist starts a log. The new memory gets a

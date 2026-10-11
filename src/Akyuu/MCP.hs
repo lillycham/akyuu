@@ -42,14 +42,15 @@ where
 
 import Akyuu.Amend qualified as Amend
 import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind, Severity, defaultCheckOptions, filterFindings, kindName, severityName)
-import Akyuu.Error (AkyuuError (BadId, BadName), describe)
+import Akyuu.Error (AkyuuError (BadId, BadInput, BadName), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, parseIdSpec, readLog, readRef, resolveId, reviewPair, searchMemories, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseIdSpec, readLog, readRef, resolveId, reviewPair, searchMemories, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
-import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName)
+import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLines)
+import Akyuu.Tier (Place (Place))
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (unless)
 import Control.Monad.Trans.Class (lift)
@@ -96,8 +97,12 @@ data ToolCall
     CallAppend Name NewMemory
   | -- | Read a log: the ref, the limit, and whether to show the bodies.
     CallLog Name (Maybe Int) Bool
-  | -- | The tier ('Nothing' for always) and extra refs.
-    CallContext (Maybe Text) [Name]
+  | -- | The tier ('Nothing' for always), the directory that stands for where
+    -- the session works, and extra refs.
+    CallContext (Maybe Text) (Maybe Text) [Name]
+  | -- | A note for the log of a directory: the directory, the agent (the
+    -- server's default if 'Nothing'), and the memory (its agent is not used).
+    CallNote (Maybe Text) (Maybe Text) NewMemory
   | -- | The options, the kinds to show (none means all), and the lowest severity.
     CallCheck CheckOptions [FindingKind] (Maybe Severity)
   deriving (Eq, Show)
@@ -243,9 +248,23 @@ toolList =
       "Read the memories that every session needs, in one call: the profile, the preferences, the policy and the others that the manifest of the store puts in a tier. Call it at the start of work. The text ends with the names of the other refs. Pass refs to add the memories of a project, for example the ref of the project that you work in."
       ( objectSchema
           [ ("tier", stringSchema "The tier to read. The default is always."),
-            ("refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("More refs to read, after the refs of the tier." :: Text)])
+            ("cwd", stringSchema "The directory that you work in. The default is the directory of the server. The manifest can add the refs of a project for a directory."),
+            ("refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("More refs to read, after the refs of the tier and the directory." :: Text)])
           ]
           []
+      ),
+    tool
+      "note"
+      "Write down a small thing at once: a fact, a decision, an idea. It is added as an episode to the log that the manifest names for the directory, so you do not choose a ref. Use it freely, as a person uses a notebook. Use append when you know the ref, and add or supersede for a memory that should be current."
+      ( objectSchema
+          [ ("body", stringSchema "The text of the note."),
+            ("kind", stringSchema "The kind of the note. The default is note."),
+            ("agent", stringSchema "The name of the agent that writes the note. The default is the name that the server was given."),
+            ("cwd", stringSchema "The directory that you work in. The default is the directory of the server."),
+            ("about", idsSchema "Memories that this note is about."),
+            ("refines", idsSchema "Memories that this note adds detail to.")
+          ]
+          ["body"]
       ),
     tool
       "neighbours"
@@ -433,7 +452,15 @@ parseToolCall n args = case n of
   "context" -> do
     t <- optional' args "tier" asText "a string"
     rs <- maybe [] id <$> optional' args "refs" (asList asText) "a list of strings"
-    CallContext t <$> traverse parseName rs
+    c <- optional' args "cwd" asText "a string"
+    CallContext t c <$> traverse parseName rs
+  "note" -> do
+    c <- optional' args "cwd" asText "a string"
+    k <- maybe "note" id <$> optional' args "kind" asText "a string" >>= check . checkField "kind"
+    ag <- optional' args "agent" asText "a string" >>= traverse (check . checkField "agent")
+    b <- required args "body" asText "a string"
+    es <- edgesArg args [("about", About), ("refines", Refines)]
+    pure (CallNote c ag NewMemory {newKind = k, newAgent = "", newEdges = es, newBody = b})
   "check" -> do
     ks <- maybe [] id <$> optional' args "kinds" (asList asText) "a list of strings"
     s <- optional' args "severity" asText "a string"
@@ -557,13 +584,24 @@ runTool cfg env c = either failed id <$> go
           Right rs -> do
             firsts <- firstLines env (map snd rs)
             pure (Right (shorten (lines' "There are no refs." (refListLinesWith firsts rs))))
-      CallContext tier refs -> case mkName (mcpTiersRef cfg) of
+      CallContext tier cwd refs -> case mkName (mcpTiersRef cfg) of
         Left e -> pure (Left (BadName (mcpTiersRef cfg) e))
-        Right manifest -> fmap (\r -> okText (T.intercalate "\n" (tierLines r)) False) <$> contextFor env manifest (maybe "always" id tier) refs
+        Right manifest -> fmap (\r -> okText (T.intercalate "\n" (tierLines r)) False) <$> contextFor env manifest (maybe "always" id tier) (placeOf cwd) refs
+      CallNote cwd ag m -> case (mkName (mcpTiersRef cfg), placeOf cwd) of
+        (Left e, _) -> pure (Left (BadName (mcpTiersRef cfg) e))
+        (_, Nothing) -> pure (Left (BadInput "The server does not know its directory. Give cwd."))
+        (Right manifest, Just p) -> do
+          let m' = m {newAgent = fromMaybe (mcpAgent cfg) ag}
+          r <- noteEpisode env manifest p m'
+          pure (fmap (\(n, i) -> okText ("noted in " <> nameText n <> " " <> Id.render i) False) r)
       CallCheck o ks s -> do
         r <- checkStore env o
         refs <- listRefValues env
         pure ((\fs rs -> shorten (okText (T.intercalate "\n" (findingLines rs (filterFindings ks s fs))) False)) <$> r <*> refs)
+    -- The place of the session: the directory that the caller gave, with the
+    -- home directory of the server, or else where the server runs.
+    placeOf (Just d) = Just (Place (maybe "" (\(Place h _) -> h) (mcpPlace cfg)) d)
+    placeOf Nothing = mcpPlace cfg
     -- Ids in a list are cut to 12 digits: a prefix names the memory again.
     shorten r = r {resultText = shortIds (resultText r)}
 
@@ -597,7 +635,11 @@ data McpConfig = McpConfig
     mcpPolicyRef :: Text,
     -- | The name of the ref of the manifest of the tiers. The tool @context@
     -- reads it. See "Akyuu.Tier".
-    mcpTiersRef :: Text
+    mcpTiersRef :: Text,
+    -- | The agent of a note that names none.
+    mcpAgent :: Text,
+    -- | Where the server runs, to find the refs and the log of this place.
+    mcpPlace :: Maybe Place
   }
   deriving (Eq, Show)
 
@@ -605,7 +647,7 @@ data McpConfig = McpConfig
 -- one agent. A store that uses another name sets it with @--policy-ref@ or
 -- @AKYUU_POLICY_REF@.
 defaultMcpConfig :: McpConfig
-defaultMcpConfig = McpConfig "policy/memory" "policy/tiers"
+defaultMcpConfig = McpConfig "policy/memory" "policy/tiers" "agent" Nothing
 
 -- | The result of @initialize@.
 initializeResult :: McpConfig -> Maybe Text -> Value

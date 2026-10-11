@@ -40,11 +40,12 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, parseDuration, parseIdSpec, pinMemory, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, syncLines, tierLines, unpinLines, verifyLines)
 import Akyuu.Seed qualified as Seed
+import Akyuu.Tier (Place (Place))
 import Akyuu.Web.Page qualified as Page
 import Akyuu.Web.Read qualified as Read
 import Akyuu.Web.Server qualified as Server
@@ -63,6 +64,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Time (getCurrentTime)
 import Options.Applicative (Alternative (many, some, (<|>)), CompletionResult (execCompletion), Parser, ParserInfo, ParserResult (CompletionInvoked, Failure, Success), ReadM, argument, auto, command, defaultPrefs, eitherReader, execParserPure, flag', footer, fullDesc, help, helper, hsubparser, info, long, metavar, option, optional, progDesc, readerError, renderFailure, short, showDefault, showDefaultWith, strArgument, strOption, switch, value, (<**>))
+import System.Directory (getCurrentDirectory)
 import System.Environment (getArgs, getProgName, lookupEnv)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess), exitWith)
 import System.IO (hFlush, hIsTerminalDevice, hPutStrLn, stderr, stdout)
@@ -145,8 +147,13 @@ data Command i
   | Unreview i i
   | -- | Print the reviewed pairs.
     Reviews
-  | -- | The tier, extra refs, and the ref of the manifest ('Nothing' for the default).
-    Context (Maybe Text) [Name] (Maybe Name)
+  | -- | The tier, extra refs, the ref of the manifest ('Nothing' for the
+    -- default), and the directory ('Nothing' for the current one).
+    Context (Maybe Text) [Name] (Maybe Name) (Maybe Text)
+  | -- | A note for the log of a directory: the directory ('Nothing' for the
+    -- current one), the kind, the agent ('Nothing' for $AKYUU_AGENT), the
+    -- ref of the manifest, and the text.
+    Note (Maybe Text) Text (Maybe Text) (Maybe Name) Text
   | -- | Append an episode to the log that a ref names.
     Append Name (MemoryArgs i)
   | -- | Read a log: the ref, the most episodes ('Nothing' for the default),
@@ -237,6 +244,7 @@ commandParser =
       <> cmd "unreview" (Unreview <$> argument idReader (metavar "ID_A") <*> argument idReader (metavar "ID_B")) "Remove the review of a pair."
       <> cmd "reviews" (pure Reviews) "Print the reviewed pairs."
       <> cmd "append" appendP "Add an episode to a log: a memory that points at the one before it, under a ref that moves to it."
+      <> cmd "note" noteP "Write a note in the log that the manifest names for the current directory."
       <> cmd "log" logP "Print the episodes of a log, newest first."
       <> cmd "context" contextP "Print the memories of a tier (the profile, the policy and so on) in one call, for the start of a session."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
@@ -311,6 +319,14 @@ commandParser =
         <$> optional (strOption (long "tier" <> metavar "NAME" <> help "The tier to print. The default is always."))
         <*> many (option nameReader (long "ref" <> metavar "NAME" <> help "Also print this ref. Repeat for more."))
         <*> optional (option nameReader (long "manifest" <> metavar "NAME" <> help "The ref of the manifest. The default is $AKYUU_TIERS_REF, then policy/tiers."))
+        <*> optional (strOption (long "cwd" <> metavar "DIR" <> help "The directory to take the refs for. The default is the current directory."))
+    noteP =
+      Note
+        <$> optional (strOption (long "cwd" <> metavar "DIR" <> help "The directory whose log gets the note. The default is the current directory."))
+        <*> strOption (long "kind" <> metavar "TEXT" <> value "note" <> showDefault <> help "The kind of the note.")
+        <*> optional (option (via (checkField "agent")) (long "agent" <> metavar "TEXT" <> help "The agent that writes the note. The default is $AKYUU_AGENT, then agent."))
+        <*> optional (option nameReader (long "manifest" <> metavar "NAME" <> help "The ref of the manifest. The default is $AKYUU_TIERS_REF, then policy/tiers."))
+        <*> (T.unwords <$> some (strArgument (metavar "TEXT...")))
     reviewP =
       Review
         <$> argument idReader (metavar "ID_A")
@@ -492,10 +508,17 @@ runCommand env c = runExceptT $ case c of
   Log n lim full -> do
     w <- ExceptT (readLog env n (maybe 20 id lim))
     pure (ok (logLines full w))
-  Context tier extra given -> do
+  Context tier extra given cwd -> do
     manifest <- liftIO (manifestRef given)
-    r <- ExceptT (either (pure . Left) (\mr -> contextFor env mr (maybe "always" id tier) extra) manifest)
+    place <- liftIO (placeFor cwd)
+    r <- ExceptT (either (pure . Left) (\mr -> contextFor env mr (maybe "always" id tier) (Just place) extra) manifest)
     pure (ok (tierLines r))
+  Note cwd kind agent given text -> do
+    mr <- ExceptT (liftIO (manifestRef given))
+    place <- liftIO (placeFor cwd)
+    who <- liftIO (maybe (maybe "agent" T.pack <$> lookupEnv "AKYUU_AGENT") pure agent)
+    (n, i) <- ExceptT (noteEpisode env mr place NewMemory {newKind = kind, newAgent = who, newEdges = Set.empty, newBody = text})
+    pure (ok ["noted in " <> nameText n <> " " <> Id.render i])
   Search o q -> do
     r <- ExceptT (searchMemories env o q)
     held <- either (const Map.empty) heldBy <$> liftIO (listRefValues env)
@@ -520,7 +543,9 @@ runCommand env c = runExceptT $ case c of
   Mcp givenPolicy givenTiers -> do
     policy <- liftIO (refFromEnv "AKYUU_POLICY_REF" "policy/memory" givenPolicy)
     tiers <- liftIO (manifestRef givenTiers)
-    mcpConfig <- ExceptT (pure (MCP.McpConfig . nameText <$> policy <*> (nameText <$> tiers)))
+    place <- liftIO (placeFor Nothing)
+    agent <- liftIO (maybe "agent" T.pack <$> lookupEnv "AKYUU_AGENT")
+    mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place)) <$> policy <*> tiers))
     liftIO (MCP.serve mcpConfig env)
     pure (Output BS.empty True False)
   Serve port -> do
@@ -629,5 +654,13 @@ refFromEnv var def Nothing = do
 
 -- | The ref of the manifest of the tiers: the option, then @AKYUU_TIERS_REF@,
 -- then @policy/tiers@.
+-- | Where the command runs: the home directory, and the directory that was
+-- given or else the current one.
+placeFor :: Maybe Text -> IO Place
+placeFor given = do
+  home <- maybe "" T.pack <$> lookupEnv "HOME"
+  dir <- maybe (T.pack <$> getCurrentDirectory) pure given
+  pure (Place home dir)
+
 manifestRef :: Maybe Name -> IO (Either AkyuuError Name)
 manifestRef = refFromEnv "AKYUU_TIERS_REF" "policy/tiers"

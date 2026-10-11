@@ -154,7 +154,7 @@ parseCases =
         n <- name "claude/projects/akyuu"
         m <- name "team/tiers"
         b <- parses ["context", "--tier", "background", "--ref", "claude/projects/akyuu", "--manifest", "team/tiers"]
-        (cliCommand a, cliCommand b) @?= (Context Nothing [] Nothing, Context (Just "background") [n] (Just m)),
+        (cliCommand a, cliCommand b) @?= (Context Nothing [] Nothing Nothing, Context (Just "background") [n] (Just m) Nothing),
       testCase "append takes a ref and the fields of add, and log a ref, a limit and --full" $ do
         n <- name "agent/episodes"
         a <- parses ["append", "agent/episodes", "--kind", "episode", "--agent", "claude", "--body", "x"]
