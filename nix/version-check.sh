@@ -44,4 +44,16 @@ rm "$root/store/$(echo "$b" | cut -c8-9)/$b.md"
 akyuu-version 2> /dev/null > /dev/null
 git -C "$root" log --diff-filter=D --name-only --format= | grep -q "$b.md"
 git -C "$root" show "HEAD~1:store/$(echo "$b" | cut -c8-9)/$b.md" | grep -q "second memory"
+# With --push, the commits go to the first remote. Without a remote it is fine.
+akyuu-version --push 2> /dev/null > /dev/null
+git init -q --bare "$PWD/remote.git"
+git -C "$root" remote add origin "$PWD/remote.git"
+akyuu-version --push 2> /dev/null > /dev/null
+test "$(git -C "$PWD/remote.git" rev-parse main)" = "$(git -C "$root" rev-parse HEAD)"
+# A remote that cannot be reached is not an error, and the commit stays.
+git -C "$root" remote set-url origin "$PWD/nowhere.git"
+c=$(akyuu supersede check/main --kind fact --agent check --body "third memory")
+akyuu-version --push 2> /dev/null > /dev/null
+test "$(git -C "$root" rev-list --count HEAD)" = 4
+
 touch $out

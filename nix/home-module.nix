@@ -100,6 +100,16 @@ in
       enable = mkEnableOption "a daily commit of the memories to a git repository in the root of the store (akyuu-version)";
       hour = mkOption { type = types.ints.between 0 23; default = 4; description = "Hour of the run."; };
       minute = mkOption { type = types.ints.between 0 59; default = 15; description = "Minute of the run. The default is after GC and the backup."; };
+      push = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Push to the first remote of the repository after each run. The
+          repository must have a remote (git -C ROOT remote add origin URL)
+          and it should be private: it holds all the memories. A push that
+          fails is a warning.
+        '';
+      };
     };
 
     backup = {
@@ -166,7 +176,7 @@ in
           ProgramArguments = [
             "${versionPackage}/bin/akyuu-version"
             "--root" cfg.root
-          ];
+          ] ++ optional cfg.versioning.push "--push";
           StartCalendarInterval = calendar cfg.versioning.hour cfg.versioning.minute;
           StandardOutPath = "${logs}/akyuu-version.log";
           StandardErrorPath = "${logs}/akyuu-version.log";

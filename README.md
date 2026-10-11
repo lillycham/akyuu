@@ -89,8 +89,9 @@ refs changed`.
 
 The history is the history of the memory. A memory that GC removed is still in
 git, and a ref that moved can be put back. It is also a copy that can go to a
-remote: add one with `git -C ROOT remote add …` and push, or run a job. The
-script never pushes.
+remote: add one with `git -C ROOT remote add …`. The script pushes only with
+`--push` (`programs.akyuu.versioning.push = true`), to the first remote, and a
+failed push is a warning. Keep that remote private.
 
 Forgetting: a memory that you asked to forget stays in the history. To remove it
 for good, rewrite the history by hand.

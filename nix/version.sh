@@ -13,28 +13,34 @@
 # come before store. An agent adds an object before it moves a ref to it, so a
 # ref that the commit has always points at an object that the commit has.
 #
-# The script never pushes. Add a remote and push by hand, or in your own job.
+# The script pushes only with --push, and only if the repository has a remote.
+# Add a remote with `git -C ROOT remote add origin URL`. A push that fails (for
+# example, no network) is a warning and not an error: the commit is made, and
+# the next run tries again.
 #
 # Forgetting: a memory that a person asked to forget is still in the history
 # of this repository. To really remove it, rewrite the history by hand.
 
 usage() {
   cat >&2 <<USAGE
-usage: akyuu-version [--root DIR] [--message TEXT]
+usage: akyuu-version [--root DIR] [--message TEXT] [--push]
 
   --root DIR       the store root (default: \$AKYUU_ROOT)
   --message TEXT   a line to add to the commit message
+  --push           push to the first remote after the commit (if there is one)
 USAGE
   exit 2
 }
 
 root=${AKYUU_ROOT:-}
 note=
+push=0
 
 while [ $# -gt 0 ]; do
   case $1 in
     --root) [ $# -ge 2 ] || usage; root=$2; shift 2 ;;
     --message) [ $# -ge 2 ] || usage; note=$2; shift 2 ;;
+    --push) push=1; shift ;;
     -h | --help) usage ;;
     *) usage ;;
   esac
@@ -62,6 +68,19 @@ trash/
 IGNORE
 fi
 
+# Push the current branch to the first remote. It does nothing without --push
+# or without a remote, and a failure is only a warning.
+push_now() {
+  [ "$push" = 1 ] || return 0
+  remote=$(g remote | head -n 1)
+  [ -n "$remote" ] || return 0
+  if GIT_TERMINAL_PROMPT=0 g push -q "$remote" HEAD 2> /dev/null; then
+    echo "akyuu-version: pushed to $remote" >&2
+  else
+    echo "akyuu-version: could not push to $remote (the commit is kept)" >&2
+  fi
+}
+
 # A person's own git identity is used if there is one.
 identity=()
 if ! g config user.email > /dev/null 2>&1; then
@@ -77,6 +96,7 @@ g add -A -- "${paths[@]}"
 
 if g diff --cached --quiet; then
   echo "akyuu-version: nothing changed" >&2
+  push_now
   exit 0
 fi
 
@@ -104,3 +124,4 @@ else
   g "${identity[@]}" commit -q -m "snapshot $stamp: $summary"
 fi
 g rev-parse --short HEAD
+push_now
