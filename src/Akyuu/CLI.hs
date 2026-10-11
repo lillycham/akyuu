@@ -41,7 +41,7 @@ import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
 import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, dryRunGC, getMemory, listPinned, listRefValues, neighboursOf, parseDuration, parseIdSpec, pinMemory, readRef, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
-import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName)
+import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (edgeName, findingJSON, findingLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, runLines, searchLines, syncLines, unpinLines, verifyLines)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Web.Page qualified as Page
@@ -143,8 +143,9 @@ data Command i
   | Verify
   | -- | Report what needs attention. See 'CheckArgs'.
     CheckStore CheckArgs
-  | -- | Serve MCP on stdin and stdout until stdin ends.
-    Mcp
+  | -- | Serve MCP on stdin and stdout until stdin ends. The ref of the policy,
+    -- if one is given (@--policy-ref@).
+    Mcp (Maybe Name)
   | -- | Serve the web UI on 127.0.0.1 at this port, until the program is
     -- stopped. Port 0 is a free port.
     Serve Int
@@ -218,7 +219,7 @@ commandParser =
       <> cmd "reindex" (pure Reindex) "Throw the cache away and read the whole store again."
       <> cmd "verify" (pure Verify) "Check every object, edge and ref of the store."
       <> cmd "check" (CheckStore <$> checkP) "Find memories that need attention: stale links, forks, duplicates, memories that nothing keeps."
-      <> cmd "mcp" (pure Mcp) "Serve the MCP protocol (JSON-RPC 2.0) on stdin and stdout, until stdin ends."
+      <> cmd "mcp" mcpP "Serve the MCP protocol (JSON-RPC 2.0) on stdin and stdout, until stdin ends."
       <> cmd "serve" serveP "Serve a read-only web view of the store on 127.0.0.1, and print its address."
       <> cmd "viz" (pure Viz) "Print a read-only web view of the store as one HTML file. It needs no server."
       <> cmd "seed" seedP "Make a demo store in an empty directory, to try the web view."
@@ -262,6 +263,7 @@ commandParser =
         <*> option (atLeast 0) (long "hops" <> metavar "N" <> value (searchHops defaultSearchOptions) <> showDefault <> help "How many edges away from a hit to look.")
         <*> many (option kindReader (long "follow" <> metavar "KIND" <> help "Follow only this kind of edge. Repeat for more. The default is all kinds."))
     neighboursP = Neighbours <$> argument idReader (metavar "ID")
+    mcpP = Mcp <$> optional (option nameReader (long "policy-ref" <> metavar "NAME" <> help "The ref that holds the policy of this store. The default is $AKYUU_POLICY_REF, then policy/memory."))
     checkP =
       CheckArgs
         <$> ( CheckOptions
@@ -430,8 +432,14 @@ runCommand env c = runExceptT $ case c of
           | caJson a = BL.toStrict (encode (toJSON (map findingJSON fs))) <> "\n"
           | otherwise = encodeUtf8 (T.unlines (findingLines refs fs))
     pure (Output out (not (caStrict a && any ((== Problem) . findingSeverity) fs)) False)
-  Mcp -> do
-    liftIO (MCP.serve env)
+  Mcp given -> do
+    fromEnv <- liftIO (lookupEnv "AKYUU_POLICY_REF")
+    let cfg = case (given, fromEnv) of
+          (Just n, _) -> pure (MCP.McpConfig (nameText n))
+          (Nothing, Just t) | not (null t) -> MCP.McpConfig . nameText <$> first (BadName (T.pack t)) (mkName (T.pack t))
+          _ -> pure MCP.defaultMcpConfig
+    mcpConfig <- ExceptT (pure cfg)
+    liftIO (MCP.serve mcpConfig env)
     pure (Output BS.empty True False)
   Serve port -> do
     liftIO (Server.serve env port announce)

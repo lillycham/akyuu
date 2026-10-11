@@ -41,6 +41,18 @@ in
       description = "The akyuu package.";
     };
 
+    policyRef = mkOption {
+      type = types.nullOr (types.strMatching "[a-z0-9._-]+(/[a-z0-9._-]+)*");
+      default = null;
+      example = "claude/memory-policy";
+      description = ''
+        The name of the ref that holds the policy of the store: how agents
+        use it for memory. `akyuu mcp` tells a client to read it first. With
+        null the server uses `policy/memory`. The value is set as
+        AKYUU_POLICY_REF.
+      '';
+    };
+
     root = mkOption {
       type = types.str;
       default = "${home}/.local/share/akyuu";
@@ -98,6 +110,7 @@ in
     {
       home.packages = [ cfg.package ] ++ optional cfg.backup.enable backupPackage;
       home.sessionVariables.AKYUU_ROOT = cfg.root;
+      home.sessionVariables.AKYUU_POLICY_REF = mkIf (cfg.policyRef != null) cfg.policyRef;
 
       home.activation.akyuuRoot = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
         run mkdir -p ${lib.escapeShellArg cfg.root}

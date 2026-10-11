@@ -6,7 +6,7 @@ import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind (Fork),
 import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
 import Akyuu.Id (IdParseError (BadHex), parse, render)
-import Akyuu.MCP (CallError (BadArguments, UnknownTool), ToolCall (CallAdd, CallCheck, CallGet, CallNeighbours, CallRefSet, CallSearch), ToolResult (ToolResult), handleLine, handleMessage, parseToolCall, runTool, supportedVersions)
+import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (McpConfig), ToolCall (CallAdd, CallCheck, CallGet, CallNeighbours, CallRefSet, CallSearch), ToolResult (ToolResult), defaultMcpConfig, handleLine, handleMessage, parseToolCall, runTool, supportedVersions)
 import Akyuu.Ops (NewMemory (NewMemory))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), mkName)
@@ -44,7 +44,7 @@ fake tc = ToolResult (T.pack (show tc)) False
 
 -- Answer one message with the fake runner.
 answer :: Value -> Maybe Value
-answer = runIdentity . handleMessage (pure . fake)
+answer = runIdentity . handleMessage defaultMcpConfig (pure . fake)
 
 -- A request with an id, a method and params.
 req :: Value -> Text -> Value -> Value
@@ -91,8 +91,16 @@ protocolCases =
         let r = answer (req (Number 1) "initialize" (object ["protocolVersion" .= ("2025-06-18" :: Text)]))
         case r >>= at ["result", "instructions"] of
           Just (String t) -> do
-            assertBool "names the policy ref" ("claude/memory-policy" `T.isInfixOf` t)
+            assertBool "names the policy ref" ("policy/memory" `T.isInfixOf` t)
+            assertBool "does not name one agent" (not ("claude" `T.isInfixOf` t))
             assertBool "still explains supersede" ("supersede" `T.isInfixOf` t)
+          other -> assertFailure ("expected instructions text, got " <> show other),
+      testCase "the policy ref comes from the config" $ do
+        let r = runIdentity (handleMessage (McpConfig "team/how-we-remember") (pure . fake) (req (Number 1) "initialize" (object [])))
+        case r >>= at ["result", "instructions"] of
+          Just (String t) -> do
+            assertBool "names the configured ref" ("team/how-we-remember" `T.isInfixOf` t)
+            assertBool "not the default" (not ("policy/memory" `T.isInfixOf` t))
           other -> assertFailure ("expected instructions text, got " <> show other),
       testCase "initialize with an unknown version offers the newest" $
         (answer (req (Number 1) "initialize" (object ["protocolVersion" .= ("1999-01-01" :: Text)])) >>= at ["result", "protocolVersion"])
@@ -139,11 +147,11 @@ protocolCases =
       testCase "a batch (an array) gives -32600" $
         errCode (answer (A.toJSON [req (Number 1) "ping" (object [])])) @?= Just (Number (-32600)),
       testCase "a line that is not JSON gives -32700 with a null id" $ do
-        let r = runIdentity (handleLine (pure . fake) "{not json")
+        let r = runIdentity (handleLine defaultMcpConfig (pure . fake) "{not json")
         errCode r @?= Just (Number (-32700))
         (r >>= at ["id"]) @?= Just Null,
       testCase "a blank line gives no answer" $
-        runIdentity (handleLine (pure . fake) "  \r") @?= Nothing,
+        runIdentity (handleLine defaultMcpConfig (pure . fake) "  \r") @?= Nothing,
       testCase "every answer is one line of JSON" $ do
         let r = answer (callReq "add" (object ["kind" .= ("fact" :: Text), "agent" .= ("a" :: Text), "body" .= ("two\nlines" :: Text)]))
         fmap (BL.elem 10 . A.encode) r @?= Just False

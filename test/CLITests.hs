@@ -2,7 +2,7 @@
 
 module CLITests (cliTests) where
 
-import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, CheckStore, GC, Get, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Search, Serve, Supersede, Unpin, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, CheckStore, GC, Get, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Search, Serve, Supersede, Unpin, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
 import Akyuu.Check (FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Check qualified as Check
 import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
@@ -124,6 +124,14 @@ parseCases =
       testCase "an edge option takes a prefix too" $ do
         c <- parses ["add", "--kind", "fact", "--agent", "claude", "--about", take 11 i1, "--body", "x"]
         cliCommand c @?= Add (MemoryArgs "fact" "claude" [(About, Prefix (T.pack (take 11 i1)))] (BodyText "x")),
+      testCase "mcp takes a policy ref, and the default is none" $ do
+        n <- name "team/how-we-remember"
+        a <- parses ["mcp", "--policy-ref", "team/how-we-remember"]
+        b <- parses ["mcp"]
+        (cliCommand a, cliCommand b) @?= (Mcp (Just n), Mcp Nothing),
+      testCase "mcp refuses a policy ref that is not a ref name" $ do
+        _ <- fails ["mcp", "--policy-ref", "Not A Name"]
+        pure (),
       testCase "gc takes the policy flags" $ do
         c <- parses ["gc", "--dry-run", "--keep-generations", "2", "--grace", "30m", "--trash-ttl", "1d"]
         cliCommand c @?= GC True (Policy 2 1800 86400),

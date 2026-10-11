@@ -28,6 +28,8 @@ module Akyuu.MCP
     runTool,
 
     -- * Protocol
+    McpConfig (..),
+    defaultMcpConfig,
     supportedVersions,
     handleMessage,
     handleLine,
@@ -403,21 +405,37 @@ invalidRequest = -32600
 methodNotFound = -32601
 invalidParams = -32602
 
+-- | What the server tells a client about this store.
+newtype McpConfig = McpConfig
+  { -- | The name of the ref that holds the policy for this store: how the
+    -- store is used for memory. The instructions of the server name it, so a
+    -- client reads it first. The server does not check that the ref exists.
+    mcpPolicyRef :: Text
+  }
+  deriving (Eq, Show)
+
+-- | The policy ref is @policy/memory@. This is a plain name, not the name of
+-- one agent. A store that uses another name sets it with @--policy-ref@ or
+-- @AKYUU_POLICY_REF@.
+defaultMcpConfig :: McpConfig
+defaultMcpConfig = McpConfig "policy/memory"
+
 -- | The result of @initialize@.
-initializeResult :: Maybe Text -> Value
-initializeResult asked =
+initializeResult :: McpConfig -> Maybe Text -> Value
+initializeResult cfg asked =
   object
     [ "protocolVersion" .= version,
       "capabilities" .= object ["tools" .= object ["listChanged" .= False]],
       "serverInfo" .= object ["name" .= ("akyuu" :: Text), "version" .= ("0.1.0.0" :: Text)],
       "instructions"
         .= ( "akyuu is a content-addressed memory store. A memory never changes. \
-             \A ref (such as claude/notes) names the current memory of a topic. \
+             \A ref (such as me/notes) names the current memory of a topic. \
              \To change a memory, read its ref, then call supersede with the id that you read as expected. \
              \Search shows when a hit is superseded: read the newer memory. \
-             \If the store has the ref claude/memory-policy, read it first: \
-             \it says how this store is used for memory, and which refs to read at the start of work." ::
-               Text
+             \If the store has the ref "
+               <> mcpPolicyRef cfg
+               <> ", read it first: \
+                  \it says how this store is used for memory, and which refs to read at the start of work."
            )
     ]
   where
@@ -446,8 +464,8 @@ toolResultValue r =
 -- * Bad @params@ of @tools/call@, or an unknown tool, give @-32602@.
 -- * Bad arguments of a known tool give a tool result with @isError@, so the
 --   model sees the text and can try again.
-handleMessage :: (Monad m) => (ToolCall -> m ToolResult) -> Value -> m (Maybe Value)
-handleMessage run msg = case msg of
+handleMessage :: (Monad m) => McpConfig -> (ToolCall -> m ToolResult) -> Value -> m (Maybe Value)
+handleMessage cfg run msg = case msg of
   Object o
     | KM.lookup "jsonrpc" o /= Just (String "2.0") -> pure (Just (errorResponse (idOf o) invalidRequest "Invalid Request: jsonrpc must be \"2.0\"."))
     | otherwise -> case (KM.lookup "method" o, KM.lookup "id" o) of
@@ -469,7 +487,7 @@ handleMessage run msg = case msg of
       Just (Object p) -> Just p
       _ -> Nothing
     request i m p = case m of
-      "initialize" -> pure (response i (initializeResult (p >>= KM.lookup "protocolVersion" >>= asText)))
+      "initialize" -> pure (response i (initializeResult cfg (p >>= KM.lookup "protocolVersion" >>= asText)))
       "ping" -> pure (response i (object []))
       "tools/list" -> pure (response i (object ["tools" .= toolList]))
       "tools/call" -> call i p
@@ -491,20 +509,20 @@ handleMessage run msg = case msg of
 
 -- | Answer one line of input. A line that is not JSON gives @-32700@.
 -- A blank line gives no answer.
-handleLine :: (Monad m) => (ToolCall -> m ToolResult) -> BS.ByteString -> m (Maybe Value)
-handleLine run line
+handleLine :: (Monad m) => McpConfig -> (ToolCall -> m ToolResult) -> BS.ByteString -> m (Maybe Value)
+handleLine cfg run line
   | BC.all (`elem` (" \t\r" :: String)) line = pure Nothing
   | otherwise = case A.eitherDecodeStrict line of
       Left _ -> pure (Just (errorResponse Null parseError "Parse error: the line is not JSON."))
-      Right v -> handleMessage run v
+      Right v -> handleMessage cfg run v
 
 -- | Serve the protocol on stdin and stdout until stdin ends.
 --
 -- Each answer is one line of JSON on stdout, and stdout is flushed after
 -- each one. A tool that throws an exception (a bug) gives an error result,
 -- and the server goes on. Logs go to stderr.
-serve :: Env -> IO ()
-serve env = do
+serve :: McpConfig -> Env -> IO ()
+serve cfg env = do
   hSetBinaryMode stdin True
   hSetBinaryMode stdout True
   hSetBuffering stdout LineBuffering
@@ -516,7 +534,7 @@ serve env = do
       eof <- hIsEOF stdin
       unless eof $ do
         line <- BC.hGetLine stdin
-        answer <- handleLine safeRun line
+        answer <- handleLine cfg safeRun line
         mapM_ (\v -> BL.hPut stdout (A.encode v <> "\n") >> hFlush stdout) answer
         loop
     safeRun tc = do
