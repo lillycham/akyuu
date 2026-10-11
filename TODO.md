@@ -324,13 +324,12 @@ Not done:
 - The routing is not seen in a browser: the real SVG rendering, the corner shapes, the hover and the colours are not checked.
 - After the hops, the window has no cap. A memory with thousands of edges can pull them all into the view.
 - One unreadable object stops the graph view, as it stops `GC.snapshot`. The health view still shows it.
-- [ ] The check report is hard to find: it is at the bottom of the Health tab, after the eight cards of verify.
-      Make Check its own tab, between GC and Health. Show the findings first, an "all clear" line when there are none,
-      and a badge on the tab when there is a problem. Add a line to `test/check-page.js` for the tab.
-- [ ] The memory graph does not scale to the viewport. A store of a few hundred memories draws wider than the window
-      and needs a lot of scrolling. Fit the drawing to the viewport at the start (a scale from the size of the drawing
-      and the size of the canvas), with zoom and pan, and a "fit" button. Keep the text readable: below a minimum scale,
-      show the window of the graph and not a smaller drawing.
+- [x] The check report has its own tab, between GC and Health. It shows a summary, an "all clear" line, filters, and a count of
+      problems on the tab. A pair finding has a Compare button: the side panel shows both memories and the sentences that only
+      one has. The page does the comparison itself (the same as `Akyuu.Compare`, with the same test cases), so an export can too.
+- [x] The memory graph fits the viewport: a scale from the size of the drawing and of the canvas, never enlarged and never below 40%.
+      Below 55% the page hides the node text and keeps the shape. Buttons, ctrl or cmd and the wheel, and a drag zoom and pan.
+      Not done: the look at a real browser (see below). The two thresholds are guesses.
 - `explain` reads the whole snapshot for each request. This is fast enough at 3000 memories.
 
 ## Open decisions

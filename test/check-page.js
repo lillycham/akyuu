@@ -123,6 +123,24 @@ if (vizPath) {
   }
 }
 
+// The comparison of two texts: the same cases as test/CompareTests.hs.
+{
+  const fail = (m) => { console.log('compare wrong: ' + m); problems++; };
+  const same = (a, b, what) => { if (JSON.stringify(a) !== JSON.stringify(b)) fail(what + ': ' + JSON.stringify(a) + ' vs ' + JSON.stringify(b)); };
+  same(A.sentences('One is here. Two is here! Three?\nFour has no stop'), ['One is here.', 'Two is here!', 'Three?', 'Four has no stop'], 'sentences');
+  same(A.sentences('Version 3.5 is out. Done.'), ['Version 3.5 is out.', 'Done.'], 'a full stop in a number');
+  same(A.sentences('\n  \nA.\n\n'), ['A.'], 'blank lines');
+  let c = A.compareText('Same text. Here.', 'Same   TEXT.\nHere.');
+  same([c.onlyA, c.onlyB, c.canDropA, c.canDropB, c.shared], [[], [], true, true, 1], 'equal texts');
+  c = A.compareText('The port is private. Do not commit game data.', 'The port is private.');
+  same([c.onlyA, c.onlyB, c.canDropA, c.canDropB], [['Do not commit game data.'], [], false, true], 'one more sentence');
+  c = A.compareText('A one. B two.', 'B two. A one.');
+  same([c.onlyA, c.onlyB], [[], []], 'the order does not matter');
+  c = A.compareText('Shared. Mine.', 'Shared. Yours.');
+  same([c.onlyA, c.onlyB, c.canDropA, c.canDropB], [['Mine.'], ['Yours.'], false, false], 'each side has its own');
+  same(A.compareText('Dup. Dup. Dup.', 'Other.').onlyA, ['Dup.'], 'a repeated sentence once');
+  console.log('compareText: ok');
+}
 // The scale of the drawing: it fits the canvas, is never enlarged, and never goes below the floor.
 {
   const eq = (a, b, what) => { if (Math.abs(a - b) > 1e-9) { console.log('fitScale/anchorScroll wrong: ' + what + ': ' + a + ' vs ' + b); problems++; } };
@@ -263,6 +281,17 @@ async function runPage(html, label) {
     console.log('  check: ' + summary.slice(0, 100).replace(/\s+/g, ' ') + ' · badge ' + (dom.byId['check-badge'].hidden ? 'hidden' : dom.byId['check-badge'].textContent));
     if (!summary) errors.push('the check view has no summary');
   }
+  {
+    // the Compare button of a pair finding opens the side panel with both memories
+    const buttons = dom.all.filter(n => n.tagName === 'button' && n.textContent === 'Compare');
+    if (buttons.length) {
+      buttons[0].fire('click'); await tick(); await tick();
+      const text = dom.byId['panel'].textContent;
+      console.log('  compare: ' + buttons.length + ' button(s); panel: ' + text.slice(0, 110).replace(/\s+/g, ' '));
+      if (!text.includes('Only in A') || !text.includes('Only in B')) errors.push('the compare panel has no sentences');
+    } else console.log('  compare: no pair finding in this export');
+  }
+
   {
     // zoom: the drawing keeps its natural viewBox, and the scale is the size of the svg
     const canvas = dom.byId['graph-canvas'];

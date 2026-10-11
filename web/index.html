@@ -860,7 +860,60 @@ const Akyuu = (function () {
     return Math.max(0, ((scroll + p) / oldScale) * newScale - p);
   }
 
-  const pure = { fitScale, anchorScroll, MIN_SCALE, MAX_SCALE, OVERVIEW_BELOW, shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, planRoutes, routeEdges, roundedPath, NODE_W, NODE_H, ROW_H, COL_GAP, TRACK, TOP, LEFT };
+  // ---- compare ---------------------------------------------------------------
+  // The page does the same comparison as `akyuu compare` (Akyuu.Compare), so
+  // that a static export can do it too. test/check-page.js runs the same
+  // cases as test/CompareTests.hs.
+
+  // The text in lower case, with white space made one space.
+  function normText(t) { return t.toLowerCase().split(/\s+/).filter(Boolean).join(' '); }
+
+  // The sentences of a text: a sentence ends with . ? or ! before white
+  // space or the end, or at the end of a line.
+  function sentences(text) {
+    const out = [];
+    for (const line of text.split('\n')) {
+      let s = line.trim();
+      while (s.length) {
+        let i = 0;
+        for (; i < s.length; i++) {
+          if ('.?!'.indexOf(s[i]) >= 0 && (i + 1 === s.length || /\s/.test(s[i + 1]))) { i++; break; }
+        }
+        out.push(s.slice(0, i));
+        s = s.slice(i).replace(/^\s+/, '');
+      }
+    }
+    return out;
+  }
+
+  // The sets of three words in a row. A text of fewer than three words is one item.
+  function shingles(norm) {
+    const w = norm.split(' ').filter(Boolean);
+    const out = new Set();
+    if (w.length < 3) { out.add(w.join(' ')); return out; }
+    for (let i = 0; i + 2 < w.length; i++) out.add(w[i] + ' ' + w[i + 1] + ' ' + w[i + 2]);
+    return out;
+  }
+
+  // What two texts share, and the sentences that only one of them has.
+  function compareText(a, b) {
+    const sa = sentences(a), sb = sentences(b);
+    const missing = (have, xs) => {
+      const known = new Set(have.map(normText));
+      const seen = new Set();
+      const out = [];
+      for (const x of xs) if (!known.has(normText(x)) && !seen.has(x)) { seen.add(x); out.push(x); }
+      return out;
+    };
+    const A = shingles(normText(a)), B = shingles(normText(b));
+    let common = 0;
+    for (const x of A) if (B.has(x)) common++;
+    const union = A.size + B.size - common;
+    const onlyA = missing(sb, sa), onlyB = missing(sa, sb);
+    return { shared: union === 0 ? 0 : common / union, onlyA: onlyA, onlyB: onlyB, canDropA: onlyA.length === 0, canDropB: onlyB.length === 0 };
+  }
+
+  const pure = { compareText, sentences, fitScale, anchorScroll, MIN_SCALE, MAX_SCALE, OVERVIEW_BELOW, shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, planRoutes, routeEdges, roundedPath, NODE_W, NODE_H, ROW_H, COL_GAP, TRACK, TOP, LEFT };
   if (typeof document === 'undefined') return pure;
 
   // ---------------------------------------------------------------------
@@ -1645,9 +1698,53 @@ const Akyuu = (function () {
           el('p', { class: 'why', text: f.why }),
           el('div', { class: 'ids' }, f.ids.map(withName))]);
         if (f.related.length) card.appendChild(el('div', { class: 'ids' }, [el('span', { class: 'muted', text: 'read instead:' })].concat(f.related.map(withName))));
+        // A pair can be compared: both memories, and what only one of them says.
+        const pair = f.kind === 'fork' ? f.related : f.ids;
+        if ((f.kind === 'near-duplicate' || f.kind === 'duplicate-body' || f.kind === 'fork') && pair.length >= 2) {
+          card.appendChild(el('p', {}, [el('button', { type: 'button', text: 'Compare', onclick: () => showCompare(pair[0], pair[1]) })]));
+        }
         box.appendChild(card);
       }
     }
+  }
+
+  // The side panel for two memories: who they are, how much they share, and the
+  // sentences that only one of them has. A memory that has a sentence the other
+  // lacks cannot be dropped in favour of the other.
+  async function showCompare(a, b) {
+    const p = panel();
+    panelHeader(p, 'Compare ' + shortId(a) + ' and ' + shortId(b));
+    p.appendChild(el('p', { class: 'muted', text: 'loading' }));
+    let ma, mb;
+    try { [ma, mb] = await Promise.all([state.src.memory(a), state.src.memory(b)]); }
+    catch (e) {
+      const q = panel();
+      panelHeader(q, 'Cannot compare');
+      q.appendChild(el('p', { text: e.message }));
+      return;
+    }
+    const c = compareText(ma.body, mb.body);
+    const q = panel();
+    panelHeader(q, 'Compare ' + shortId(a) + ' and ' + shortId(b));
+    const refsOf = (m) => (m.refs || []).filter(r => !r.generation).map(r => r.name);
+    const who = (tag, id, m) => el('p', {}, [el('strong', { text: tag + ' ' }), idLink(id),
+      el('span', { class: 'muted', text: ' ' + m.kind + ' · ' + m.agent + ' · ' + fmtTime(m.created) + (refsOf(m).length ? ' · ' + refsOf(m).join(', ') : '') })]);
+    q.appendChild(who('A', a, ma));
+    q.appendChild(who('B', b, mb));
+    q.appendChild(el('p', { text: 'They share ' + Math.round(c.shared * 100) + '% of their text (word triples).' }));
+    const only = (tag, xs) => {
+      q.appendChild(el('h2', { text: 'Only in ' + tag + ' (' + xs.length + ')' }));
+      if (!xs.length) q.appendChild(el('p', { class: 'muted', text: 'Nothing: all of its text is in the other memory.' }));
+      const ul = el('ul', { class: 'plain' });
+      for (const x of xs) ul.appendChild(el('li', { text: x }));
+      q.appendChild(ul);
+    };
+    only('A', c.onlyA);
+    only('B', c.onlyB);
+    const drop = (from, to, ok) => el('p', {}, [el('span', { class: 'pill ' + (ok ? 'good' : 'bad'), text: ok ? 'can be dropped' : 'cannot be dropped' }),
+      ' ' + from + ' ' + (ok ? 'says nothing that ' + to + ' lacks.' : 'has text that ' + to + ' lacks. Merge it or keep both.')]);
+    q.appendChild(drop('A', 'B', c.canDropA));
+    q.appendChild(drop('B', 'A', c.canDropB));
   }
 
   // ---- tabs, polling, start ------------------------------------------------------------
