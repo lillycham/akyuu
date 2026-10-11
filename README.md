@@ -17,7 +17,7 @@ akyuu search nix                    # text search, with the memories near each h
 akyuu get 08d4                      # the start of an id is enough
 akyuu supersede me/notes --kind fact --agent me --body "..."
 akyuu ref list                      # the name and the id of each ref
-akyuu gc --dry-run                  # what a GC run would collect
+akyuu gc --dry-run --grace 30m      # also --keep-generations N, --trash-ttl 7d
 akyuu pin 08d4                      # GC keeps a pinned memory
 akyuu pins                          # the id of each pin (akyuu unpin ID removes one)
 akyuu serve                         # the read-only web UI on 127.0.0.1:7420

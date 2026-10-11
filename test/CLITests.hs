@@ -4,6 +4,7 @@ module CLITests (cliTests) where
 
 import Akyuu.CLI
 import Akyuu.Error (AkyuuError (..))
+import Akyuu.GC (Policy (..), defaultPolicy)
 import Akyuu.Graph (EdgeType (..))
 import Akyuu.Ops (IdSpec (..))
 import Akyuu.Id (render)
@@ -121,6 +122,12 @@ parseCases =
     , testCase "an edge option takes a prefix too" $ do
         c <- parses ["add", "--kind", "fact", "--agent", "claude", "--about", take 11 i1, "--body", "x"]
         cliCommand c @?= Add (MemoryArgs "fact" "claude" [(About, Prefix (T.pack (take 11 i1)))] (BodyText "x"))
+    , testCase "gc takes the policy flags" $ do
+        c <- parses ["gc", "--dry-run", "--keep-generations", "2", "--grace", "30m", "--trash-ttl", "1d"]
+        cliCommand c @?= GC True (Policy 2 1800 86400)
+    , testCase "gc flags can come in any order, and each one is optional" $ do
+        c <- parses ["gc", "--grace", "0s"]
+        cliCommand c @?= GC False defaultPolicy {gracePeriod = 0}
     , testCase "pin, unpin and pins" $ do
         cs <- traverse parses [["pin", i1], ["unpin", i2], ["pins"]]
         map cliCommand cs @?= [Pin (Full (nid 1)), Unpin (Full (nid 2)), Pins]
@@ -132,7 +139,7 @@ parseCases =
         pure ()
     , testCase "gc, gc --dry-run, reindex, verify, neighbours" $ do
         cs <- traverse parses [["gc"], ["gc", "--dry-run"], ["reindex"], ["verify"], ["neighbours", i1]]
-        map cliCommand cs @?= [GC False, GC True, Reindex, Verify, Neighbours (Full (nid 1))]
+        map cliCommand cs @?= [GC False defaultPolicy, GC True defaultPolicy, Reindex, Verify, Neighbours (Full (nid 1))]
     ]
 
 failureCases :: TestTree
@@ -164,6 +171,12 @@ failureCases =
     , testCase "an unknown --follow kind is refused" $ do
         (msg, _) <- fails ["search", "--follow", "likes", "x"]
         assertBool msg ("is not a kind of edge" `isInfixOf` msg)
+    , testCase "a bad duration shows the friendly text" $ do
+        (msg, _) <- fails ["gc", "--grace", "30"]
+        assertBool msg ("is not a length of time" `isInfixOf` msg)
+    , testCase "a negative --keep-generations is refused" $ do
+        (msg, _) <- fails ["gc", "--keep-generations", "-1"]
+        assertBool msg ("at least 0" `isInfixOf` msg)
     , testCase "search needs words" $ do
         _ <- fails ["search"]
         pure ()

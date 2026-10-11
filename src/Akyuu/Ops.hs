@@ -36,6 +36,7 @@ module Akyuu.Ops
     resolveId,
     searchMemories,
     neighboursOf,
+    parseDuration,
     dryRunGC,
     runGC,
     reindexCache,
@@ -50,7 +51,7 @@ where
 import Akyuu.Cache (Cache, SyncReport, closeCache, openCache)
 import Akyuu.Cache qualified as Cache
 import Akyuu.Error (AkyuuError (..), fromSupersede)
-import Akyuu.GC (RunReport, defaultPolicy)
+import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (Edge, Graph)
 import Akyuu.Graph qualified as Graph
@@ -68,7 +69,7 @@ import Control.Exception (finally)
 import Control.Monad (forM, unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE, withExceptT)
-import Data.Char (isHexDigit, isSpace)
+import Data.Char (isDigit, isHexDigit, isSpace)
 import Data.Either (partitionEithers)
 import Data.List (sort, sortOn)
 import Data.Maybe (catMaybes, fromMaybe)
@@ -76,7 +77,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import System.Directory (doesDirectoryExist)
 
@@ -329,6 +330,21 @@ resolveId env (Prefix p) = runExceptT $ do
     [i] -> pure i
     is -> throwE (AmbiguousPrefix p (take 5 is))
 
+-- | Read a length of time as a person types it: a whole number and a unit,
+-- like @30m@, @1h@ or @7d@. The units are @s@, @m@, @h@ and @d@.
+-- This function is pure.
+--
+-- The unit is not optional, so @30@ is an error and not a guess.
+parseDuration :: Text -> Either AkyuuError NominalDiffTime
+parseDuration t = case T.span isDigit t of
+  (ds, u)
+    | not (T.null ds), Just k <- lookup u units ->
+        Right (fromInteger (read (T.unpack ds)) * k)
+  _ -> Left (BadInput (quote t <> " is not a length of time. Use a number and a unit: s, m, h or d, for example 30m, 1h or 7d."))
+  where
+    units = [("s", 1), ("m", 60), ("h", 3600), ("d", 86400)]
+    quote x = "'" <> x <> "'"
+
 -- | Make the cache match the store.
 synced :: Env -> ExceptT AkyuuError IO ()
 synced env = () <$ cache (Cache.sync (envCache env) (envStore env))
@@ -354,13 +370,13 @@ neighboursOf env i = runExceptT $ do
     then missing env i
     else pure ns
 
--- | The plan of a GC run now, with 'defaultPolicy'. This writes nothing.
-dryRunGC :: Env -> IO (Either AkyuuError (Set Id))
-dryRunGC env = runExceptT (gc (GC.dryRun (envCache env) (envStore env) (envRefs env) defaultPolicy Set.empty))
+-- | The plan of a GC run now, with this policy. This writes nothing.
+dryRunGC :: Env -> Policy -> IO (Either AkyuuError (Set Id))
+dryRunGC env p = runExceptT (gc (GC.dryRun (envCache env) (envStore env) (envRefs env) p Set.empty))
 
--- | One whole GC run now, with 'defaultPolicy' ('Akyuu.GC.collect').
-runGC :: Env -> IO (Either AkyuuError RunReport)
-runGC env = runExceptT (gc (GC.collect (envCache env) (envStore env) (envRefs env) defaultPolicy Set.empty))
+-- | One whole GC run now, with this policy ('Akyuu.GC.collect').
+runGC :: Env -> Policy -> IO (Either AkyuuError RunReport)
+runGC env p = runExceptT (gc (GC.collect (envCache env) (envStore env) (envRefs env) p Set.empty))
 
 -- | Throw the cache away and read the whole store again.
 reindexCache :: Env -> IO (Either AkyuuError SyncReport)

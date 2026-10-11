@@ -3,7 +3,7 @@
 module OpsTests (opsTests, withOpsEnv, note) where
 
 import Akyuu.Error
-import Akyuu.GC (Tombstone (..))
+import Akyuu.GC (Tombstone (..), Policy (..), defaultPolicy)
 import Akyuu.Graph (Dir (..), Edge (..), EdgeType (..))
 import Akyuu.Id (Id, render)
 import Akyuu.Id qualified as Id
@@ -241,13 +241,25 @@ opCases =
     , testCase "a dry run plans nothing for a fresh memory" $
         withOpsEnv $ \_ env -> do
           _ <- right =<< addMemory env (note "a" [])
-          p <- right =<< dryRunGC env
+          p <- right =<< dryRunGC env defaultPolicy
           p @?= Set.empty
+    , testCase "a dry run uses the policy that it gets" $
+        withOpsEnv $ \_ env -> do
+          i <- right =<< addMemory env (note "a" [])
+          p <- right =<< dryRunGC env defaultPolicy {gracePeriod = 0}
+          p @?= Set.singleton i
+    , testCase "parseDuration reads a number and a unit" $
+        map parseDuration ["0s", "45s", "30m", "1h", "7d"]
+          @?= map Right [0, 45, 1800, 3600, 7 * 86400]
+    , testCase "parseDuration refuses a bad length of time" $
+        mapM_
+          (\t -> assertBool (T.unpack t) (isLeft (parseDuration t)))
+          ["", "30", "m", "1.5h", "-1h", "1 h", "1w", "h1", "1hh"]
     , testCase "reindex reads every memory" $
         withOpsEnv $ \_ env -> do
           _ <- right =<< addMemory env (note "apple" [])
           _ <- right =<< addMemory env (note "pear" [])
-          _ <- right =<< runGC env
+          _ <- right =<< runGC env defaultPolicy
           _ <- right =<< reindexCache env
           r <- right =<< searchMemories env defaultSearchOptions "apple"
           length (matches r) @?= 1

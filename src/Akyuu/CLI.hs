@@ -31,6 +31,7 @@ module Akyuu.CLI
 where
 
 import Akyuu.Error (AkyuuError (..), describe)
+import Akyuu.GC (Policy (..), defaultPolicy)
 import Akyuu.Graph (Edge (..), EdgeType (..))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
@@ -132,8 +133,8 @@ data Command i
     Pins
   | Search SearchOptions Text
   | Neighbours i
-  | -- | 'True' for @--dry-run@.
-    GC Bool
+  | -- | 'True' for @--dry-run@, and the policy of the run.
+    GC Bool Policy
   | Reindex
   | Verify
   | -- | Serve MCP on stdin and stdout until stdin ends.
@@ -254,7 +255,20 @@ commandParser =
         <*> option (atLeast 0) (long "hops" <> metavar "N" <> value (searchHops defaultSearchOptions) <> showDefault <> help "How many edges away from a hit to look.")
         <*> many (option kindReader (long "follow" <> metavar "KIND" <> help "Follow only this kind of edge. Repeat for more. The default is all kinds."))
     neighboursP = Neighbours <$> argument idReader (metavar "ID")
-    gcP = GC <$> switch (long "dry-run" <> help "Only print what a run would collect. Write nothing.")
+    gcP =
+      GC
+        <$> switch (long "dry-run" <> help "Only print what a run would collect. Write nothing.")
+        <*> policyP
+    policyP =
+      Policy
+        <$> option (atLeast 0) (long "keep-generations" <> metavar "N" <> value (keepGenerations defaultPolicy) <> showDefault <> help "How many older values of each ref to keep, as well as the current one.")
+        <*> option (via parseDuration) (long "grace" <> metavar "DURATION" <> value (gracePeriod defaultPolicy) <> showDefaultWith showDuration <> help "Keep a memory that is younger than this. For example 30m, 1h or 7d.")
+        <*> option (via parseDuration) (long "trash-ttl" <> metavar "DURATION" <> value (trashTTL defaultPolicy) <> showDefaultWith showDuration <> help "Delete a trash file that is older than this.")
+    showDuration d = case [show (s `div` k) <> u | (k, u) <- [(86400, "d"), (3600, "h"), (60, "m")], s > 0, s `mod` k == 0] of
+      (t : _) -> t
+      [] -> show s <> "s"
+      where
+        s = round d :: Integer
     seedP =
       flag' () (long "demo" <> help "Make the demo store. This is the only kind of seed.")
         *> (Seed <$> optional (strOption (long "root" <> metavar "DIR" <> help "The directory of the new store. It must not hold a store with data.")))
@@ -385,8 +399,8 @@ runCommand env c = runExceptT $ case c of
   Pins -> ok . pinListLines <$> ExceptT (listPinned env)
   Search o q -> ok . searchLines <$> ExceptT (searchMemories env o q)
   Neighbours i -> ok . neighbourLines <$> ExceptT (neighboursOf env i)
-  GC True -> ok . planLines <$> ExceptT (dryRunGC env)
-  GC False -> ok . runLines <$> ExceptT (runGC env)
+  GC True p -> ok . planLines <$> ExceptT (dryRunGC env p)
+  GC False p -> ok . runLines <$> ExceptT (runGC env p)
   Reindex -> ok . syncLines <$> ExceptT (reindexCache env)
   Verify -> do
     r <- ExceptT (verifyStore env)
