@@ -2,7 +2,7 @@
 
 module CheckTests (checkTests) where
 
-import Akyuu.Check (CheckOptions (hubDegree), Finding (findingIds, findingKind, findingRelated, findingSeverity), FindingKind (DuplicateBody, Fork, Hub, NearDuplicate, StaleLink, Unreferenced), Inputs (Inputs), Severity (Info, Problem), check, defaultCheckOptions, jaccard, normalise, shingles)
+import Akyuu.Check (CheckOptions (hubDegree, longLog), Finding (findingIds, findingKind, findingRelated, findingSeverity), FindingKind (DuplicateBody, Fork, Hub, LongLog, NearDuplicate, StaleLink, Unreferenced), Inputs (Inputs), Severity (Info, Problem), check, defaultCheckOptions, jaccard, normalise, shingles)
 import Akyuu.GC (Roots (Roots, rootPins, rootRefs, rootTemps))
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Supersedes), Graph, singleton)
 import Akyuu.Id (Id)
@@ -24,6 +24,7 @@ checkTests =
       nearCases,
       unreferencedCases,
       hubCases,
+      longLogCases,
       reviewedCases,
       helperCases,
       properties
@@ -185,6 +186,20 @@ hubCases =
         let g = build [(a, []), (b, [(About, a)]), (c, [(About, a)])]
             fs = check defaultCheckOptions {hubDegree = 1} (Inputs g Map.empty (held [a, b, c]) Set.empty)
         map findingKind fs @?= [Hub]
+    ]
+
+longLogCases :: TestTree
+longLogCases =
+  testGroup
+    "LongLog"
+    [ testCase "a chain longer than the limit is a long log, named by its newest episode" $ do
+        let g = build [(a, []), (b, [(DerivedFrom, a)]), (c, [(DerivedFrom, b)]), (d, [(DerivedFrom, c)])]
+            fs = check defaultCheckOptions {longLog = 3} (Inputs g Map.empty (held [d]) Set.empty)
+        [(findingKind x, findingIds x) | x <- fs] @?= [(LongLog, [d])],
+      testCase "a chain at the limit is not long, and an older value of the ref is not counted again" $ do
+        let g = build [(a, []), (b, [(DerivedFrom, a)]), (c, [(DerivedFrom, b)])]
+        check defaultCheckOptions {longLog = 3} (Inputs g Map.empty (held [c, b]) Set.empty) @?= []
+        map findingKind (check defaultCheckOptions {longLog = 2} (Inputs g Map.empty (held [c, b]) Set.empty)) @?= [LongLog]
     ]
 
 -- | Findings with a set of reviewed pairs.

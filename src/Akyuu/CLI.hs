@@ -32,7 +32,7 @@ module Akyuu.CLI
 where
 
 import Akyuu.Amend qualified as Amend
-import Akyuu.Check (CheckOptions (CheckOptions, hubDegree, minWords, nearThreshold), Finding (findingSeverity), FindingKind, Severity (Problem), defaultCheckOptions, filterFindings, kindName, severityName)
+import Akyuu.Check (CheckOptions (CheckOptions, hubDegree, longLog, minWords, nearThreshold), Finding (findingSeverity), FindingKind, Severity (Problem), defaultCheckOptions, filterFindings, kindName, severityName)
 import Akyuu.Error (AkyuuError (BadInput, BadName), describe)
 import Akyuu.GC (Policy (Policy, gracePeriod, keepGenerations, trashTTL), defaultPolicy)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
@@ -348,6 +348,7 @@ commandParser =
                 <$> option unitDouble (long "near-threshold" <> metavar "X" <> value (nearThreshold defaultCheckOptions) <> showDefault <> help "The share of text (0 to 1) that two memories must have in common to be near duplicates.")
                 <*> option (atLeast 0) (long "hub-degree" <> metavar "N" <> value (hubDegree defaultCheckOptions) <> showDefault <> help "A memory with more links than this is a hub.")
                 <*> option (atLeast 1) (long "min-words" <> metavar "N" <> value (minWords defaultCheckOptions) <> showDefault <> help "Skip the near duplicate test for a text of fewer words.")
+                <*> option (atLeast 1) (long "long-log" <> metavar "N" <> value (longLog defaultCheckOptions) <> showDefault <> help "A log with more episodes than this is long.")
             )
         <*> many (option checkKindReader (long "kind" <> metavar "KIND" <> help "Show only this kind of finding. Repeat for more."))
         <*> optional (option severityReader (long "severity" <> metavar "LEVEL" <> help "Show only this level or a higher one: info, suggestion or problem."))

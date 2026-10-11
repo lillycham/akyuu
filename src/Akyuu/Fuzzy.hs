@@ -63,8 +63,9 @@ maxEdits w
 -- each one. A term is near if it is within 'maxEdits' of the word, or of the
 -- start of the word that is as long as the term (a stem is shorter than the
 -- word that it comes from; that second distance counts one more, so a long
--- word is not near every term that it starts with; a term of fewer than four
--- characters is not compared this way, it would be near every long word). The
+-- word is not near every term that it starts with; a term of fewer than five
+-- characters, or one that does not start like the word, is not compared this
+-- way: it would be near too many long words). The
 -- word itself is not a result. The terms with the same distance go by number of memories. At most
 -- @k@ terms are returned.
 nearTerms :: Int -> Text -> [(Text, Int)] -> [Text]
@@ -83,4 +84,4 @@ nearTerms k w vocab =
     distance t =
       min
         (editDistance w t)
-        (if T.length w > T.length t && T.length t >= 4 then editDistance (T.take (T.length t) w) t + 1 else maxBound)
+        (if T.length w > T.length t && T.length t >= 5 && T.take 3 t == T.take 3 w then editDistance (T.take (T.length t) w) t + 1 else maxBound)

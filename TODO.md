@@ -458,3 +458,17 @@ Give a stronger connection more weight in search context and in the graph view:
       for example `orMissing :: (IOException -> Bool) -> e -> (IOException -> e) -> IO a -> IO (Either e a)`. That is a choice about the API, so it waits for a decision.
 - [x] Add `-threaded` to the test suite, so the race test with `MustBe` can really run threads in parallel.
       Done, with `-N`. Check that the `MustBe` race test now runs threads in parallel: it is not changed yet.
+
+## Agent ergonomics (2026-10-11)
+
+- [x] `amend`: change one passage of the memory of a ref, or append, in one call (`Akyuu.Amend`).
+- [x] Tools accept a unique id prefix of 8 hex digits or more. Lists show ids cut to 12 digits.
+- [x] Search hits show the refs that hold them (`held by`). `ref_list` shows the first line of each memory.
+- [x] Manifest lines `at DIR: refs` and `log DIR: ref`. `context` adds the refs of a directory. `note` writes to the log of a directory.
+- [x] `docs/hooks.md`: a SessionStart hook that runs `akyuu context`.
+- [x] Fuzzy search: a stem is near a long word only if it has 5 characters or more and starts like the word (no more `perl` for `persnoa`).
+- [x] `check` finding `long-log`: a log with more than 30 episodes (`--long-log N`, `long_log`).
+- [x] The memories repo has a private remote (github.com/lillycham/akyuu-mem). `akyuu-version` still never pushes.
+- [ ] **Per-log retention.** Needs a decision first: should a log summarise itself (a procedure memory that an agent runs when
+      `long-log` shows), or keep only the newest N episodes (GC would then need to cut a chain)? Today the answer is the first one, by hand.
+- [ ] `akyuu-version` could push after it commits, when a remote exists and the person turns it on (`versioning.push = true`).

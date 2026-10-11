@@ -94,6 +94,9 @@ nearCases =
         nearTerms 4 "haksell" [("a", 9), ("is", 9), ("haskel", 1)] @?= ["haskel"],
       testCase "a stem is near the start of a longer word" $
         nearTerms 4 "derivation" [("deriv", 2)] @?= ["deriv"],
+      testCase "a short stem or one with another start is not near a long word" $ do
+        nearTerms 4 "persnoa" [("perl", 3)] @?= []
+        nearTerms 4 "xerivation" [("deriv", 2)] @?= [],
       testCase "a far term is not near" $ nearTerms 4 "haskell" [("python", 5)] @?= []
     ]
 

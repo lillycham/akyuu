@@ -34,8 +34,8 @@ module Akyuu.Check
   )
 where
 
-import Akyuu.GC (Roots, allRoots, retains)
-import Akyuu.Graph (Dir (In, Out), EdgeType (Supersedes), Graph)
+import Akyuu.GC (Roots (rootRefs), allRoots, retains)
+import Akyuu.Graph (Dir (In, Out), EdgeType (DerivedFrom, Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, render)
 import Akyuu.Query (resolve)
@@ -75,6 +75,9 @@ data FindingKind
     Unreferenced
   | -- | A memory that many memories point at.
     Hub
+  | -- | A log (a chain of episodes under a ref) with many episodes. It
+    -- is time to replace it with a summary.
+    LongLog
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | One thing that 'check' found. This is plain data.
@@ -103,13 +106,15 @@ data CheckOptions = CheckOptions
     hubDegree :: Int,
     -- | A memory with fewer words than this is not compared for near
     -- duplicates. Short texts match by chance.
-    minWords :: Int
+    minWords :: Int,
+    -- | A log with more episodes than this is a 'LongLog'.
+    longLog :: Int
   }
   deriving (Eq, Show)
 
 -- | A threshold of 0.8, a hub at more than 5 links, and 5 words at least.
 defaultCheckOptions :: CheckOptions
-defaultCheckOptions = CheckOptions {nearThreshold = 0.8, hubDegree = 5, minWords = 5}
+defaultCheckOptions = CheckOptions {nearThreshold = 0.8, hubDegree = 5, minWords = 5, longLog = 30}
 
 -- Check ----------------------------------------------------------------
 
@@ -137,6 +142,7 @@ check o i =
         <> filter (not . judged) (nearDuplicates o g hs bodies)
         <> unreferenced g hs (inRoots i)
         <> hubs o g kept
+        <> longLogs o g (rootRefs (inRoots i))
     )
   where
     g = inGraph i
@@ -284,6 +290,35 @@ hubs o g hs =
     n > hubDegree o
   ]
 
+-- | A log that has grown long: a value of a ref that no episode follows,
+-- with a chain of more than 'longLog' episodes behind it. The chain goes
+-- through the one @derived_from@ edge of each episode, as 'Akyuu.Episode'
+-- writes it, and stops at a memory with no such edge, or with more than one.
+longLogs :: CheckOptions -> Graph -> Set Id -> [Finding]
+longLogs o g refs =
+  [ Finding
+      { findingKind = LongLog,
+        findingSeverity = Info,
+        findingIds = [h],
+        findingRelated = [],
+        findingWhy =
+          "This log has "
+            <> T.pack (show n)
+            <> " episodes. Replace it with a summary (supersede the ref) when you can, so that it stays short."
+      }
+  | h <- Set.toAscList refs,
+    null [() | (k, _) <- ins h g, k == DerivedFrom],
+    let n = chainLength h,
+    n > longLog o
+  ]
+  where
+    chainLength = go Set.empty (0 :: Int)
+    go seen n x
+      | x `Set.member` seen = n
+      | otherwise = case [t | (DerivedFrom, t) <- outs x g] of
+          [t] -> go (Set.insert x seen) (n + 1) t
+          _ -> n + 1
+
 -- Helpers --------------------------------------------------------------
 
 -- | The edges that start at a memory, as (kind, target).
@@ -342,6 +377,7 @@ kindName DuplicateBody = "duplicate-body"
 kindName NearDuplicate = "near-duplicate"
 kindName Unreferenced = "unreferenced"
 kindName Hub = "hub"
+kindName LongLog = "long-log"
 
 -- | The name of a severity: @problem@, @suggestion@ or @info@.
 severityName :: Severity -> Text
