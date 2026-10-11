@@ -56,6 +56,7 @@ svg.graph .node.missing rect.box { stroke: var(--warn); }
 svg.graph .node.pruned rect.box { stroke: var(--muted); }
 svg.graph .node.cacheonly rect.box { stroke: var(--warn); stroke-width: 2; }
 svg.graph .node.dim { opacity: .18; }
+svg.graph .node.nb rect.box { stroke: var(--accent); stroke-width: 2; }
 svg.graph .node.selected rect.box { stroke: var(--sel); stroke-width: 2.5; }
 svg.graph .node.seed rect.box { stroke: var(--accent); stroke-width: 2; }
 svg.graph .halo { fill: none; stroke: var(--hit); stroke-width: 6; opacity: .8; }
@@ -66,6 +67,11 @@ svg.graph .edge.about { stroke: var(--about); stroke-width: 1.2; stroke-dasharra
 svg.graph .edge.derived-from { stroke: var(--derived); stroke-width: 1.2; stroke-dasharray: 2 3; }
 svg.graph .edge.refines { stroke: var(--refines); stroke-width: 1.2; }
 svg.graph .edge.dim { opacity: .12; }
+/* Highlight: the edges of the hovered or selected node are bold, the rest is faint. */
+svg.graph.hl .edge { opacity: .08; }
+svg.graph .edge.hot { opacity: 1; stroke-width: 2.6; }
+svg.graph .edge.supersedes.hot { stroke-width: 3.8; }
+svg.graph.hl .edge.hot.dim { opacity: .35; }
 svg.graph .reftag rect { fill: var(--card); stroke: var(--accent); }
 svg.graph .reftag text { fill: var(--accent); font-size: 11px; }
 svg.graph .reftag.ghost rect { stroke-dasharray: 3 2; stroke: var(--muted); fill: none; }
@@ -1027,7 +1033,8 @@ const Akyuu = (function () {
       if (dimmed(n)) cls.push('dim');
       if (state.selected === id) cls.push('selected');
       if (seeds.has(id) && state.window.focus) cls.push('seed');
-      const g = svg('g', { class: cls.join(' '), transform: 'translate(' + x + ',' + y + ')', 'data-id': id });
+      const nodeBase = cls.join(' ');
+      const g = svg('g', { class: nodeBase, transform: 'translate(' + x + ',' + y + ')', 'data-id': id });
       if (opts.halo && opts.halo.has(id)) g.appendChild(svg('rect', { class: 'halo', x: -5, y: -5, width: NODE_W + 10, height: NODE_H + 10, rx: 10 }));
       const box = svg('rect', { class: 'box', width: NODE_W, height: NODE_H, rx: 7 });
       if (n.status === 'head') box.setAttribute('style', 'fill: ' + kindFill(n.kind));
@@ -1062,8 +1069,28 @@ const Akyuu = (function () {
         if (t) g.appendChild(svg('text', { class: 'rootmark', x: NODE_W - 4, y: -4, 'text-anchor': 'end', text: t }));
       }
       g.addEventListener('click', () => (opts.onClick || selectNode)(id));
+      g.addEventListener('mouseenter', () => light(id));
+      g.addEventListener('mouseleave', () => light(state.selected));
+      nodeEls.set(id, { el: g, base: nodeBase });
       root.appendChild(g);
     }
+    // The highlight of a node: its edges are bold ("hot"), the boxes at the
+    // other ends are marked ("nb"), and every other edge is faint (the class
+    // "hl" on the root). The selected node stays lit when the mouse leaves.
+    let lit = [];
+    function light(id) {
+      for (const o of lit) o.el.setAttribute('class', o.base);
+      lit = [];
+      if (id == null || !edgeEls.has(id)) { root.setAttribute('class', 'graph'); return; }
+      root.setAttribute('class', 'graph hl');
+      const mark = (o, c) => { o.el.setAttribute('class', o.base + ' ' + c); lit.push(o); };
+      for (const o of edgeEls.get(id)) {
+        mark(o, 'hot');
+        const peer = nodeEls.get(o.src === id ? o.dst : o.src);
+        if (peer) mark(peer, 'nb');
+      }
+    }
+    light(state.selected);
     container.appendChild(root);
     if (opts.scrollTo && lay.pos.has(opts.scrollTo)) {
       const p = xy(opts.scrollTo);
