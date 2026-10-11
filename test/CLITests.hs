@@ -2,7 +2,7 @@
 
 module CLITests (cliTests) where
 
-import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, CheckStore, Compare, Context, GC, Get, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, Append, CheckStore, Compare, Context, GC, Get, Log, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
 import Akyuu.Check (FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Check qualified as Check
 import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
@@ -155,6 +155,14 @@ parseCases =
         m <- name "team/tiers"
         b <- parses ["context", "--tier", "background", "--ref", "claude/projects/akyuu", "--manifest", "team/tiers"]
         (cliCommand a, cliCommand b) @?= (Context Nothing [] Nothing, Context (Just "background") [n] (Just m)),
+      testCase "append takes a ref and the fields of add, and log a ref, a limit and --full" $ do
+        n <- name "agent/episodes"
+        a <- parses ["append", "agent/episodes", "--kind", "episode", "--agent", "claude", "--body", "x"]
+        cliCommand a @?= Append n (MemoryArgs "episode" "claude" [] (BodyText "x"))
+        l <- parses ["log", "agent/episodes", "-n", "5", "--full"]
+        cliCommand l @?= Log n (Just 5) True
+        d <- parses ["log", "agent/episodes"]
+        cliCommand d @?= Log n Nothing False,
       testCase "gc takes the policy flags" $ do
         c <- parses ["gc", "--dry-run", "--keep-generations", "2", "--grace", "30m", "--trash-ttl", "1d"]
         cliCommand c @?= GC True (Policy 2 1800 86400),
@@ -367,6 +375,20 @@ runCases =
           c <- right =<< resolveCommand env (cliCommand unknown)
           e <- runCommand env c
           assertBool "an unknown tier is an error" (either (const True) (const False) e),
+      testCase "append makes a log, and log prints it newest first" $
+        withOpsEnv $ \_ env -> do
+          let ap t = run env ["append", "agent/episodes", "--kind", "episode", "--agent", "claude", "--body", t]
+          _ <- ap "first thing"
+          _ <- ap "second thing"
+          l <- run env ["log", "agent/episodes"]
+          let ls = T.lines (decodeUtf8 (outBytes l))
+          length ls @?= 2
+          assertBool "newest first" ("second thing" `T.isSuffixOf` (ls !! 0))
+          assertBool "then the older" ("first thing" `T.isSuffixOf` (ls !! 1))
+          full <- run env ["log", "agent/episodes", "--full", "-n", "1"]
+          let fs = T.lines (decodeUtf8 (outBytes full))
+          assertBool "the body is indented under the line" ("  second thing" `elem` fs)
+          assertBool "says where the log goes on" (any (T.isPrefixOf "more: ") fs),
       testCase "pin, pins and unpin" $
         withOpsEnv $ \_ env -> do
           o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "keep me")))

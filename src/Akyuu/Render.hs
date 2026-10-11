@@ -25,6 +25,7 @@ module Akyuu.Render
     compareJSON,
     reviewLines,
     tierLines,
+    logLines,
     verifyLines,
     edgeName,
     dirName,
@@ -34,6 +35,7 @@ where
 import Akyuu.Cache (Correction (PrefixOf, SpelledAs), SyncReport (added, removed), snippetClose, snippetOpen)
 import Akyuu.Check (Finding (findingIds, findingKind, findingRelated, findingSeverity, findingWhy), kindName, severityName)
 import Akyuu.Compare (Comparison (cmpOnlyA, cmpOnlyB, cmpShared), canDropA, canDropB)
+import Akyuu.Episode (Walk (Walk))
 import Akyuu.Error (describe, describeParse)
 import Akyuu.Error qualified as Error
 import Akyuu.GC (RunReport (swept), SweepReport (deleted, trashed))
@@ -289,3 +291,20 @@ tierLines (ContextReport tier es others) =
   where
     entry (Present n i m) = ["== " <> nameText n <> " (" <> render i <> ")"] <> T.lines (memBody m) <> [""]
     entry (Absent n) = ["== " <> nameText n <> ": the manifest names it, and there is no such ref.", ""]
+
+-- Episodes -------------------------------------------------------------
+
+-- | The episodes of a log, newest first. Each one is a line with the id, the
+-- time, the agent, the kind and the first line of the body. With @full@, the
+-- body follows, indented. A last line @more: ID@ says that the log goes on
+-- from that episode.
+logLines :: Bool -> Walk -> [Text]
+logLines full (Walk es more) = concatMap one es <> maybe [] (\i -> ["more: " <> render i]) more
+  where
+    one (i, m) =
+      T.intercalate "  " [render i, T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (memCreated m)), memAgent m, memKind m, firstLine (memBody m)]
+        : ["  " <> l | full, l <- T.lines (memBody m)]
+    firstLine b = case filter (not . T.null) (map T.strip (T.lines b)) of
+      (l : _) | T.length l > 100 -> T.take 99 l <> "…"
+      (l : _) -> l
+      [] -> ""

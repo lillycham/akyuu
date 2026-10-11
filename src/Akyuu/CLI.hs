@@ -39,10 +39,10 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, contextFor, dryRunGC, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, parseDuration, parseIdSpec, pinMemory, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, parseDuration, parseIdSpec, pinMemory, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLines, syncLines, tierLines, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLines, syncLines, tierLines, unpinLines, verifyLines)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Web.Page qualified as Page
 import Akyuu.Web.Read qualified as Read
@@ -142,6 +142,11 @@ data Command i
     Reviews
   | -- | The tier, extra refs, and the ref of the manifest ('Nothing' for the default).
     Context (Maybe Text) [Name] (Maybe Name)
+  | -- | Append an episode to the log that a ref names.
+    Append Name (MemoryArgs i)
+  | -- | Read a log: the ref, the most episodes ('Nothing' for the default),
+    -- and 'True' for the bodies.
+    Log Name (Maybe Int) Bool
   | Search SearchOptions Text
   | Neighbours i
   | -- | Two memories to compare, and 'True' for JSON.
@@ -225,6 +230,8 @@ commandParser =
       <> cmd "review" reviewP "Record that two memories are different and both true, so that check leaves the pair out."
       <> cmd "unreview" (Unreview <$> argument idReader (metavar "ID_A") <*> argument idReader (metavar "ID_B")) "Remove the review of a pair."
       <> cmd "reviews" (pure Reviews) "Print the reviewed pairs."
+      <> cmd "append" appendP "Add an episode to a log: a memory that points at the one before it, under a ref that moves to it."
+      <> cmd "log" logP "Print the episodes of a log, newest first."
       <> cmd "context" contextP "Print the memories of a tier (the profile, the policy and so on) in one call, for the start of a session."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
       <> cmd "neighbours" neighboursP "Show the edges of a memory, in both directions."
@@ -277,6 +284,12 @@ commandParser =
         <*> option (atLeast 0) (long "hops" <> metavar "N" <> value (searchHops defaultSearchOptions) <> showDefault <> help "How many edges away from a hit to look.")
         <*> many (option kindReader (long "follow" <> metavar "KIND" <> help "Follow only this kind of edge. Repeat for more. The default is all kinds."))
     neighboursP = Neighbours <$> argument idReader (metavar "ID")
+    appendP = Append <$> argument nameReader (metavar "REF") <*> memoryArgs
+    logP =
+      Log
+        <$> argument nameReader (metavar "REF")
+        <*> optional (option (atLeast 1) (long "limit" <> short 'n' <> metavar "N" <> help "The most episodes to print. The default is 20."))
+        <*> switch (long "full" <> help "Print the body of each episode.")
     contextP =
       Context
         <$> optional (strOption (long "tier" <> metavar "NAME" <> help "The tier to print. The default is always."))
@@ -453,6 +466,13 @@ runCommand env c = runExceptT $ case c of
   Review a b agent note -> ok ["reviewed " <> Id.render a <> " " <> Id.render b] <$ ExceptT (reviewPair env a b agent note)
   Unreview a b -> ok ["unreviewed " <> Id.render a <> " " <> Id.render b] <$ ExceptT (unreviewPair env a b)
   Reviews -> ok . reviewLines <$> ExceptT (listReviewed env)
+  Append n a -> do
+    nm <- newMemory a
+    i <- ExceptT (appendEpisode env n nm)
+    pure (ok [Id.render i])
+  Log n lim full -> do
+    w <- ExceptT (readLog env n (maybe 20 id lim))
+    pure (ok (logLines full w))
   Context tier extra given -> do
     manifest <- liftIO (manifestRef given)
     r <- ExceptT (either (pure . Left) (\mr -> contextFor env mr (maybe "always" id tier) extra) manifest)

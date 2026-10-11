@@ -44,6 +44,8 @@ module Akyuu.Ops
     reindexCache,
     checkStore,
     reviewPair,
+    appendEpisode,
+    readLog,
     unreviewPair,
     listReviewed,
     ContextEntry (..),
@@ -66,10 +68,12 @@ import Akyuu.Check (CheckOptions, Finding)
 import Akyuu.Check qualified as Check
 import Akyuu.Compare (Comparison)
 import Akyuu.Compare qualified as Compare
+import Akyuu.Episode (Walk)
+import Akyuu.Episode qualified as Episode
 import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), fromSupersede)
 import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
-import Akyuu.Graph (Edge, Graph)
+import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
@@ -645,3 +649,25 @@ contextFor env manifestRef tier extra = runExceptT $ do
       NoColon n l -> "The manifest has no ':' on line " <> T.pack (show n) <> ": " <> quoted l <> "."
       BadTierName n l -> "The manifest has a bad tier name on line " <> T.pack (show n) <> ": " <> quoted l <> "."
       BadTierRef n r _ -> "The manifest has a bad ref name on line " <> T.pack (show n) <> ": " <> quoted r <> "."
+
+-- Episodes -------------------------------------------------------------
+
+-- | Append an episode to the log that a ref names ('Akyuu.Episode.append').
+-- A ref that does not exist starts a log. The new memory gets a
+-- @derived_from@ edge to the newest episode, and the ref moves to it.
+--
+-- The memory must not have a @derived_from@ edge: that edge is the link of
+-- the chain. Use @about@ or @refines@ to link an episode to something else.
+appendEpisode :: Env -> Name -> NewMemory -> IO (Either AkyuuError Id)
+appendEpisode env n nm = runExceptT $ do
+  let linked = [() | Edge k _ <- Set.toList (newEdges nm), k == DerivedFrom]
+  unless (null linked) (throwE (BadInput "An episode links to the one before it with derived_from, and append adds that edge. Use about or refines for other links."))
+  m <- buildNow nm
+  withExceptT fromSupersede (ExceptT (Episode.append (envStore env) (envRefs env) n m))
+
+-- | Read a log, newest episode first, up to a limit of episodes
+-- ('Akyuu.Episode.walk'). A ref that does not exist is an error.
+readLog :: Env -> Name -> Int -> IO (Either AkyuuError Walk)
+readLog env n limit = runExceptT $ do
+  ref <- ExceptT (readRef env n)
+  liftIO (Episode.walk (envStore env) limit (current ref))

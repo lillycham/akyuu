@@ -42,10 +42,10 @@ import Akyuu.Error (AkyuuError (BadId, BadName), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, contextFor, getMemory, listRefValues, neighboursOf, readRef, reviewPair, searchMemories, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, getMemory, listRefValues, neighboursOf, readLog, readRef, reviewPair, searchMemories, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName)
-import Akyuu.Render (compareLines, edgeName, findingLines, memoryText, neighbourLines, refLines, refListLines, searchLines, tierLines)
+import Akyuu.Render (compareLines, edgeName, findingLines, logLines, memoryText, neighbourLines, refLines, refListLines, searchLines, tierLines)
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (unless)
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
@@ -81,6 +81,10 @@ data ToolCall
     CallRefGet Name Bool
   | CallRefSet Name Expected Id
   | CallRefList
+  | -- | Append an episode to a log.
+    CallAppend Name NewMemory
+  | -- | Read a log: the ref, the limit, and whether to show the bodies.
+    CallLog Name (Maybe Int) Bool
   | -- | The tier ('Nothing' for always) and extra refs.
     CallContext (Maybe Text) [Name]
   | -- | The options, the kinds to show (none means all), and the lowest severity.
@@ -187,6 +191,29 @@ toolList =
             ("note", stringSchema "A short reason. It can be empty.")
           ]
           ["a", "b", "agent"]
+      ),
+    tool
+      "append"
+      "Add an episode to a log. A log is a ref that names the newest of a chain of memories: each episode points at the one before it, so the whole chain stays in the store. Use it for what happened or was said, which you want to keep and not to replace. The ref is created on the first call. To change what is current about a topic, use supersede instead. A log can only be shortened by replacing it with a summary (supersede the ref)."
+      ( objectSchema
+          [ ("ref", refSchema),
+            ("kind", stringSchema "The kind of memory, for example episode. One line, no space at either end."),
+            ("agent", stringSchema "The name of the agent that writes the episode. One line, no space at either end."),
+            ("body", stringSchema "The text of the episode."),
+            ("about", idsSchema "Memories that this episode is about."),
+            ("refines", idsSchema "Memories that this episode adds detail to.")
+          ]
+          ["ref", "kind", "agent", "body"]
+      ),
+    tool
+      "log"
+      "Read the episodes of a log, newest first: one line each with the id, the time, the agent, the kind and the first line. With full, the bodies too. A last line more: ID says that the log goes on. Use get with an id to read one episode."
+      ( objectSchema
+          [ ("ref", refSchema),
+            ("limit", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "default" .= (20 :: Int), "description" .= ("The most episodes to return." :: Text)]),
+            ("full", object ["type" .= ("boolean" :: Text), "default" .= False])
+          ]
+          ["ref"]
       ),
     tool
       "context"
@@ -361,6 +388,13 @@ parseToolCall n args = case n of
       (Nothing, False) -> Left (BadArguments "Give 'expected' (the id that the ref points to now), or 'create': true for a new ref.")
     pure (CallRefSet r ex i)
   "ref_list" -> pure CallRefList
+  "append" -> CallAppend <$> refArg args <*> memoryArg args plainEdges
+  "log" -> do
+    r <- refArg args
+    l <- optional' args "limit" asInt "a whole number"
+    full <- maybe False id <$> optional' args "full" asBool "true or false"
+    lim <- traverse (atLeast "limit" 1) l
+    pure (CallLog r lim full)
   "context" -> do
     t <- optional' args "tier" asText "a string"
     rs <- maybe [] id <$> optional' args "refs" (asList asText) "a list of strings"
@@ -420,6 +454,8 @@ runTool cfg env c = either failed id <$> go
       CallReview a b ag n -> fmap (const (okText ("reviewed " <> Id.render a <> " " <> Id.render b) False)) <$> reviewPair env a b ag n
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
+      CallAppend n m -> fmap (\i -> okText (Id.render i) False) <$> appendEpisode env n m
+      CallLog n lim full -> fmap (\w -> okText (T.intercalate "\n" (logLines full w)) False) <$> readLog env n (maybe 20 id lim)
       CallRefList -> fmap (lines' "There are no refs." . refListLines) <$> listRefValues env
       CallContext tier refs -> case mkName (mcpTiersRef cfg) of
         Left e -> pure (Left (BadName (mcpTiersRef cfg) e))

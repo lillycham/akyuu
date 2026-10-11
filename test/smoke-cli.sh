@@ -50,6 +50,10 @@ expect 0 ref get claude/lang --history
 expect 0 ref list
 expect 0 search haskell
 expect 0 search --hops 0 nix
+expect 0 search hask
+expect 0 append claude/episodes --kind episode --agent claude --body "first episode"
+expect 0 append claude/episodes --kind episode --agent claude --body "second episode"
+expect 0 log claude/episodes --full
 expect 0 neighbours "$v2"
 expect 0 gc --dry-run
 expect 0 gc

@@ -1682,6 +1682,11 @@ const Akyuu = (function () {
     state.lastSearch = r;
     state.hits = new Set(r.matches.map(m => m.id));
     out.replaceChildren();
+    // What the fuzzy step did: a word that the index does not have was searched as a prefix or a near term.
+    for (const c of r.corrections || []) {
+      out.appendChild(el('p', { class: 'notice' }, [el('span', { class: 'pill', text: c.kind === 'prefix' ? 'start of a word' : 'spelling' }),
+        ' No word "' + c.word + '", so it was searched as ' + c.used.map(u => '"' + u + '"').join(' or ') + '.']));
+    }
     if (!r.matches.length) out.appendChild(el('p', { class: 'muted', text: 'No matches.' }));
     const ul = el('ul', { class: 'plain hits' });
     for (const m of r.matches) {
