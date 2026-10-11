@@ -22,6 +22,7 @@ import MemoryTests (memoryTests)
 import OpsTests (opsTests)
 import QueryTests (queryTests)
 import RefsTests (refsTests)
+import ReviewTests (reviewTests)
 import SeedTests (seedTests)
 import StoreTests (storeTests)
 import SupersedeTests (supersedeTests)
@@ -33,7 +34,7 @@ import Test.Tasty.QuickCheck (conjoin, testProperty, (===), (==>))
 import WebTests (webTests)
 
 main :: IO ()
-main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, compareTests, opsTests, cliTests, mcpTests, webTests, seedTests]
+main = defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, compareTests, reviewTests, opsTests, cliTests, mcpTests, webTests, seedTests]
 
 idTests :: TestTree
 idTests =

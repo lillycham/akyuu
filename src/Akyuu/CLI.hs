@@ -39,10 +39,10 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, dryRunGC, getMemory, listPinned, listRefValues, neighboursOf, parseDuration, parseIdSpec, pinMemory, readRef, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, dryRunGC, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, parseDuration, parseIdSpec, pinMemory, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, runLines, searchLines, syncLines, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLines, syncLines, unpinLines, verifyLines)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Web.Page qualified as Page
 import Akyuu.Web.Read qualified as Read
@@ -135,6 +135,11 @@ data Command i
   | Unpin i
   | -- | Print the pins.
     Pins
+  | -- | Two memories, the name of the agent that judged them, and a note.
+    Review i i Text Text
+  | Unreview i i
+  | -- | Print the reviewed pairs.
+    Reviews
   | Search SearchOptions Text
   | Neighbours i
   | -- | Two memories to compare, and 'True' for JSON.
@@ -215,6 +220,9 @@ commandParser =
       <> cmd "pin" (Pin <$> argument idReader (metavar "ID")) "Pin a memory, so that GC keeps it."
       <> cmd "unpin" (Unpin <$> argument idReader (metavar "ID")) "Remove the pin of a memory."
       <> cmd "pins" (pure Pins) "Print the id of each pinned memory."
+      <> cmd "review" reviewP "Record that two memories are different and both true, so that check leaves the pair out."
+      <> cmd "unreview" (Unreview <$> argument idReader (metavar "ID_A") <*> argument idReader (metavar "ID_B")) "Remove the review of a pair."
+      <> cmd "reviews" (pure Reviews) "Print the reviewed pairs."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
       <> cmd "neighbours" neighboursP "Show the edges of a memory, in both directions."
       <> cmd "compare" compareP "Show what each of two memories says that the other lacks."
@@ -266,6 +274,12 @@ commandParser =
         <*> option (atLeast 0) (long "hops" <> metavar "N" <> value (searchHops defaultSearchOptions) <> showDefault <> help "How many edges away from a hit to look.")
         <*> many (option kindReader (long "follow" <> metavar "KIND" <> help "Follow only this kind of edge. Repeat for more. The default is all kinds."))
     neighboursP = Neighbours <$> argument idReader (metavar "ID")
+    reviewP =
+      Review
+        <$> argument idReader (metavar "ID_A")
+        <*> argument idReader (metavar "ID_B")
+        <*> strOption (long "agent" <> metavar "NAME" <> help "The name of the agent that judged the pair.")
+        <*> strOption (long "note" <> metavar "TEXT" <> value "" <> help "A short reason.")
     compareP =
       Compare
         <$> argument idReader (metavar "ID_A")
@@ -425,6 +439,9 @@ runCommand env c = runExceptT $ case c of
   Pin i -> ok (pinLines i) <$ ExceptT (pinMemory env i)
   Unpin i -> ok (unpinLines i) <$ ExceptT (unpinMemory env i)
   Pins -> ok . pinListLines <$> ExceptT (listPinned env)
+  Review a b agent note -> ok ["reviewed " <> Id.render a <> " " <> Id.render b] <$ ExceptT (reviewPair env a b agent note)
+  Unreview a b -> ok ["unreviewed " <> Id.render a <> " " <> Id.render b] <$ ExceptT (unreviewPair env a b)
+  Reviews -> ok . reviewLines <$> ExceptT (listReviewed env)
   Search o q -> ok . searchLines <$> ExceptT (searchMemories env o q)
   Neighbours i -> ok . neighbourLines <$> ExceptT (neighboursOf env i)
   Compare a b j -> do

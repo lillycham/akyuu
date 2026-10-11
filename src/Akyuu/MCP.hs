@@ -42,7 +42,7 @@ import Akyuu.Error (AkyuuError (BadId, BadName), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, getMemory, listRefValues, neighboursOf, readRef, searchMemories, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, getMemory, listRefValues, neighboursOf, readRef, reviewPair, searchMemories, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName)
 import Akyuu.Render (compareLines, edgeName, findingLines, memoryText, neighbourLines, refLines, refListLines, searchLines)
@@ -75,6 +75,8 @@ data ToolCall
   | CallNeighbours Id
   | -- | Compare two memories by their ids.
     CallCompare Id Id
+  | -- | Two memories, the agent that judged them, and a note.
+    CallReview Id Id Text Text
   | -- | The ref, and 'True' to show the older values too.
     CallRefGet Name Bool
   | CallRefSet Name Expected Id
@@ -173,6 +175,17 @@ toolList =
       "compare"
       "Compare two memories. It shows the refs that hold each one, how much text they share, the sentences that only A has and the sentences that only B has, and whether either can be dropped in favour of the other. Use it before you decide that two memories are duplicates: a memory that has a sentence the other lacks must not be dropped, because that fact is lost. Merge it or keep both."
       (objectSchema [("a", idSchema "The first memory."), ("b", idSchema "The second memory.")] ["a", "b"]),
+    tool
+      "review"
+      "Record that two memories are different and that both are true, so that check does not flag the pair again. Use it after you read both memories with compare and decided that neither replaces the other. The record ends by itself if either memory is replaced."
+      ( objectSchema
+          [ ("a", idSchema "The first memory."),
+            ("b", idSchema "The second memory."),
+            ("agent", stringSchema "The name of the agent that judged the pair. One line, no space at either end."),
+            ("note", stringSchema "A short reason. It can be empty.")
+          ]
+          ["a", "b", "agent"]
+      ),
     tool
       "neighbours"
       "List the edges of a memory, in both directions. 'out KIND ID' means that this memory points at ID. 'in KIND ID' means that ID points at this memory."
@@ -318,6 +331,12 @@ parseToolCall n args = case n of
     pure (CallSearch (SearchOptions limit hops follow) q)
   "neighbours" -> CallNeighbours <$> idArg args "id"
   "compare" -> CallCompare <$> idArg args "a" <*> idArg args "b"
+  "review" -> do
+    a <- idArg args "a"
+    b <- idArg args "b"
+    ag <- required args "agent" asText "a string" >>= check . checkField "agent"
+    note <- maybe "" id <$> optional' args "note" asText "a string"
+    pure (CallReview a b ag note)
   "ref_get" -> CallRefGet <$> refArg args <*> (maybe False id <$> optional' args "history" asBool "true or false")
   "ref_set" -> do
     r <- refArg args
@@ -383,6 +402,7 @@ runTool env c = either failed id <$> go
       CallSearch o q -> fmap (lines' "No matches." . searchLines) <$> searchMemories env o q
       CallNeighbours i -> fmap (lines' "This memory has no edges." . neighbourLines) <$> neighboursOf env i
       CallCompare a b -> fmap (\r -> okText (T.intercalate "\n" (compareLines r)) False) <$> compareMemories env a b
+      CallReview a b ag n -> fmap (const (okText ("reviewed " <> Id.render a <> " " <> Id.render b) False)) <$> reviewPair env a b ag n
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
       CallRefList -> fmap (lines' "There are no refs." . refListLines) <$> listRefValues env

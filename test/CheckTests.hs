@@ -24,6 +24,7 @@ checkTests =
       nearCases,
       unreferencedCases,
       hubCases,
+      reviewedCases,
       helperCases,
       properties
     ]
@@ -45,7 +46,7 @@ held :: [Id] -> Roots
 held is = Roots {rootRefs = Set.fromList is, rootPins = Set.empty, rootTemps = Set.empty}
 
 run :: Graph -> [(Id, Text)] -> [Id] -> [(FindingKind, [Id])]
-run g bs hs = [(findingKind x, findingIds x) | x <- check defaultCheckOptions (Inputs g (Map.fromList bs) (held hs))]
+run g bs hs = [(findingKind x, findingIds x) | x <- check defaultCheckOptions (Inputs g (Map.fromList bs) (held hs) Set.empty)]
 
 kinds :: Graph -> [(Id, Text)] -> [Id] -> [FindingKind]
 kinds g bs hs = map fst (run g bs hs)
@@ -64,7 +65,7 @@ staleLinkCases =
     [ testCase "a head with a link to an old version is a problem, and names the new one" $ do
         -- b supersedes a. c is about a.
         let g = build [(a, []), (b, [(Supersedes, a)]), (c, [(About, a)])]
-            fs = check defaultCheckOptions (Inputs g Map.empty (held [b, c]))
+            fs = check defaultCheckOptions (Inputs g Map.empty (held [b, c]) Set.empty)
         [(findingKind x, findingSeverity x, findingIds x, findingRelated x) | x <- fs]
           @?= [(StaleLink, Problem, [c, a], [b])],
       testCase "a link to a current memory is fine" $
@@ -87,7 +88,7 @@ forkCases =
     "Fork"
     [ testCase "two heads that supersede one memory are a fork" $ do
         let g = build [(a, []), (b, [(Supersedes, a)]), (c, [(Supersedes, a)])]
-            fs = check defaultCheckOptions (Inputs g Map.empty (held [b, c]))
+            fs = check defaultCheckOptions (Inputs g Map.empty (held [b, c]) Set.empty)
         [(findingKind x, findingIds x, findingRelated x) | x <- fs] @?= [(Fork, [a], [b, c])],
       testCase "a chain is not a fork" $
         kinds (build [(a, []), (b, [(Supersedes, a)]), (c, [(Supersedes, b)])]) [] [c] @?= [],
@@ -162,7 +163,7 @@ unreferencedCases =
       testCase "a head that a live memory links to is kept" $
         kinds (build [(a, []), (b, [(DerivedFrom, a)])]) [] [b] @?= [],
       testCase "a pin keeps a head" $
-        check defaultCheckOptions (Inputs (build [(a, [])]) Map.empty (held []) {rootPins = Set.singleton a}) @?= [],
+        check defaultCheckOptions (Inputs (build [(a, [])]) Map.empty (held []) {rootPins = Set.singleton a} Set.empty) @?= [],
       testCase "an old version is not reported: GC reports it" $
         kinds (build [(a, []), (b, [(Supersedes, a)])]) [] [b] @?= []
     ]
@@ -174,7 +175,7 @@ hubCases =
     [ testCase "a memory with more links than the limit is a hub" $ do
         let ms = [nid n | n <- [10 .. 16]]
             g = build ((a, []) : [(m, [(About, a)]) | m <- ms])
-            fs = check defaultCheckOptions (Inputs g Map.empty (held (a : ms)))
+            fs = check defaultCheckOptions (Inputs g Map.empty (held (a : ms)) Set.empty)
         [(findingKind x, findingSeverity x, findingIds x) | x <- fs] @?= [(Hub, Info, [a])],
       testCase "a memory at the limit is not" $ do
         let ms = [nid n | n <- [10 .. 14]]
@@ -182,8 +183,38 @@ hubCases =
         kinds g [] (a : ms) @?= [],
       testCase "the limit is an option" $ do
         let g = build [(a, []), (b, [(About, a)]), (c, [(About, a)])]
-            fs = check defaultCheckOptions {hubDegree = 1} (Inputs g Map.empty (held [a, b, c]))
+            fs = check defaultCheckOptions {hubDegree = 1} (Inputs g Map.empty (held [a, b, c]) Set.empty)
         map findingKind fs @?= [Hub]
+    ]
+
+-- | Findings with a set of reviewed pairs.
+runReviewed :: Graph -> [(Id, Text)] -> [(Id, Id)] -> [FindingKind]
+runReviewed g bs rs = [findingKind x | x <- check defaultCheckOptions (Inputs g (Map.fromList bs) (held [a, b, c, d]) (Set.fromList rs))]
+
+reviewedCases :: TestTree
+reviewedCases =
+  testGroup
+    "reviewed pairs"
+    [ testCase "a reviewed near duplicate is left out" $ do
+        let g = build [(a, []), (b, [])]
+            bs = [(a, sentence), (b, sentence <> " and then it sleeps")]
+        runReviewed g bs [] @?= [NearDuplicate]
+        runReviewed g bs [(a, b)] @?= [],
+      testCase "a reviewed duplicate is left out" $ do
+        let g = build [(a, []), (b, [])]
+        runReviewed g [(a, "x y"), (b, "X Y")] [(a, b)] @?= [],
+      testCase "a group is left out only when every pair is reviewed" $ do
+        let g = build [(a, []), (b, []), (c, [])]
+            bs = [(a, "x y"), (b, "x y"), (c, "x y")]
+        runReviewed g bs [(a, b)] @?= [DuplicateBody]
+        runReviewed g bs [(a, b), (a, c), (b, c)] @?= [],
+      testCase "a reviewed fork is left out" $ do
+        let g = build [(a, []), (b, [(Supersedes, a)]), (c, [(Supersedes, a)])]
+        runReviewed g [] [] @?= [Fork]
+        runReviewed g [] [(b, c)] @?= [],
+      testCase "a review does not hide a stale link" $ do
+        let g = build [(a, []), (b, [(Supersedes, a)]), (c, [(About, a)])]
+        runReviewed g [] [(a, c), (b, c)] @?= [StaleLink]
     ]
 
 -- Helpers and properties -----------------------------------------------
@@ -212,6 +243,6 @@ properties =
         let ids = [nid (n `mod` 8) | n <- xs :: [Int]]
             g = foldMap (\i -> build [(i, [(About, nid ((fromEnum (show i /= "")) + 1))])]) ids
             bodies = Map.fromList [(i, sentence) | i <- ids]
-         in check defaultCheckOptions (Inputs g bodies (held ids))
-              === check defaultCheckOptions (Inputs g bodies (held (reverse ids)))
+         in check defaultCheckOptions (Inputs g bodies (held ids) Set.empty)
+              === check defaultCheckOptions (Inputs g bodies (held (reverse ids)) Set.empty)
     ]

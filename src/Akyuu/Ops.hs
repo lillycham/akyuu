@@ -42,6 +42,9 @@ module Akyuu.Ops
     runGC,
     reindexCache,
     checkStore,
+    reviewPair,
+    unreviewPair,
+    listReviewed,
     CompareSide (..),
     CompareReport (..),
     compareMemories,
@@ -71,11 +74,13 @@ import Akyuu.Query (Neighbour, SearchOptions, SearchResult)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (Expected, Name, Ref (current), RefError, Refs, openRefs)
 import Akyuu.Refs qualified as Refs
-import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound), openStore)
+import Akyuu.Review (Review (Review))
+import Akyuu.Review qualified as Review
+import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), openStore)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersede, supersedeFrom)
 import Control.Exception (finally)
-import Control.Monad (forM, unless)
+import Control.Monad (forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE, withExceptT)
 import Data.Char (isDigit, isHexDigit, isSpace)
@@ -397,7 +402,13 @@ dryRunGC env p = runExceptT (gc (GC.dryRun (envCache env) (envStore env) (envRef
 
 -- | One whole GC run now, with this policy ('Akyuu.GC.collect').
 runGC :: Env -> Policy -> IO (Either AkyuuError RunReport)
-runGC env p = runExceptT (gc (GC.collect (envCache env) (envStore env) (envRefs env) p Set.empty))
+runGC env p = runExceptT $ do
+  r <- gc (GC.collect (envCache env) (envStore env) (envRefs env) p Set.empty)
+  -- A review of a memory that is gone has no use. A failure here is not a
+  -- failure of the run: the files stay and the next run tries again.
+  present <- liftIO (Store.list (envStore env))
+  _ <- liftIO (either (const (pure (Right []))) (Review.prune (envStore env) . Set.fromList) present)
+  pure r
 
 -- | Throw the cache away and read the whole store again.
 reindexCache :: Env -> IO (Either AkyuuError SyncReport)
@@ -504,8 +515,9 @@ checkStore env o = runExceptT $ do
   let s = envStore env
   (g, _) <- gc (GC.snapshot (envCache env) s)
   roots <- gc (GC.readRoots GC.defaultPolicy (envRefs env) s)
+  judged <- either (const []) (map fst) <$> liftIO (Review.listReviews s)
   bodies <- liftIO (traverse (\i -> fmap ((,) i . memBody) . either (const Nothing) Just <$> Store.get s i) (Set.toAscList (Graph.nodes g)))
-  pure (Check.check o (Check.Inputs g (Map.fromList (catMaybes bodies)) roots))
+  pure (Check.check o (Check.Inputs g (Map.fromList (catMaybes bodies)) roots (Set.fromList judged)))
 
 -- Compare --------------------------------------------------------------
 
@@ -542,3 +554,34 @@ compareMemories env a b = runExceptT $ do
         crSecond = CompareSide b mb (held b),
         crResult = Compare.compareText (memBody ma) (memBody mb)
       }
+
+-- Reviews --------------------------------------------------------------
+
+-- | Record that two memories are different, and that both are true
+-- ('Akyuu.Review.review'). @check@ then leaves the pair out.
+--
+-- Both memories must be in the store, like a pin: an id that nothing has is
+-- most likely a typo. The agent is the name of who judged. The note can be
+-- empty.
+reviewPair :: Env -> Id -> Id -> Text -> Text -> IO (Either AkyuuError ())
+reviewPair env a b agent note = runExceptT $ do
+  _ <- either throwE pure (checkField "agent" agent)
+  unless (a /= b) (throwE (BadInput "A memory cannot be different from itself. Give two ids."))
+  forM_ [a, b] $ \i -> do
+    there <- store (Store.exists (envStore env) i)
+    unless there (missing env i)
+  now <- liftIO getCurrentTime
+  r <- liftIO (Review.review (envStore env) a b (Review agent now (T.strip note)))
+  withExceptT (StoreFailed . StoreIO) (except r)
+
+-- | Remove the review of a pair. A pair that is not reviewed is not an error.
+unreviewPair :: Env -> Id -> Id -> IO (Either AkyuuError ())
+unreviewPair env a b = runExceptT $ do
+  r <- liftIO (Review.unreview (envStore env) a b)
+  withExceptT (StoreFailed . StoreIO) (except r)
+
+-- | Every reviewed pair, sorted.
+listReviewed :: Env -> IO (Either AkyuuError [(Review.Pair, Review)])
+listReviewed env = runExceptT $ do
+  r <- liftIO (Review.listReviews (envStore env))
+  withExceptT (StoreFailed . StoreIO) (except r)

@@ -2,7 +2,7 @@
 
 module CLITests (cliTests) where
 
-import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, CheckStore, Compare, GC, Get, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Search, Serve, Supersede, Unpin, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, CheckStore, Compare, GC, Get, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
 import Akyuu.Check (FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Check qualified as Check
 import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
@@ -139,6 +139,16 @@ parseCases =
       testCase "compare needs two ids" $ do
         _ <- fails ["compare", i1]
         pure (),
+      testCase "review takes two ids, an agent and a note" $ do
+        c <- parses ["review", i1, i2, "--agent", "claude", "--note", "both true"]
+        cliCommand c @?= Review (Full (nid 1)) (Full (nid 2)) "claude" "both true",
+      testCase "review needs an agent" $ do
+        _ <- fails ["review", i1, i2]
+        pure (),
+      testCase "unreview and reviews" $ do
+        a <- parses ["unreview", i1, i2]
+        b <- parses ["reviews"]
+        (cliCommand a, cliCommand b) @?= (Unreview (Full (nid 1)) (Full (nid 2)), Reviews),
       testCase "gc takes the policy flags" $ do
         c <- parses ["gc", "--dry-run", "--keep-generations", "2", "--grace", "30m", "--trash-ttl", "1d"]
         cliCommand c @?= GC True (Policy 2 1800 86400),
@@ -310,6 +320,24 @@ runCases =
           assertBool "B can be dropped" (any (T.isPrefixOf "B can be dropped") ls)
           j <- run env ["compare", "--json", T.unpack a, T.unpack b]
           T.isInfixOf "\"canDropB\":true" (decodeUtf8 (outBytes j)) @?= True,
+      testCase "review hides a near duplicate from check, and unreview shows it again" $
+        withOpsEnv $ \_ env -> do
+          let add body = do
+                o <- run env ["add", "--kind", "fact", "--agent", "claude", "--body", body]
+                pure (T.unpack (T.strip (decodeUtf8 (outBytes o))))
+              base = "the quick brown fox jumps over the lazy dog every single morning while the sun comes up over the hills and the farmer walks out to feed the chickens"
+          a <- add base
+          b <- add (base <> " before breakfast")
+          before <- run env ["check", "--kind", "near-duplicate"]
+          T.isInfixOf "near-duplicate" (decodeUtf8 (outBytes before)) @?= True
+          _ <- run env ["review", a, b, "--agent", "claude", "--note", "two notes"]
+          hidden <- run env ["check", "--kind", "near-duplicate"]
+          T.lines (decodeUtf8 (outBytes hidden)) @?= ["No findings."]
+          listed <- run env ["reviews"]
+          T.isInfixOf "two notes" (decodeUtf8 (outBytes listed)) @?= True
+          _ <- run env ["unreview", b, a]
+          again <- run env ["check", "--kind", "near-duplicate"]
+          T.isInfixOf "near-duplicate" (decodeUtf8 (outBytes again)) @?= True,
       testCase "pin, pins and unpin" $
         withOpsEnv $ \_ env -> do
           o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "keep me")))

@@ -6,7 +6,7 @@ import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind (Fork),
 import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
 import Akyuu.Id (IdParseError (BadHex), parse, render)
-import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (McpConfig), ToolCall (CallAdd, CallCheck, CallCompare, CallGet, CallNeighbours, CallRefSet, CallSearch), ToolResult (ToolResult), defaultMcpConfig, handleLine, handleMessage, parseToolCall, runTool, supportedVersions)
+import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (McpConfig), ToolCall (CallAdd, CallCheck, CallCompare, CallGet, CallNeighbours, CallRefSet, CallReview, CallSearch), ToolResult (ToolResult), defaultMcpConfig, handleLine, handleMessage, parseToolCall, runTool, supportedVersions)
 import Akyuu.Ops (NewMemory (NewMemory))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), mkName)
@@ -120,7 +120,7 @@ protocolCases =
         case r >>= at ["result", "tools"] of
           Just (Array ts) -> do
             let names = [n | t <- foldr (:) [] ts, Just (String n) <- [at ["name"] t]]
-            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list", "check", "compare"]
+            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list", "check", "compare", "review"]
             mapM_ (\t -> (at ["inputSchema", "type"] t, isJust (at ["description"] t)) @?= (Just "object", True)) ts
           other -> assertFailure ("no tools: " <> show other),
       testCase "a tool call runs the tool" $ do
@@ -207,6 +207,11 @@ toolCallCases =
           @?= Right (CallCompare (nid 1) (nid 2))
         parseToolCall "compare" (args [("a", String (render (nid 1)))])
           @?= Left (BadArguments "The argument 'b' is missing."),
+      testCase "review needs a, b and agent" $ do
+        parseToolCall "review" (args [("a", String (render (nid 1))), ("b", String (render (nid 2))), ("agent", "claude")])
+          @?= Right (CallReview (nid 1) (nid 2) "claude" "")
+        parseToolCall "review" (args [("a", String (render (nid 1))), ("b", String (render (nid 2)))])
+          @?= Left (BadArguments "The argument 'agent' is missing."),
       testCase "an unknown tool" $
         parseToolCall "rm" (args []) @?= Left (UnknownTool "rm")
     ]

@@ -6,7 +6,8 @@
 # store that did not change costs almost nothing. Objects never change, so
 # this holds for nearly the whole store.
 #
-# The order of the copy matters. The objects (store, trash, tombstones, pins)
+# The order of the copy matters. The objects (store, trash, tombstones, pins,
+# reviewed)
 # come first and the refs last. An agent adds an object before it moves a ref
 # to it, so every ref in the snapshot points to an object in the snapshot.
 #
@@ -56,7 +57,7 @@ prev=$(find "$dest" -mindepth 1 -maxdepth 1 -type d -name '20*' | sort | tail -n
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp"
 
-for d in store trash tombstones pins refs; do
+for d in store trash tombstones pins reviewed refs; do
   [ -d "$root/$d" ] || continue
   if [ -n "$prev" ] && [ -d "$prev/$d" ]; then
     rsync -a --exclude '.DS_Store' --exclude '.tmp*' --exclude '.lock' \

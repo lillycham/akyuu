@@ -119,7 +119,10 @@ data Inputs = Inputs
     -- | The body of each memory. A memory with no entry here is not compared
     -- for duplicates.
     inBodies :: Map Id Text,
-    inRoots :: Roots
+    inRoots :: Roots,
+    -- | The pairs that a person or an agent judged to be different. A
+    -- finding about only these memories is left out. See 'Akyuu.Review'.
+    inReviewed :: Set (Id, Id)
   }
 
 -- | Every finding, sorted by severity, then kind, then ids. This function is
@@ -129,9 +132,9 @@ check o i =
   sortOn
     (\f -> (findingSeverity f, findingKind f, findingIds f, findingRelated f))
     ( staleLinks g kept
-        <> forks g
-        <> duplicates g hs bodies
-        <> nearDuplicates o g hs bodies
+        <> filter (not . judged) (forks g)
+        <> filter (not . judged) (duplicates g hs bodies)
+        <> filter (not . judged) (nearDuplicates o g hs bodies)
         <> unreferenced g hs (inRoots i)
         <> hubs o g kept
     )
@@ -139,6 +142,11 @@ check o i =
     g = inGraph i
     hs = Graph.heads g
     bodies = inBodies i
+    -- A finding is left out when every pair of the memories in it is judged.
+    judged f =
+      let is = if findingKind f == Fork then findingRelated f else findingIds f
+          ps = [(min a b, max a b) | (a : rest) <- tails is, b <- rest]
+       in findingKind f `elem` [Fork, DuplicateBody, NearDuplicate] && not (null ps) && all (`Set.member` inReviewed i) ps
     -- The heads that something keeps. A head that nothing keeps is garbage
     -- (it has its own finding), so its links do not count.
     kept = Set.filter (\h -> h `Set.member` allRoots (inRoots i) || any (retains . fst) (ins h g)) hs

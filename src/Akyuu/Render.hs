@@ -23,6 +23,7 @@ module Akyuu.Render
     findingJSON,
     compareLines,
     compareJSON,
+    reviewLines,
     verifyLines,
     edgeName,
     dirName,
@@ -41,6 +42,7 @@ import Akyuu.Memory (Memory (memAgent, memCreated, memKind), edgeToHeader, rende
 import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, matches))
 import Akyuu.Refs (Name, Ref (current, history), nameText)
+import Akyuu.Review (Review (reviewAgent, reviewAt, reviewNote))
 import Data.Aeson (Value, object, (.=))
 import Data.List (sort)
 import Data.Map.Strict (Map)
@@ -259,3 +261,15 @@ compareJSON (CompareReport a b c) =
           "agent" .= memAgent m,
           "created" .= formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (memCreated m)
         ]
+
+-- Reviews --------------------------------------------------------------
+
+-- | The reviewed pairs. Each one is a line with the two ids, then who judged
+-- it and when, and the note if there is one.
+reviewLines :: [((Id, Id), Review)] -> [Text]
+reviewLines = concatMap one
+  where
+    one ((a, b), r) =
+      (render a <> " " <> render b)
+        : ("  by " <> reviewAgent r <> " at " <> T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (reviewAt r)))
+        : ["  " <> reviewNote r | not (T.null (reviewNote r))]

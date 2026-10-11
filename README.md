@@ -20,6 +20,8 @@ akyuu ref list                      # the name and the id of each ref
 akyuu gc --dry-run --grace 30m      # also --keep-generations N, --trash-ttl 7d
 akyuu pin 08d4                      # GC keeps a pinned memory
 akyuu pins                          # the id of each pin (akyuu unpin ID removes one)
+akyuu compare 08d4 1c9b             # what each of two memories says that the other lacks
+akyuu review 08d4 1c9b --agent me   # both are true and different: check leaves the pair out
 akyuu check                         # stale links, forks, duplicates, memories nothing keeps
 akyuu serve                         # the read-only web UI on 127.0.0.1:7420
 akyuu seed --demo --root /tmp/demo  # a demo store, for the web UI
@@ -62,7 +64,7 @@ claude mcp add --scope user akyuu -- akyuu --root ~/.local/share/akyuu mcp
 ## Backup
 
 `akyuu-backup --root DIR --dest DIR [--keep N]` makes a snapshot of `store`,
-`trash`, `tombstones`, `pins` and `refs`. It does not copy the cache, because
+`trash`, `tombstones`, `pins`, `reviewed` and `refs`. It does not copy the cache, because
 `akyuu reindex` makes that again. A file that did not change is a hard link to
 the one in the last snapshot, so a snapshot of an unchanged store costs almost
 nothing. The objects are copied first and the refs last, so every ref in a
