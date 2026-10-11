@@ -39,10 +39,10 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, dryRunGC, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, parseDuration, parseIdSpec, pinMemory, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, contextFor, dryRunGC, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, parseDuration, parseIdSpec, pinMemory, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemories, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLines, syncLines, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, edgeName, findingJSON, findingLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLines, syncLines, tierLines, unpinLines, verifyLines)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Web.Page qualified as Page
 import Akyuu.Web.Read qualified as Read
@@ -140,6 +140,8 @@ data Command i
   | Unreview i i
   | -- | Print the reviewed pairs.
     Reviews
+  | -- | The tier, extra refs, and the ref of the manifest ('Nothing' for the default).
+    Context (Maybe Text) [Name] (Maybe Name)
   | Search SearchOptions Text
   | Neighbours i
   | -- | Two memories to compare, and 'True' for JSON.
@@ -152,7 +154,7 @@ data Command i
     CheckStore CheckArgs
   | -- | Serve MCP on stdin and stdout until stdin ends. The ref of the policy,
     -- if one is given (@--policy-ref@).
-    Mcp (Maybe Name)
+    Mcp (Maybe Name) (Maybe Name)
   | -- | Serve the web UI on 127.0.0.1 at this port, until the program is
     -- stopped. Port 0 is a free port.
     Serve Int
@@ -223,6 +225,7 @@ commandParser =
       <> cmd "review" reviewP "Record that two memories are different and both true, so that check leaves the pair out."
       <> cmd "unreview" (Unreview <$> argument idReader (metavar "ID_A") <*> argument idReader (metavar "ID_B")) "Remove the review of a pair."
       <> cmd "reviews" (pure Reviews) "Print the reviewed pairs."
+      <> cmd "context" contextP "Print the memories of a tier (the profile, the policy and so on) in one call, for the start of a session."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
       <> cmd "neighbours" neighboursP "Show the edges of a memory, in both directions."
       <> cmd "compare" compareP "Show what each of two memories says that the other lacks."
@@ -274,6 +277,11 @@ commandParser =
         <*> option (atLeast 0) (long "hops" <> metavar "N" <> value (searchHops defaultSearchOptions) <> showDefault <> help "How many edges away from a hit to look.")
         <*> many (option kindReader (long "follow" <> metavar "KIND" <> help "Follow only this kind of edge. Repeat for more. The default is all kinds."))
     neighboursP = Neighbours <$> argument idReader (metavar "ID")
+    contextP =
+      Context
+        <$> optional (strOption (long "tier" <> metavar "NAME" <> help "The tier to print. The default is always."))
+        <*> many (option nameReader (long "ref" <> metavar "NAME" <> help "Also print this ref. Repeat for more."))
+        <*> optional (option nameReader (long "manifest" <> metavar "NAME" <> help "The ref of the manifest. The default is $AKYUU_TIERS_REF, then policy/tiers."))
     reviewP =
       Review
         <$> argument idReader (metavar "ID_A")
@@ -285,7 +293,10 @@ commandParser =
         <$> argument idReader (metavar "ID_A")
         <*> argument idReader (metavar "ID_B")
         <*> switch (long "json" <> help "Print the comparison as JSON.")
-    mcpP = Mcp <$> optional (option nameReader (long "policy-ref" <> metavar "NAME" <> help "The ref that holds the policy of this store. The default is $AKYUU_POLICY_REF, then policy/memory."))
+    mcpP =
+      Mcp
+        <$> optional (option nameReader (long "policy-ref" <> metavar "NAME" <> help "The ref that holds the policy of this store. The default is $AKYUU_POLICY_REF, then policy/memory."))
+        <*> optional (option nameReader (long "tiers-ref" <> metavar "NAME" <> help "The ref of the manifest of the tiers. The default is $AKYUU_TIERS_REF, then policy/tiers."))
     checkP =
       CheckArgs
         <$> ( CheckOptions
@@ -442,6 +453,10 @@ runCommand env c = runExceptT $ case c of
   Review a b agent note -> ok ["reviewed " <> Id.render a <> " " <> Id.render b] <$ ExceptT (reviewPair env a b agent note)
   Unreview a b -> ok ["unreviewed " <> Id.render a <> " " <> Id.render b] <$ ExceptT (unreviewPair env a b)
   Reviews -> ok . reviewLines <$> ExceptT (listReviewed env)
+  Context tier extra given -> do
+    manifest <- liftIO (manifestRef given)
+    r <- ExceptT (either (pure . Left) (\mr -> contextFor env mr (maybe "always" id tier) extra) manifest)
+    pure (ok (tierLines r))
   Search o q -> ok . searchLines <$> ExceptT (searchMemories env o q)
   Neighbours i -> ok . neighbourLines <$> ExceptT (neighboursOf env i)
   Compare a b j -> do
@@ -460,13 +475,10 @@ runCommand env c = runExceptT $ case c of
           | caJson a = BL.toStrict (encode (toJSON (map findingJSON fs))) <> "\n"
           | otherwise = encodeUtf8 (T.unlines (findingLines refs fs))
     pure (Output out (not (caStrict a && any ((== Problem) . findingSeverity) fs)) False)
-  Mcp given -> do
-    fromEnv <- liftIO (lookupEnv "AKYUU_POLICY_REF")
-    let cfg = case (given, fromEnv) of
-          (Just n, _) -> pure (MCP.McpConfig (nameText n))
-          (Nothing, Just t) | not (null t) -> MCP.McpConfig . nameText <$> first (BadName (T.pack t)) (mkName (T.pack t))
-          _ -> pure MCP.defaultMcpConfig
-    mcpConfig <- ExceptT (pure cfg)
+  Mcp givenPolicy givenTiers -> do
+    policy <- liftIO (refFromEnv "AKYUU_POLICY_REF" "policy/memory" givenPolicy)
+    tiers <- liftIO (manifestRef givenTiers)
+    mcpConfig <- ExceptT (pure (MCP.McpConfig . nameText <$> policy <*> (nameText <$> tiers)))
     liftIO (MCP.serve mcpConfig env)
     pure (Output BS.empty True False)
   Serve port -> do
@@ -561,3 +573,19 @@ unitDouble :: ReadM Double
 unitDouble = do
   x <- auto
   if x >= 0 && x <= 1 then pure x else readerError "the number must be from 0 to 1"
+
+-- | A ref name from an option, then from an environment variable, then the
+-- default.
+refFromEnv :: String -> Text -> Maybe Name -> IO (Either AkyuuError Name)
+refFromEnv _ _ (Just n) = pure (Right n)
+refFromEnv var def Nothing = do
+  fromEnv <- lookupEnv var
+  let t = case fromEnv of
+        Just v | not (null v) -> T.pack v
+        _ -> def
+  pure (first (BadName t) (mkName t))
+
+-- | The ref of the manifest of the tiers: the option, then @AKYUU_TIERS_REF@,
+-- then @policy/tiers@.
+manifestRef :: Maybe Name -> IO (Either AkyuuError Name)
+manifestRef = refFromEnv "AKYUU_TIERS_REF" "policy/tiers"

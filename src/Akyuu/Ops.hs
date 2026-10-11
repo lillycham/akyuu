@@ -45,6 +45,9 @@ module Akyuu.Ops
     reviewPair,
     unreviewPair,
     listReviewed,
+    ContextEntry (..),
+    ContextReport (..),
+    contextFor,
     CompareSide (..),
     CompareReport (..),
     compareMemories,
@@ -79,6 +82,7 @@ import Akyuu.Review qualified as Review
 import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), openStore)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersede, supersedeFrom)
+import Akyuu.Tier (TierError (BadTierName, BadTierRef, NoColon), parseManifest, tierNames, tierRefs)
 import Control.Exception (finally)
 import Control.Monad (forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
@@ -570,3 +574,63 @@ listReviewed :: Env -> IO (Either AkyuuError [(Review.Pair, Review)])
 listReviewed env = runExceptT $ do
   r <- liftIO (Review.listReviews (envStore env))
   withExceptT (StoreFailed . StoreIO) (except r)
+
+-- Context --------------------------------------------------------------
+
+-- | One ref of a tier, as @context@ shows it.
+data ContextEntry
+  = -- | The ref, the memory that it points at now, and the memory.
+    Present Name Id Memory
+  | -- | The manifest names the ref, and the store has no such ref.
+    Absent Name
+  deriving (Eq, Show)
+
+-- | What a session reads at the start: the memories of a tier and of the
+-- refs that the caller asked for, and the names of the other refs.
+data ContextReport = ContextReport
+  { ctxTier :: Text,
+    ctxEntries :: [ContextEntry],
+    -- | The refs that are in no entry. They tell an agent what else it can read.
+    ctxOthers :: [Name]
+  }
+  deriving (Eq, Show)
+
+-- | The context of a tier ('Akyuu.Tier').
+--
+-- The manifest is the memory that the first ref points at. The tier is a name
+-- in it. The extra refs come after the refs of the tier, and a ref that is in
+-- both comes once. A ref that does not exist gives 'Absent': one stale name
+-- must not hide the other memories. A manifest that is missing or invalid,
+-- and a tier that it does not have, are errors, with a text that says what
+-- to do. It writes nothing and does not sync the cache.
+contextFor :: Env -> Name -> Text -> [Name] -> IO (Either AkyuuError ContextReport)
+contextFor env manifestRef tier extra = runExceptT $ do
+  mref <- ExceptT (readRef env manifestRef)
+  m <- ExceptT (getMemory env (current mref))
+  manifest <- either (throwE . BadInput . manifestError) pure (parseManifest (memBody m))
+  names <- case tierRefs tier manifest of
+    Just rs -> pure rs
+    Nothing ->
+      throwE . BadInput $
+        "There is no tier " <> quoted tier <> " in the manifest. It has: " <> T.intercalate ", " (tierNames manifest) <> "."
+  all' <- ExceptT (listRefValues env)
+  let wanted = nubOrd (names <> extra)
+      held = Map.fromList all'
+  entries <- forM wanted $ \n -> case Map.lookup n held of
+    Nothing -> pure (Absent n)
+    Just i -> do
+      mem <- ExceptT (getMemory env i)
+      pure (Present n i mem)
+  pure ContextReport {ctxTier = tier, ctxEntries = entries, ctxOthers = [n | (n, _) <- all', n `notElem` wanted, n /= manifestRef]}
+  where
+    quoted t = "'" <> t <> "'"
+    nubOrd = go Set.empty
+      where
+        go _ [] = []
+        go seen (x : xs)
+          | x `Set.member` seen = go seen xs
+          | otherwise = x : go (Set.insert x seen) xs
+    manifestError e = case e of
+      NoColon n l -> "The manifest has no ':' on line " <> T.pack (show n) <> ": " <> quoted l <> "."
+      BadTierName n l -> "The manifest has a bad tier name on line " <> T.pack (show n) <> ": " <> quoted l <> "."
+      BadTierRef n r _ -> "The manifest has a bad ref name on line " <> T.pack (show n) <> ": " <> quoted r <> "."

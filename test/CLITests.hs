@@ -2,7 +2,7 @@
 
 module CLITests (cliTests) where
 
-import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, CheckStore, Compare, GC, Get, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, CheckStore, Compare, Context, GC, Get, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
 import Akyuu.Check (FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Check qualified as Check
 import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
@@ -128,7 +128,7 @@ parseCases =
         n <- name "team/how-we-remember"
         a <- parses ["mcp", "--policy-ref", "team/how-we-remember"]
         b <- parses ["mcp"]
-        (cliCommand a, cliCommand b) @?= (Mcp (Just n), Mcp Nothing),
+        (cliCommand a, cliCommand b) @?= (Mcp (Just n) Nothing, Mcp Nothing Nothing),
       testCase "mcp refuses a policy ref that is not a ref name" $ do
         _ <- fails ["mcp", "--policy-ref", "Not A Name"]
         pure (),
@@ -149,6 +149,12 @@ parseCases =
         a <- parses ["unreview", i1, i2]
         b <- parses ["reviews"]
         (cliCommand a, cliCommand b) @?= (Unreview (Full (nid 1)) (Full (nid 2)), Reviews),
+      testCase "context takes a tier, refs and a manifest" $ do
+        a <- parses ["context"]
+        n <- name "claude/projects/akyuu"
+        m <- name "team/tiers"
+        b <- parses ["context", "--tier", "background", "--ref", "claude/projects/akyuu", "--manifest", "team/tiers"]
+        (cliCommand a, cliCommand b) @?= (Context Nothing [] Nothing, Context (Just "background") [n] (Just m)),
       testCase "gc takes the policy flags" $ do
         c <- parses ["gc", "--dry-run", "--keep-generations", "2", "--grace", "30m", "--trash-ttl", "1d"]
         cliCommand c @?= GC True (Policy 2 1800 86400),
@@ -338,6 +344,29 @@ runCases =
           _ <- run env ["unreview", b, a]
           again <- run env ["check", "--kind", "near-duplicate"]
           T.isInfixOf "near-duplicate" (decodeUtf8 (outBytes again)) @?= True,
+      testCase "context prints the memories of a tier, a missing ref, and the other refs" $
+        withOpsEnv $ \_ env -> do
+          let add body = do
+                o <- run env ["add", "--kind", "fact", "--agent", "claude", "--body", body]
+                pure (T.unpack (T.strip (decodeUtf8 (outBytes o))))
+          profile <- add "Lilly likes tea."
+          other <- add "Notes about boxes."
+          manifest <- add "always: me/profile me/missing\n"
+          _ <- run env ["ref", "set", "me/profile", profile, "--new"]
+          _ <- run env ["ref", "set", "me/boxes", other, "--new"]
+          _ <- run env ["ref", "set", "policy/tiers", manifest, "--new"]
+          r <- run env ["context"]
+          let ls = T.lines (decodeUtf8 (outBytes r))
+          take 1 ls @?= ["tier: always"]
+          assertBool "has the profile" ("Lilly likes tea." `elem` ls)
+          assertBool "names the missing ref" (any (T.isPrefixOf "== me/missing:") ls)
+          drop (length ls - 1) ls @?= ["other refs: me/boxes"]
+          more <- run env ["context", "--ref", "me/boxes"]
+          assertBool "has the extra ref" ("Notes about boxes." `elem` T.lines (decodeUtf8 (outBytes more)))
+          unknown <- parses ["context", "--tier", "nope"]
+          c <- right =<< resolveCommand env (cliCommand unknown)
+          e <- runCommand env c
+          assertBool "an unknown tier is an error" (either (const True) (const False) e),
       testCase "pin, pins and unpin" $
         withOpsEnv $ \_ env -> do
           o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "keep me")))

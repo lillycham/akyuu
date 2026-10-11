@@ -42,10 +42,10 @@ import Akyuu.Error (AkyuuError (BadId, BadName), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, getMemory, listRefValues, neighboursOf, readRef, reviewPair, searchMemories, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, checkField, checkStore, compareMemories, contextFor, getMemory, listRefValues, neighboursOf, readRef, reviewPair, searchMemories, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName)
-import Akyuu.Render (compareLines, edgeName, findingLines, memoryText, neighbourLines, refLines, refListLines, searchLines)
+import Akyuu.Render (compareLines, edgeName, findingLines, memoryText, neighbourLines, refLines, refListLines, searchLines, tierLines)
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (unless)
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
@@ -81,6 +81,8 @@ data ToolCall
     CallRefGet Name Bool
   | CallRefSet Name Expected Id
   | CallRefList
+  | -- | The tier ('Nothing' for always) and extra refs.
+    CallContext (Maybe Text) [Name]
   | -- | The options, the kinds to show (none means all), and the lowest severity.
     CallCheck CheckOptions [FindingKind] (Maybe Severity)
   deriving (Eq, Show)
@@ -185,6 +187,15 @@ toolList =
             ("note", stringSchema "A short reason. It can be empty.")
           ]
           ["a", "b", "agent"]
+      ),
+    tool
+      "context"
+      "Read the memories that every session needs, in one call: the profile, the preferences, the policy and the others that the manifest of the store puts in a tier. Call it at the start of work. The text ends with the names of the other refs. Pass refs to add the memories of a project, for example the ref of the project that you work in."
+      ( objectSchema
+          [ ("tier", stringSchema "The tier to read. The default is always."),
+            ("refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("More refs to read, after the refs of the tier." :: Text)])
+          ]
+          []
       ),
     tool
       "neighbours"
@@ -350,6 +361,10 @@ parseToolCall n args = case n of
       (Nothing, False) -> Left (BadArguments "Give 'expected' (the id that the ref points to now), or 'create': true for a new ref.")
     pure (CallRefSet r ex i)
   "ref_list" -> pure CallRefList
+  "context" -> do
+    t <- optional' args "tier" asText "a string"
+    rs <- maybe [] id <$> optional' args "refs" (asList asText) "a list of strings"
+    CallContext t <$> traverse parseName rs
   "check" -> do
     ks <- maybe [] id <$> optional' args "kinds" (asList asText) "a list of strings"
     s <- optional' args "severity" asText "a string"
@@ -385,8 +400,8 @@ parseToolCall n args = case n of
 
 -- | Run a tool call against an open store. An error of the operation becomes
 -- a result with 'resultIsError' and the text of 'describe'.
-runTool :: Env -> ToolCall -> IO ToolResult
-runTool env c = either failed id <$> go
+runTool :: McpConfig -> Env -> ToolCall -> IO ToolResult
+runTool cfg env c = either failed id <$> go
   where
     failed e = ToolResult (describe e) True
     okText = ToolResult
@@ -406,6 +421,9 @@ runTool env c = either failed id <$> go
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
       CallRefList -> fmap (lines' "There are no refs." . refListLines) <$> listRefValues env
+      CallContext tier refs -> case mkName (mcpTiersRef cfg) of
+        Left e -> pure (Left (BadName (mcpTiersRef cfg) e))
+        Right manifest -> fmap (\r -> okText (T.intercalate "\n" (tierLines r)) False) <$> contextFor env manifest (maybe "always" id tier) refs
       CallCheck o ks s -> do
         r <- checkStore env o
         refs <- listRefValues env
@@ -434,11 +452,14 @@ methodNotFound = -32601
 invalidParams = -32602
 
 -- | What the server tells a client about this store.
-newtype McpConfig = McpConfig
+data McpConfig = McpConfig
   { -- | The name of the ref that holds the policy for this store: how the
     -- store is used for memory. The instructions of the server name it, so a
     -- client reads it first. The server does not check that the ref exists.
-    mcpPolicyRef :: Text
+    mcpPolicyRef :: Text,
+    -- | The name of the ref of the manifest of the tiers. The tool @context@
+    -- reads it. See "Akyuu.Tier".
+    mcpTiersRef :: Text
   }
   deriving (Eq, Show)
 
@@ -446,7 +467,7 @@ newtype McpConfig = McpConfig
 -- one agent. A store that uses another name sets it with @--policy-ref@ or
 -- @AKYUU_POLICY_REF@.
 defaultMcpConfig :: McpConfig
-defaultMcpConfig = McpConfig "policy/memory"
+defaultMcpConfig = McpConfig "policy/memory" "policy/tiers"
 
 -- | The result of @initialize@.
 initializeResult :: McpConfig -> Maybe Text -> Value
@@ -462,8 +483,8 @@ initializeResult cfg asked =
              \Search shows when a hit is superseded: read the newer memory. \
              \If the store has the ref "
                <> mcpPolicyRef cfg
-               <> ", read it first: \
-                  \it says how this store is used for memory, and which refs to read at the start of work."
+               <> ", it says how this store is used for memory. \
+                  \At the start of work, call the tool context: it returns the memories that every session needs."
            )
     ]
   where
@@ -566,7 +587,7 @@ serve cfg env = do
         mapM_ (\v -> BL.hPut stdout (A.encode v <> "\n") >> hFlush stdout) answer
         loop
     safeRun tc = do
-      r <- tryJust notAsync (runTool env tc)
+      r <- tryJust notAsync (runTool cfg env tc)
       case r of
         Right x -> pure x
         Left e -> do

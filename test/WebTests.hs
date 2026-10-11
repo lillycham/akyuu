@@ -9,7 +9,6 @@ import Akyuu.GC (Tombstone (Tombstone))
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, singleton)
 import Akyuu.Id (Id, IdParseError (BadLength), hashBytes, render)
-import Akyuu.Memory (Memory)
 import Akyuu.Ops (Env (envCache, envStore), IdSpec (Full, Prefix), NewMemory (NewMemory), addMemory, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBeAbsent), mkName)

@@ -20,6 +20,7 @@ akyuu ref list                      # the name and the id of each ref
 akyuu gc --dry-run --grace 30m      # also --keep-generations N, --trash-ttl 7d
 akyuu pin 08d4                      # GC keeps a pinned memory
 akyuu pins                          # the id of each pin (akyuu unpin ID removes one)
+akyuu context                       # the memories every session needs, in one call (the tier "always")
 akyuu compare 08d4 1c9b             # what each of two memories says that the other lacks
 akyuu review 08d4 1c9b --agent me   # both are true and different: check leaves the pair out
 akyuu check                         # stale links, forks, duplicates, memories nothing keeps

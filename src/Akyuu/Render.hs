@@ -24,6 +24,7 @@ module Akyuu.Render
     compareLines,
     compareJSON,
     reviewLines,
+    tierLines,
     verifyLines,
     edgeName,
     dirName,
@@ -38,8 +39,8 @@ import Akyuu.Error qualified as Error
 import Akyuu.GC (RunReport (swept), SweepReport (deleted, trashed))
 import Akyuu.Graph (Dir (In, Out), EdgeType)
 import Akyuu.Id (Id, render)
-import Akyuu.Memory (Memory (memAgent, memCreated, memKind), edgeToHeader, renderMemory)
-import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
+import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader, renderMemory)
+import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, Present), ContextReport (ContextReport), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, matches))
 import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Akyuu.Review (Review (reviewAgent, reviewAt, reviewNote))
@@ -273,3 +274,15 @@ reviewLines = concatMap one
       (render a <> " " <> render b)
         : ("  by " <> reviewAgent r <> " at " <> T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (reviewAt r)))
         : ["  " <> reviewNote r | not (T.null (reviewNote r))]
+
+-- Context --------------------------------------------------------------
+
+-- | The text of @context@. Each memory has a line @== REF (ID)@, then its
+-- body, then a blank line. A ref that the manifest names and the store lacks
+-- has one line. The last line lists the other refs.
+tierLines :: ContextReport -> [Text]
+tierLines (ContextReport tier es others) =
+  ("tier: " <> tier) : concatMap entry es <> ["other refs: " <> if null others then "none" else T.intercalate ", " (map nameText others)]
+  where
+    entry (Present n i m) = ["== " <> nameText n <> " (" <> render i <> ")"] <> T.lines (memBody m) <> [""]
+    entry (Absent n) = ["== " <> nameText n <> ": the manifest names it, and there is no such ref.", ""]

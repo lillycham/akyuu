@@ -53,6 +53,7 @@ library
                    , Akyuu.Check
                    , Akyuu.Compare
                    , Akyuu.Review
+                   , Akyuu.Tier
                    , Akyuu.Supersede
                    , Akyuu.GC
                    , Akyuu.Query
@@ -89,6 +90,7 @@ test-suite akyuu-test
                     , CheckTests
                     , CompareTests
                     , ReviewTests
+                    , TierTests
                     , RefsTests
                     , StoreTests
                     , SeedTests

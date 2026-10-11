@@ -53,6 +53,17 @@ in
       '';
     };
 
+    tiersRef = mkOption {
+      type = types.nullOr (types.strMatching "[a-z0-9._-]+(/[a-z0-9._-]+)*");
+      default = null;
+      example = "policy/tiers";
+      description = ''
+        The name of the ref that holds the manifest of the tiers: which refs
+        a session reads at the start (`akyuu context`). With null the
+        default is `policy/tiers`. The value is set as AKYUU_TIERS_REF.
+      '';
+    };
+
     root = mkOption {
       type = types.str;
       default = "${home}/.local/share/akyuu";
@@ -111,6 +122,7 @@ in
       home.packages = [ cfg.package ] ++ optional cfg.backup.enable backupPackage;
       home.sessionVariables.AKYUU_ROOT = cfg.root;
       home.sessionVariables.AKYUU_POLICY_REF = mkIf (cfg.policyRef != null) cfg.policyRef;
+      home.sessionVariables.AKYUU_TIERS_REF = mkIf (cfg.tiersRef != null) cfg.tiersRef;
 
       home.activation.akyuuRoot = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
         run mkdir -p ${lib.escapeShellArg cfg.root}
