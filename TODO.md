@@ -154,7 +154,29 @@ Decided:
 - [x] `search`: FTS hit, then `withinHops` to widen it to a neighbourhood.
 - [x] Show `neighbours` with the direction (`Out` or `In`) and the kind. `Out` edges come first.
 - [x] `resolve :: Id -> Graph -> Set Id`: the heads that replace an `Id`, also for one that GC deleted.
-- [ ] Later: ranking, and embeddings as a derived index keyed by `Id`. They cache perfectly because objects never change.
+- [ ] **Fuzzy search.** Today a typo, or a word that stems differently, finds nothing. Plan, cheapest first:
+      1. Prefix match on the last word of the query (`hask` finds `Haskell`): FTS5 `word*`.
+      2. Spelling tolerance from the index itself. `fts5vocab` lists every term of the text index, so a query word that is not
+         a term (or has few hits) can be replaced by the terms within edit distance 1 (2 for long words), by Damerau-Levenshtein
+         in Haskell. The query becomes an OR of the variants, and the result says what it used (`hsakell -> haskell`), so nothing is silent.
+      3. Only if 1 and 2 are not enough: a second FTS5 table with `tokenize='trigram'` (about three times the size of the text index).
+      Keep exact matches first (bm25 on the original words), and put fuzzy hits after them. Needs no new dependency and no schema break
+      for 1 and 2 (the vocabulary is a view of the existing table).
+- [ ] **Search by meaning (embeddings).** Feasible and cheap at this size, and it fits the design: an embedding is a derived index
+      keyed by `Id`, so it never needs invalidating. Sketch:
+      - Akyuu does not run or name a model. A configured command (`AKYUU_EMBED_COMMAND`, or `--embed-command`) reads a text on stdin and
+        writes a JSON vector. A local server (llama.cpp `llama-server --embeddings`, MLX, Ollama) or a script can sit behind it.
+      - A table `embeddings(id, model, dim, vector BLOB)` in the cache, filled by `sync` for new memories and by `akyuu embed` for the
+        rest. The `model` string is part of the key, so a new model gives new vectors and the old ones are dropped, not mixed.
+      - Search: embed the query with the same command, brute-force cosine over the vectors (10,000 memories of 768 floats is 30 MB and a few
+        milliseconds), and merge with the text hits by reciprocal rank fusion. Plain text search stays the default and the fallback,
+        so a missing model server never breaks `search`.
+      - Also useful for `check`: near duplicates that share meaning and not words. Keep it an optional detector, because `check` must stay
+        deterministic and model-free by default.
+      - Costs: a model server must be running for a query, a query takes one model call (tens of milliseconds), and the vectors depend on the model.
+      - Do first: an experiment, not a feature. Embed the store with one small local model, write 20 real queries, and compare the top 5 of
+        the text search with the top 5 of the vector search. At a few dozen memories, text search with stemming may already be enough.
+- [ ] Later: ranking of the text hits (for example boost current memories and recently confirmed ones).
 
 ### CLI (`app/Main.hs`)
 
