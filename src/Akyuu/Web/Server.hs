@@ -38,7 +38,7 @@ where
 
 import Akyuu.Error (AkyuuError)
 import Akyuu.Ops (Env)
-import Akyuu.Web.Api
+import Akyuu.Web.Api (Endpoint, WebRequest (WebRequest, reqMethod, reqPath, reqQuery), WebResponse (WebResponse, resBody, resHeaders, resStatus), route, runEndpoint, securityHeaders)
 import Control.Concurrent.MVar (newMVar, withMVar)
 import Control.Exception (bracket)
 import Data.Aeson (Value, object, (.=))
@@ -49,7 +49,7 @@ import Data.Streaming.Network (bindPortTCP)
 import Data.String (fromString)
 import Data.Text (Text)
 import Network.HTTP.Types (queryToQueryText)
-import Network.Socket (SockAddr (..), Socket, close, getSocketName, hostAddressToTuple)
+import Network.Socket (SockAddr (SockAddrInet), Socket, close, getSocketName, hostAddressToTuple)
 import Network.Wai (Application, Request, pathInfo, queryString, requestHeaderHost, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
 

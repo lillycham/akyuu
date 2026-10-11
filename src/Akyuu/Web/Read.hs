@@ -30,24 +30,24 @@ module Akyuu.Web.Read
   )
 where
 
-import Akyuu.Cache (Summary (..))
+import Akyuu.Cache (Summary (Summary, sumId))
 import Akyuu.Cache qualified as Cache
-import Akyuu.Error (AkyuuError (..), describe)
-import Akyuu.GC (Observed (..), Policy (..), defaultPolicy)
+import Akyuu.Error (AkyuuError (BadInput, CacheFailed, GCFailed, Pruned, RefFailed, StoreFailed), describe)
+import Akyuu.GC (Observed (Observed), Policy (keepGenerations), defaultPolicy)
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (EdgeType (Supersedes))
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (..))
-import Akyuu.Ops (Env (..), IdSpec, getMemory, resolveId, verifyStore)
+import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind))
+import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, getMemory, resolveId, verifyStore)
 import Akyuu.Query (SearchOptions)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (RefError)
 import Akyuu.Refs qualified as Refs
 import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Store qualified as Store
-import Akyuu.Web.Model
+import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), NodeStatus (HeadNode, SupersededNode), RefEntry (RefEntry), Stats (Stats, statCached, statMemories, statNewest, statPins, statRefs, statTombstones, statTrash), Window (winAll, winFocus), defaultWindow, graphView, graphViewJSON, memoryJSON, planJSON, refHolds, refsJSON, searchJSON, statsJSON, timeJSON, trashJSON, verifyJSON, whyJSON)
 import Control.Exception (IOException, displayException, try, tryJust)
 import Control.Monad (forM, guard)
 import Control.Monad.IO.Class (liftIO)

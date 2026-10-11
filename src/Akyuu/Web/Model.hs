@@ -47,23 +47,23 @@ module Akyuu.Web.Model
   )
 where
 
-import Akyuu.Cache (Summary (..))
+import Akyuu.Cache (Summary (sumAgent, sumCreated, sumFirstLine, sumKind))
 import Akyuu.Error (AkyuuError (RefFailed), describe, describeParse)
-import Akyuu.GC (Observed (..), Policy (..), Reason (..), Roots (..), Tombstone (..), Why (..))
-import Akyuu.Graph (Dir (..), EdgeType (..), Graph)
+import Akyuu.GC (Observed (now, storedAt), Policy (gracePeriod, keepGenerations, trashTTL), Reason (HeldByPin, HeldByRef, HeldByTemp, IsYoung, RetainedBy), Roots (rootPins, rootRefs, rootTemps), Tombstone (prunedAt), Why (whyIsNode, whyLive, whyPath, whyReasons))
+import Akyuu.Graph (Dir (In, Out), EdgeType, Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (..), edgeToHeader)
-import Akyuu.Ops (VerifyReport (..), verifyOk)
-import Akyuu.Query (Match (..), Neighbour (..), SearchResult (..))
-import Akyuu.Refs (Name, Ref (..), RefError, nameText)
-import Data.Aeson (Value (..), object, (.=))
+import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader)
+import Akyuu.Ops (VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
+import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, matches))
+import Akyuu.Refs (Name, Ref (current, history), RefError, nameText)
+import Data.Aeson (KeyValue ((.=)), Value (String), object)
 import Data.Aeson qualified as A
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Ord (Down (..))
+import Data.Ord (Down (Down))
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)

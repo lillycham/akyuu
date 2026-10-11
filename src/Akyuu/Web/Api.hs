@@ -42,15 +42,15 @@ module Akyuu.Web.Api
   )
 where
 
-import Akyuu.Error (AkyuuError (..), describe)
+import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadId, BadIdSpec, BadInput, BadName, NoSuchPrefix, Pruned, StoreFailed), describe)
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Ops (Env, IdSpec, parseIdSpec)
-import Akyuu.Query (SearchOptions (..), defaultSearchOptions)
+import Akyuu.Query (SearchOptions (searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Store (StoreError (NotFound))
-import Akyuu.Web.Model (Window (..), defaultWindow, statsJSON)
+import Akyuu.Web.Model (Window (Window, winAll, winFocus, winHops, winLimit), defaultWindow, statsJSON)
 import Akyuu.Web.Page (indexPage)
-import Akyuu.Web.Read
+import Akyuu.Web.Read (readExplain, readGraph, readMemory, readPlan, readRefs, readSearch, readStats, readTrash, readVerify)
 import Data.Aeson (Value, object, (.=))
 import Data.Aeson qualified as A
 import Data.Bifunctor (first)
