@@ -1,0 +1,143 @@
+# A home-manager module for akyuu.
+#
+#   imports = [ inputs.akyuu.homeModules.default ];
+#   programs.akyuu = {
+#     enable = true;
+#     gc.enable = true;
+#     backup.enable = true;
+#   };
+#
+# It installs the binary, sets AKYUU_ROOT, and makes the store directory (the
+# program needs the root to exist, so that a typo cannot make a new store).
+# The launchd agents get the root as an argument, because an agent does not
+# see the session variables.
+#
+# Only launchd (macOS) agents are written. On Linux the module installs the
+# package and sets the variable, and the timers are not done yet.
+self:
+{ config, lib, pkgs, ... }:
+let
+  cfg = config.programs.akyuu;
+  inherit (lib) mkEnableOption mkIf mkMerge mkOption optional types;
+  system = pkgs.stdenv.hostPlatform.system;
+  home = config.home.homeDirectory;
+  logs = "${home}/Library/Logs";
+
+  backupPackage = self.packages.${system}.akyuu-backup;
+
+  calendar = hour: minute: [{ Hour = hour; Minute = minute; }];
+in
+{
+  options.programs.akyuu = {
+    enable = mkEnableOption "akyuu, a memory store for agents";
+
+    package = mkOption {
+      type = types.package;
+      default = self.packages.${system}.akyuu;
+      defaultText = "akyuu from the flake of akyuu";
+      description = "The akyuu package.";
+    };
+
+    root = mkOption {
+      type = types.str;
+      default = "${home}/.local/share/akyuu";
+      defaultText = "~/.local/share/akyuu";
+      description = ''
+        The root directory of the store. Keep it out of a folder that a
+        service syncs: the cache is a SQLite database in WAL mode.
+      '';
+    };
+
+    gc = {
+      enable = mkEnableOption "a daily run of `akyuu gc`";
+      hour = mkOption { type = types.ints.between 0 23; default = 3; description = "Hour of the run."; };
+      minute = mkOption { type = types.ints.between 0 59; default = 30; description = "Minute of the run."; };
+    };
+
+    backup = {
+      enable = mkEnableOption "a daily snapshot of the store (akyuu-backup)";
+      directory = mkOption {
+        type = types.str;
+        default = "${home}/.local/share/akyuu-backups";
+        defaultText = "~/.local/share/akyuu-backups";
+        description = ''
+          The directory for the snapshots. Put it on another disk or in a
+          synced folder if you want it to survive the loss of this one.
+        '';
+      };
+      keep = mkOption { type = types.ints.positive; default = 14; description = "How many snapshots to keep."; };
+      hour = mkOption { type = types.ints.between 0 23; default = 4; description = "Hour of the run."; };
+      minute = mkOption { type = types.ints.between 0 59; default = 0; description = "Minute of the run."; };
+    };
+
+    serve = {
+      enable = mkEnableOption "the read-only web UI, as a user service on 127.0.0.1";
+      port = mkOption { type = types.port; default = 7420; description = "The port of the web UI."; };
+    };
+  };
+
+  config = mkIf cfg.enable (mkMerge [
+    {
+      home.packages = [ cfg.package ] ++ optional cfg.backup.enable backupPackage;
+      home.sessionVariables.AKYUU_ROOT = cfg.root;
+
+      home.activation.akyuuRoot = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+        run mkdir -p ${lib.escapeShellArg cfg.root}
+      '';
+    }
+
+    (mkIf (pkgs.stdenv.hostPlatform.isDarwin && cfg.gc.enable) {
+      launchd.agents.akyuu-gc = {
+        enable = true;
+        config = {
+          Label = "akyuu-gc";
+          ProgramArguments = [ "${cfg.package}/bin/akyuu" "--root" cfg.root "gc" ];
+          StartCalendarInterval = calendar cfg.gc.hour cfg.gc.minute;
+          StandardOutPath = "${logs}/akyuu-gc.log";
+          StandardErrorPath = "${logs}/akyuu-gc.log";
+          ProcessType = "Background";
+          LowPriorityIO = true;
+        };
+      };
+    })
+
+    (mkIf (pkgs.stdenv.hostPlatform.isDarwin && cfg.backup.enable) {
+      launchd.agents.akyuu-backup = {
+        enable = true;
+        config = {
+          Label = "akyuu-backup";
+          ProgramArguments = [
+            "${backupPackage}/bin/akyuu-backup"
+            "--root" cfg.root
+            "--dest" cfg.backup.directory
+            "--keep" (toString cfg.backup.keep)
+          ];
+          StartCalendarInterval = calendar cfg.backup.hour cfg.backup.minute;
+          StandardOutPath = "${logs}/akyuu-backup.log";
+          StandardErrorPath = "${logs}/akyuu-backup.log";
+          ProcessType = "Background";
+          LowPriorityIO = true;
+        };
+      };
+    })
+
+    (mkIf (pkgs.stdenv.hostPlatform.isDarwin && cfg.serve.enable) {
+      launchd.agents.akyuu-serve = {
+        enable = true;
+        config = {
+          Label = "akyuu-serve";
+          ProgramArguments = [
+            "${cfg.package}/bin/akyuu"
+            "--root" cfg.root
+            "serve" "--port" (toString cfg.serve.port)
+          ];
+          RunAtLoad = true;
+          KeepAlive = true;
+          StandardOutPath = "${logs}/akyuu-serve.log";
+          StandardErrorPath = "${logs}/akyuu-serve.log";
+          ProcessType = "Background";
+        };
+      };
+    })
+  ]);
+}
