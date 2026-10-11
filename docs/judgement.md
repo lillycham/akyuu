@@ -1,6 +1,6 @@
 # The judgement phase
 
-Status: planned, 2026-10-11. Steps 0 and 1 are built (see "Order of work").
+Status: built, 2026-10-11 (steps 0 to 4 of "Order of work"). Step 5 is not done.
 Detection is `akyuu check` (see `check.md`). This note is about what happens
 after it: deciding what to do with a finding.
 
@@ -74,13 +74,14 @@ memory.
 
 0. [x] The policy ref of the MCP server is configuration, with a neutral default.
 1. [x] `akyuu compare A B` and the MCP tool, with the drop guard.
-2. [ ] `akyuu review A B --verdict distinct --agent NAME`: a file in `reviewed/`
+2. [x] `akyuu review A B --agent NAME [--note TEXT]`, `unreview` and `reviews`, and an MCP `review` tool: a file in `reviewed/`
    (like `pins/`). `check` skips a reviewed pair. The ids are content hashes,
    so a pair expires when either text changes. GC removes entries whose ids are
    gone.
-3. [ ] The procedure memory and a thin skill that points to it. A dry run on a
-   copy of the store, compared with what was done by hand.
-4. [ ] Run it for real, by hand, and read the report.
+3. [x] The procedure memory (ref `policy/consolidation`) and a thin skill (`consolidate-memory`) that points to it.
+   The first dry run on a copy of the store gave the verdicts that were chosen by hand.
+4. [x] A real run by an agent, by hand. It changed nothing, because no finding needed a change. The report is the ref
+   `policy/consolidation-log`.
 5. [ ] Later, maybe: a timer that runs the procedure weekly.
 
 Decided:
