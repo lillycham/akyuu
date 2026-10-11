@@ -41,6 +41,22 @@
           text = builtins.readFile ./nix/embed-openai.sh;
         };
 
+      embedLlamaFor = pkgs:
+        pkgs.writeShellApplication {
+          name = "akyuu-embed-llama";
+          runtimeInputs = [ pkgs.llama-cpp pkgs.curl pkgs.jq pkgs.coreutils ];
+          text = builtins.readFile ./nix/embed-llama.sh;
+        };
+
+      # nomic-embed-text v1.5 at Q8_0 (146 MB), the model of docs/embeddings.md.
+      # The file is fetched by hash, so it is in the Nix store and not in an app.
+      nomicGgufFor = pkgs:
+        pkgs.fetchurl {
+          name = "nomic-embed-text-v1.5.Q8_0.gguf";
+          url = "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf";
+          hash = "sha256-PiQ0IWSz2UmRupaS/cDdCOP9c2Lgqsw5appcVKVEw7c=";
+        };
+
       versionFor = pkgs:
         pkgs.writeShellApplication {
           name = "akyuu-version";
@@ -54,6 +70,8 @@
         akyuu-backup = backupFor pkgs;
         akyuu-version = versionFor pkgs;
         akyuu-embed-openai = embedOpenaiFor pkgs;
+        akyuu-embed-llama = embedLlamaFor pkgs;
+        nomic-embed-text-gguf = nomicGgufFor pkgs;
         default = akyuuFor pkgs;
       });
 
@@ -96,6 +114,7 @@
         akyuu-backup = backupFor final;
         akyuu-version = versionFor final;
         akyuu-embed-openai = embedOpenaiFor final;
+        akyuu-embed-llama = embedLlamaFor final;
       };
 
       # A home-manager module: the binary, AKYUU_ROOT, and optional launchd

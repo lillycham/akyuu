@@ -26,6 +26,8 @@ let
   backupPackage = self.packages.${system}.akyuu-backup;
   versionPackage = self.packages.${system}.akyuu-version;
   embedPackage = self.packages.${system}.akyuu-embed-openai;
+  embedLlamaPackage = self.packages.${system}.akyuu-embed-llama;
+  nomicGguf = self.packages.${system}.nomic-embed-text-gguf;
 
   calendar = hour: minute: [{ Hour = hour; Minute = minute; }];
 
@@ -115,10 +117,20 @@ in
 
     embed = {
       enable = mkEnableOption "search by meaning: a command that makes vectors, set in the environment of akyuu (AKYUU_EMBED_COMMAND)";
+      local = {
+        enable = mkEnableOption "a model that Nix provides, run by llama.cpp from Nix when a search needs it (akyuu-embed-llama), with no other program open. The server starts at the first call and stops when it is idle";
+        gguf = mkOption {
+          type = types.path;
+          default = nomicGguf;
+          defaultText = "nomic-embed-text v1.5 at Q8_0, fetched by hash";
+          description = "The model file (GGUF). Change embed.model too, and the prefixes if the model needs others.";
+        };
+        idleSeconds = mkOption { type = types.ints.positive; default = 120; description = "Seconds without a call before the server stops."; };
+      };
       command = mkOption {
         type = types.str;
-        default = "${embedPackage}/bin/akyuu-embed-openai";
-        defaultText = "akyuu-embed-openai";
+        default = if cfg.embed.local.enable then "${embedLlamaPackage}/bin/akyuu-embed-llama" else "${embedPackage}/bin/akyuu-embed-openai";
+        defaultText = "akyuu-embed-llama with embed.local, else akyuu-embed-openai";
         description = ''
           The command: it reads a text on stdin and prints a vector (see
           docs/embeddings.md). The default calls a server with the OpenAI
@@ -182,16 +194,32 @@ in
       home.sessionVariables.AKYUU_TIERS_REF = mkIf (cfg.tiersRef != null) cfg.tiersRef;
     }
 
+    # The settings are in a file that akyuu reads (see Akyuu.Embed), and not
+    # in session variables: a desktop app and a service do not start in a
+    # shell, and they must get the same settings.
     (mkIf cfg.embed.enable {
-      home.packages = [ embedPackage ];
-      home.sessionVariables = {
-        AKYUU_EMBED_COMMAND = cfg.embed.command;
-        AKYUU_EMBED_MODEL = cfg.embed.model;
-        AKYUU_EMBED_URL = cfg.embed.url;
-        AKYUU_EMBED_QUERY_PREFIX = cfg.embed.queryPrefix;
-        AKYUU_EMBED_DOCUMENT_PREFIX = cfg.embed.documentPrefix;
-      } // lib.optionalAttrs (cfg.embed.apiModel != null) { AKYUU_EMBED_API_MODEL = cfg.embed.apiModel; }
-        // lib.optionalAttrs (cfg.embed.minScore != null) { AKYUU_EMBED_MIN = toString cfg.embed.minScore; };
+      home.packages = if cfg.embed.local.enable then [ embedLlamaPackage ] else [ embedPackage ];
+      xdg.configFile."akyuu/embed.env".text =
+        let
+          vars = {
+            AKYUU_EMBED_COMMAND = cfg.embed.command;
+            AKYUU_EMBED_MODEL = cfg.embed.model;
+            AKYUU_EMBED_QUERY_PREFIX = cfg.embed.queryPrefix;
+            AKYUU_EMBED_DOCUMENT_PREFIX = cfg.embed.documentPrefix;
+          }
+          // lib.optionalAttrs cfg.embed.local.enable {
+            AKYUU_EMBED_GGUF = toString cfg.embed.local.gguf;
+            AKYUU_EMBED_IDLE = toString cfg.embed.local.idleSeconds;
+            # The first start of the model compiles shaders and takes longer.
+            AKYUU_EMBED_TIMEOUT = "60";
+          }
+          // lib.optionalAttrs (!cfg.embed.local.enable) { AKYUU_EMBED_URL = cfg.embed.url; }
+          // lib.optionalAttrs (cfg.embed.apiModel != null) { AKYUU_EMBED_API_MODEL = cfg.embed.apiModel; }
+          // lib.optionalAttrs (cfg.embed.minScore != null) { AKYUU_EMBED_MIN = toString cfg.embed.minScore; };
+        in
+        "# Made by the akyuu module. akyuu reads this file for AKYUU_EMBED_*.\n"
+        + lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "${k}=${v}") vars)
+        + "\n";
     })
 
     {

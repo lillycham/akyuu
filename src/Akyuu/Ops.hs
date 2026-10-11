@@ -480,7 +480,7 @@ meaningFor env only q = do
         Right [] -> unavailable "No memory has a vector yet. Run: akyuu embed"
         Right vs -> do
           r <- Embed.runEmbedder e Embed.QueryText q
-          minScore <- maybe (-1) id . (>>= readMaybe) <$> lookupEnv "AKYUU_EMBED_MIN" :: IO Double
+          minScore <- maybe (-1) id . (>>= readMaybe) . lookup "AKYUU_EMBED_MIN" <$> Embed.embedSettings :: IO Double
           case r of
             Left why -> unavailable why
             Right v -> do

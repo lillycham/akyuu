@@ -2,7 +2,7 @@
 
 module EmbedTests (embedTests) where
 
-import Akyuu.Embed (Embedder (Embedder, embTimeout), Role (Document, QueryText), closeVectors, cosine, decodeVector, encodeVector, fuse, loadVectors, openVectors, parseVector, putVector, rankBySimilarity, runEmbedder)
+import Akyuu.Embed (Embedder (Embedder, embCommand, embModel, embTimeout), Role (Document, QueryText), closeVectors, cosine, decodeVector, embedSettings, encodeVector, fuse, loadVectors, openVectors, parseVector, putVector, rankBySimilarity, runEmbedder)
 import Akyuu.Embed qualified
 import Akyuu.Ops (EmbedReport (embedded), SearchMode (MeaningOnly, TextOnly), addMemory, embedMissing, searchMemoriesMode)
 import Akyuu.Query (Match (matchId), SearchResult (corrections, matches), defaultSearchOptions)
@@ -149,6 +149,18 @@ searchCases =
             second <- right =<< embedMissing env e
             pure (embedded first, embedded second)
           rep @?= (2, 0),
+      testCase "settings come from a config file, and the environment wins" $
+        withOpsEnv $ \dir _ -> do
+          let file = dir </> "embed.env"
+          writeFile file "# a comment\nAKYUU_EMBED_COMMAND=cat\nAKYUU_EMBED_QUERY_PREFIX=search_query: \nAKYUU_EMBED_MODEL=from-file\n"
+          setEnv "AKYUU_CONFIG" file
+          setEnv "AKYUU_EMBED_MODEL" "from-env"
+          s <- embedSettings
+          e <- Akyuu.Embed.embedderFromEnv
+          unsetEnv "AKYUU_CONFIG"
+          unsetEnv "AKYUU_EMBED_MODEL"
+          lookup "AKYUU_EMBED_QUERY_PREFIX" s @?= Just "search_query: "
+          fmap (\x -> (embCommand x, embModel x)) e @?= Just ("cat", "from-env"),
       testCase "a command that fails leaves a text search, with a note" $
         withOpsEnv $ \_ env -> do
           _ <- right =<< addMemory env (note "plain text about tea" [])

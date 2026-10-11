@@ -37,6 +37,7 @@ module Akyuu.Embed
     Embedder (..),
     Role (..),
     embedderFromEnv,
+    embedSettings,
     runEmbedder,
 
     -- * The table
@@ -52,6 +53,7 @@ where
 
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
+import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, try)
 import Data.Aeson (Value (Array, Number, Object))
 import Data.Aeson qualified as A
@@ -69,7 +71,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding (encodeUtf8)
+import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Database.SQLite.Simple (Connection, Only (Only), close, execute, execute_, open, query, withTransaction)
 import GHC.Float (castWord32ToFloat)
 import System.Environment (getEnvironment)
@@ -185,9 +187,36 @@ data Role = Document | QueryText
 
 -- | The embedder that the environment names, or 'Nothing' if
 -- @AKYUU_EMBED_COMMAND@ is not set or is empty.
+-- | The environment, with the settings of the config file under it. The
+-- file is @$AKYUU_CONFIG@, or @$XDG_CONFIG_HOME/akyuu/embed.env@, or
+-- @~/.config/akyuu/embed.env@. A line is @NAME=value@, and the value is
+-- everything after the first @=@ (spaces stay). A line that starts with @#@
+-- is a comment. A variable of the real environment wins over the file.
+--
+-- The file is for a client that does not start in a shell with the variables
+-- (a desktop app, a service): all of them then read the same settings. A
+-- missing or unreadable file is no file.
+embedSettings :: IO [(String, String)]
+embedSettings = do
+  e <- getEnvironment
+  let path =
+        lookup "AKYUU_CONFIG" e
+          <|> ((</> "akyuu" </> "embed.env") <$> lookup "XDG_CONFIG_HOME" e)
+          <|> ((</> ".config" </> "akyuu" </> "embed.env") <$> lookup "HOME" e)
+  r <- maybe (pure (Left ())) (\p -> either (const (Left ())) Right <$> (try (BS.readFile p) :: IO (Either IOException ByteString))) path
+  let fromFile = case r of
+        Right bs | Right t <- decodeUtf8' bs -> mapMaybe entry (T.lines t)
+        _ -> []
+      entry l
+        | T.null (T.strip l) || "#" `T.isPrefixOf` T.stripStart l = Nothing
+        | otherwise = case T.breakOn "=" l of
+            (k, v) | not (T.null v) && not (T.null (T.strip k)) -> Just (T.unpack (T.strip k), T.unpack (T.drop 1 v))
+            _ -> Nothing
+  pure (e <> [kv | kv@(k, _) <- fromFile, k `notElem` map fst e])
+
 embedderFromEnv :: IO (Maybe Embedder)
 embedderFromEnv = do
-  e <- getEnvironment
+  e <- embedSettings
   let get k = T.pack <$> lookup k e
       num k d = fromMaybe d (lookup k e >>= readMaybe >>= \n -> if n > 0 then Just n else Nothing)
   pure $ case get "AKYUU_EMBED_COMMAND" of
@@ -207,7 +236,7 @@ embedderFromEnv = do
 -- output is not a vector) is a 'Left' with a text, never an exception.
 runEmbedder :: Embedder -> Role -> Text -> IO (Either Text Vector)
 runEmbedder e role t = do
-  base <- getEnvironment
+  base <- embedSettings
   let role' = case role of Document -> "document"; QueryText -> "query"
       proc' =
         (shell (T.unpack (embCommand e)))
