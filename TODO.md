@@ -363,7 +363,7 @@ Not done:
       one has. The page does the comparison itself (the same as `Akyuu.Compare`, with the same test cases), so an export can too.
 - [x] The memory graph fits the viewport: a scale from the size of the drawing and of the canvas, never enlarged and never below 40%.
       Below 55% the page hides the node text and keeps the shape. Buttons, ctrl or cmd and the wheel, and a drag zoom and pan.
-      Not done: the look at a real browser (see below). The two thresholds are guesses.
+      Checked in a real browser by Lilly on 2026-10-13 (the thresholds are as they are).
 - `explain` reads the whole snapshot for each request. This is fast enough at 3000 memories.
 
 ## Open decisions

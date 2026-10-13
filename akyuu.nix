@@ -1,6 +1,6 @@
 { mkDerivation, aeson, base, base16-bytestring, bytestring
 , containers, cryptohash-sha256, directory, file-embed, filelock
-, filepath, http-types, lib, network, optparse-applicative
+, filepath, http-types, lib, network, optparse-applicative, process
 , sqlite-simple, streaming-commons, tasty, tasty-hunit
 , tasty-quickcheck, text, time, transformers, unix, wai, warp
 }:
@@ -13,8 +13,8 @@ mkDerivation {
   libraryHaskellDepends = [
     aeson base base16-bytestring bytestring containers
     cryptohash-sha256 directory file-embed filelock filepath http-types
-    network optparse-applicative sqlite-simple streaming-commons text
-    time transformers unix wai warp
+    network optparse-applicative process sqlite-simple
+    streaming-commons text time transformers unix wai warp
   ];
   executableHaskellDepends = [ base ];
   testHaskellDepends = [

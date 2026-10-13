@@ -1,8 +1,82 @@
 # Akyuu
 
-Akyuu is a persistent store for AI agents modelled on Nix. It retains a single
-store of truth as plaintext, and builds a DAG on top of that. The DAG is
-queryable and allows chains of memories and concepts to be followed.
+Akyuu is a persistent memory store for AI agents, modelled on Nix. A memory is
+an immutable plain-text file, named by the hash of its text. A small mutable
+layer of named refs says which memory is current, and a graph of links
+between memories is derived from the files. An agent reads and writes it
+through a command line or an MCP server, so Claude Code, Claude Desktop and
+other MCP clients can share one memory.
+
+**Status: 0.1.0.0, pre-1.0.** It is in daily use by its author. Commands and
+MCP tools can still change. The store format is described in
+[docs/format.md](docs/format.md), and [CHANGELOG.md](CHANGELOG.md) lists what
+changes. It is written in Haskell and built with Nix.
+
+What it is for:
+
+- **Facts that change.** A ref such as `claude/projects/akyuu` names the
+  current text. To change it, an agent adds a new memory that supersedes the
+  old one. Nothing is edited, so the history is kept until GC collects it.
+- **Things that happened.** A log (`append`, `note`) keeps episodes in order.
+- **Finding things.** Text search that forgives typing mistakes, and optional
+  search by meaning with an embedding model that you choose.
+- **Keeping it tidy.** `check` finds duplicates, forks and stale links, and an
+  agent decides what to do.
+
+## Quick start
+
+```sh
+nix run github:lillycham/akyuu -- --help      # or: nix profile install github:lillycham/akyuu
+
+export AKYUU_ROOT=~/.local/share/akyuu
+mkdir -p "$AKYUU_ROOT"
+akyuu add --kind fact --agent me --body "Nix for every tool."
+akyuu search nix
+akyuu serve                                   # a read-only web view on http://127.0.0.1:7420
+```
+
+Give an agent the store. For Claude Code:
+
+```sh
+claude mcp add --scope user akyuu -- akyuu --root ~/.local/share/akyuu mcp
+```
+
+For Claude Desktop, add this to `claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "akyuu": { "command": "akyuu", "args": ["--root", "/Users/you/.local/share/akyuu", "mcp"] } } }
+```
+
+Use the full path of `akyuu` as the command if the app does not have it in its
+`PATH`. Then put a memory under `claude/memory-policy` that says how the agent
+should use the store: the tool descriptions point at it.
+
+## Trust and safety
+
+- **One user.** There is no access control. A client of the MCP server can
+  add, supersede and point refs, so give it only to agents that you trust with
+  the memories.
+- **Local.** The MCP server speaks on stdio. The web view is read-only and
+  listens on `127.0.0.1` only, and it checks the `Host` header.
+- **Commands from settings.** `AKYUU_EMBED_COMMAND` is run with `sh -c`. It
+  comes from the environment or from `~/.config/akyuu/embed.env`: protect that
+  file like a script.
+- **Forgetting.** To forget a memory, supersede it with a text that leaves it
+  out. GC then deletes the old text after the grace period and the ref
+  generations. If you keep the store in git (`akyuu-version`), the old text
+  stays in the history until you rewrite it.
+- **Secrets.** Do not store passwords or keys in memories.
+
+## Documents
+
+| Topic | Document |
+|---|---|
+| The format on disk, and what is stable | [docs/format.md](docs/format.md) |
+| Search by meaning, models, evaluation | [docs/embeddings.md](docs/embeddings.md) |
+| Logs and forgetting | [docs/episodes.md](docs/episodes.md) |
+| Finding duplicates, forks, stale links | [docs/check.md](docs/check.md), [docs/judgement.md](docs/judgement.md) |
+| Tiers, places, notes, hooks for agents | [docs/hooks.md](docs/hooks.md) |
+| The web view | [docs/webui-tabs.md](docs/webui-tabs.md) |
 
 ## Usage
 
@@ -39,7 +113,7 @@ akyuu seed --demo --root /tmp/demo  # a demo store, for the web UI
 With Nix and home-manager, take the flake as an input and import its module:
 
 ```nix
-inputs.akyuu.url = "git+https://github.com/lillycham/akyuu";   # private: use git
+inputs.akyuu.url = "github:lillycham/akyuu";
 
 # in the home-manager configuration
 imports = [ inputs.akyuu.homeModules.default ];
@@ -103,7 +177,7 @@ daily at 04:15, after GC (03:30) and the backup (04:00).
 
 ## Checks
 
-`nix flake check` runs the unit tests and a test of `akyuu-backup` in the Nix
+`nix flake check` runs the unit tests and tests of `akyuu-backup` and `akyuu-version` in the Nix
 sandbox. For day to day work, `nix develop -c cabal test`.
 
 ## Design
@@ -180,14 +254,4 @@ not delete them at once.
 
 ## Data Format
 
-Data addressed by Akyuu must follow this format:
-
-```text
-kind: <kind>
-created: <timestamp>
-agent: <agent>
-supersedes: sha256-<...>
-about: sha256-<...>
-
-<body>
-```
+See [docs/format.md](docs/format.md): the file of a memory, the edges, the refs and the other files, and what is stable.
