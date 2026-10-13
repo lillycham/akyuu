@@ -5,7 +5,7 @@ module EpisodeTests (episodeTests) where
 import Akyuu.Episode (Walk (walkEntries, walkMore))
 import Akyuu.Error (AkyuuError (BadInput))
 import Akyuu.GC (Policy (gracePeriod, keepGenerations), defaultPolicy)
-import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Supersedes))
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom))
 import Akyuu.Memory (Memory (memBody, memEdges))
 import Akyuu.Ops (NewMemory (NewMemory), addMemory, appendEpisode, dryRunGC, readLog, supersedeMemory)
 import Akyuu.Refs (mkName)
