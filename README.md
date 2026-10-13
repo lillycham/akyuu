@@ -119,8 +119,8 @@ inputs.akyuu.url = "github:lillycham/akyuu";
 imports = [ inputs.akyuu.homeModules.default ];
 programs.akyuu = {
   enable = true;        # the binary, AKYUU_ROOT, and the store directory
-  gc.enable = true;     # `akyuu gc` once a day, under launchd (03:30)
-  backup.enable = true; # `akyuu-backup` once a day, under launchd (04:00)
+  gc.enable = true;     # `akyuu gc` once a day (03:30)
+  backup.enable = true; # `akyuu-backup` once a day (04:00)
   # gc.keepGenerations = 5;  # older values of each ref that GC keeps
   # gc.gracePeriod = "1h";   # GC keeps a memory younger than this
   # gc.trashTTL = "7d";      # GC deletes trash files older than this
@@ -133,8 +133,10 @@ The three `gc` options are passed to `akyuu gc` as `--keep-generations`, `--grac
 A time is a number and a unit (`s`, `m`, `h` or `d`). The values above are the defaults.
 
 Without home-manager: `nix profile install .#akyuu`, or `nix run .#akyuu -- --help`.
-The module writes launchd agents on macOS only. On Linux it installs the
-package and sets `AKYUU_ROOT`.
+The daily jobs are launchd agents on macOS, with their logs in `~/Library/Logs`.
+On Linux they are systemd user timers (`systemctl --user list-timers 'akyuu-*'`,
+logs with `journalctl --user -u akyuu-gc`). A timer that was missed, because the
+machine was off, runs at the next start.
 
 To give an agent the store, run the MCP server over stdio. For Claude Code:
 

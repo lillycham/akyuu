@@ -28,8 +28,8 @@ tools of the MCP server can change. The store format is described in
 - `check` finds stale links, forks, duplicates, memories that nothing
   keeps, hubs and long logs. `compare` and `review` support the judgement of
   an agent (`docs/check.md`, `docs/judgement.md`).
-- A home-manager module for the binary, daily jobs (macOS launchd), the
-  embedding model and the settings.
+- A home-manager module for the binary, the daily jobs (launchd agents on
+  macOS, systemd user timers on Linux), the embedding model and the settings.
 
 ### Known limits
 
@@ -39,5 +39,5 @@ tools of the MCP server can change. The store format is described in
   `~/.config/akyuu/embed.env` like a script.
 - A memory that you forget stays in the git history, if you use
   `akyuu-version`.
-- The daily jobs are for macOS (launchd). On Linux the module installs the
-  package and sets `AKYUU_ROOT`.
+- The Linux timers are checked by evaluation only (`nix flake check`): the
+  author runs macOS. Reports from Linux are welcome.

@@ -9,11 +9,13 @@
 #
 # It installs the binary, sets AKYUU_ROOT, and makes the store directory (the
 # program needs the root to exist, so that a typo cannot make a new store).
-# The launchd agents get the root as an argument, because an agent does not
-# see the session variables.
+# The jobs get the root as an argument, because a service does not see the
+# session variables.
 #
-# Only launchd (macOS) agents are written. On Linux the module installs the
-# package and sets the variable, and the timers are not done yet.
+# The daily jobs are launchd agents on macOS and systemd user timers on Linux.
+# They are the same jobs: one list, `jobs`, makes both. A timer has
+# Persistent=true, so a run that was missed (the machine was off) happens at
+# the next start, like a launchd calendar job.
 self:
 { config, lib, pkgs, ... }:
 let
@@ -29,7 +31,51 @@ let
   embedLlamaPackage = self.packages.${system}.akyuu-embed-llama;
   nomicGguf = self.packages.${system}.nomic-embed-text-gguf;
 
+  isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
+  isLinux = pkgs.stdenv.hostPlatform.isLinux;
   calendar = hour: minute: [{ Hour = hour; Minute = minute; }];
+  two = n: lib.fixedWidthNumber 2 n;
+
+  # The jobs, for both systems. A job with `at` runs every day at that time.
+  # A job with no `at` is a service that stays up.
+  jobs = lib.filterAttrs (_: j: j.enable) {
+    gc = {
+      enable = cfg.gc.enable;
+      description = "akyuu garbage collection";
+      exec = [
+        "${cfg.package}/bin/akyuu"
+        "--root" cfg.root
+        "gc"
+        "--keep-generations" (toString cfg.gc.keepGenerations)
+        "--grace" cfg.gc.gracePeriod
+        "--trash-ttl" cfg.gc.trashTTL
+      ];
+      at = { inherit (cfg.gc) hour minute; };
+    };
+    version = {
+      enable = cfg.versioning.enable;
+      description = "akyuu versioning of the memories";
+      exec = [ "${versionPackage}/bin/akyuu-version" "--root" cfg.root ] ++ optional cfg.versioning.push "--push";
+      at = { inherit (cfg.versioning) hour minute; };
+    };
+    backup = {
+      enable = cfg.backup.enable;
+      description = "akyuu backup";
+      exec = [
+        "${backupPackage}/bin/akyuu-backup"
+        "--root" cfg.root
+        "--dest" cfg.backup.directory
+        "--keep" (toString cfg.backup.keep)
+      ];
+      at = { inherit (cfg.backup) hour minute; };
+    };
+    serve = {
+      enable = cfg.serve.enable;
+      description = "akyuu web view (read-only, 127.0.0.1)";
+      exec = [ "${cfg.package}/bin/akyuu" "--root" cfg.root "serve" "--port" (toString cfg.serve.port) ];
+      at = null;
+    };
+  };
 
   # A length of time as `akyuu gc` reads it: a whole number and a unit.
   durationType = types.strMatching "[0-9]+[smhd]";
@@ -229,83 +275,45 @@ in
       '';
     }
 
-    (mkIf (pkgs.stdenv.hostPlatform.isDarwin && cfg.gc.enable) {
-      launchd.agents.akyuu-gc = {
+    # macOS: launchd agents.
+    (mkIf isDarwin {
+      launchd.agents = lib.mapAttrs' (name: j: lib.nameValuePair "akyuu-${name}" {
         enable = true;
         config = {
-          Label = "akyuu-gc";
-          ProgramArguments = [
-            "${cfg.package}/bin/akyuu"
-            "--root" cfg.root
-            "gc"
-            "--keep-generations" (toString cfg.gc.keepGenerations)
-            "--grace" cfg.gc.gracePeriod
-            "--trash-ttl" cfg.gc.trashTTL
-          ];
-          StartCalendarInterval = calendar cfg.gc.hour cfg.gc.minute;
-          StandardOutPath = "${logs}/akyuu-gc.log";
-          StandardErrorPath = "${logs}/akyuu-gc.log";
+          Label = "akyuu-${name}";
+          ProgramArguments = j.exec;
+          StandardOutPath = "${logs}/akyuu-${name}.log";
+          StandardErrorPath = "${logs}/akyuu-${name}.log";
           ProcessType = "Background";
-          LowPriorityIO = true;
-        };
-      };
+        }
+        // (if j.at == null
+          then { RunAtLoad = true; KeepAlive = true; }
+          else { StartCalendarInterval = calendar j.at.hour j.at.minute; LowPriorityIO = true; });
+      }) jobs;
     })
 
-    (mkIf (pkgs.stdenv.hostPlatform.isDarwin && cfg.versioning.enable) {
-      launchd.agents.akyuu-version = {
-        enable = true;
-        config = {
-          Label = "akyuu-version";
-          ProgramArguments = [
-            "${versionPackage}/bin/akyuu-version"
-            "--root" cfg.root
-          ] ++ optional cfg.versioning.push "--push";
-          StartCalendarInterval = calendar cfg.versioning.hour cfg.versioning.minute;
-          StandardOutPath = "${logs}/akyuu-version.log";
-          StandardErrorPath = "${logs}/akyuu-version.log";
-          ProcessType = "Background";
-          LowPriorityIO = true;
-        };
-      };
-    })
+    # Linux: systemd user services, and a timer for each daily job. The output
+    # goes to the journal: `journalctl --user -u akyuu-gc`.
+    (mkIf isLinux {
+      systemd.user.services = lib.mapAttrs' (name: j: lib.nameValuePair "akyuu-${name}" {
+        Unit.Description = j.description;
+        Service = {
+          ExecStart = lib.escapeShellArgs j.exec;
+        }
+        // (if j.at == null
+          then { Restart = "on-failure"; }
+          else { Type = "oneshot"; Nice = 19; IOSchedulingClass = "idle"; });
+        Install = lib.optionalAttrs (j.at == null) { WantedBy = [ "default.target" ]; };
+      }) jobs;
 
-    (mkIf (pkgs.stdenv.hostPlatform.isDarwin && cfg.backup.enable) {
-      launchd.agents.akyuu-backup = {
-        enable = true;
-        config = {
-          Label = "akyuu-backup";
-          ProgramArguments = [
-            "${backupPackage}/bin/akyuu-backup"
-            "--root" cfg.root
-            "--dest" cfg.backup.directory
-            "--keep" (toString cfg.backup.keep)
-          ];
-          StartCalendarInterval = calendar cfg.backup.hour cfg.backup.minute;
-          StandardOutPath = "${logs}/akyuu-backup.log";
-          StandardErrorPath = "${logs}/akyuu-backup.log";
-          ProcessType = "Background";
-          LowPriorityIO = true;
+      systemd.user.timers = lib.mapAttrs' (name: j: lib.nameValuePair "akyuu-${name}" {
+        Unit.Description = "${j.description}, daily";
+        Timer = {
+          OnCalendar = "*-*-* ${two j.at.hour}:${two j.at.minute}:00";
+          Persistent = true;
         };
-      };
-    })
-
-    (mkIf (pkgs.stdenv.hostPlatform.isDarwin && cfg.serve.enable) {
-      launchd.agents.akyuu-serve = {
-        enable = true;
-        config = {
-          Label = "akyuu-serve";
-          ProgramArguments = [
-            "${cfg.package}/bin/akyuu"
-            "--root" cfg.root
-            "serve" "--port" (toString cfg.serve.port)
-          ];
-          RunAtLoad = true;
-          KeepAlive = true;
-          StandardOutPath = "${logs}/akyuu-serve.log";
-          StandardErrorPath = "${logs}/akyuu-serve.log";
-          ProcessType = "Background";
-        };
-      };
+        Install.WantedBy = [ "timers.target" ];
+      }) (lib.filterAttrs (_: j: j.at != null) jobs);
     })
   ]);
 }

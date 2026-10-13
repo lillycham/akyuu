@@ -102,12 +102,37 @@
           (builtins.readFile ./nix/backup-check.sh);
         # The versioning script: the repository, one commit for a change, none for
         # no change, the ignore list, and a removed memory that stays in the history.
+        module =
+          let
+            lib = nixpkgs.lib;
+            linux = self.moduleEvals.x86_64-linux;
+            mac = self.moduleEvals.aarch64-darwin;
+            expect = what: ok: lib.assertMsg ok "module check failed: ${what}";
+            ok =
+              expect "darwin has four agents and no timer" (mac.launchd == [ "akyuu-backup" "akyuu-gc" "akyuu-serve" "akyuu-version" ] && mac.timers == [ ] && mac.services == [ ])
+              && expect "linux has four services, three timers and no agent" (linux.services == [ "akyuu-backup" "akyuu-gc" "akyuu-serve" "akyuu-version" ] && linux.timers == [ "akyuu-backup" "akyuu-gc" "akyuu-version" ] && linux.launchd == [ ])
+              && expect "the timers are at the hours of the options" (linux.calendars.gc == "*-*-* 03:30:00" && linux.calendars.backup == "*-*-* 04:00:00" && linux.calendars.version == "*-*-* 04:15:00")
+              && expect "a missed run is made up" linux.calendars.persistent
+              && expect "a daily job is a one-shot, the web view restarts" (linux.oneshot == "oneshot" && linux.serveRestarts == "on-failure")
+              && expect "the embedding settings file is written on both" (linux.hasEmbedFile && mac.hasEmbedFile)
+              && expect "push is passed on macOS" mac.pushFlag;
+          in
+          assert ok;
+          pkgs.runCommand "akyuu-module-check" { } "touch $out";
+        # The versioning script: the repository, one commit for a change, none for
+        # no change, the ignore list, and a removed memory that stays in the history.
         version = pkgs.runCommand "akyuu-version-check"
           {
             nativeBuildInputs = [ (akyuuFor pkgs) (versionFor pkgs) pkgs.coreutils pkgs.git ];
           }
           (builtins.readFile ./nix/version-check.sh);
       });
+
+      # The module makes the jobs for each system: launchd agents on macOS, and
+      # systemd user services and timers on Linux. This is an evaluation only
+      # (no home-manager, nothing is built). It runs on every host, because
+      # it uses the package set of the system that it asks for.
+      moduleEvals = nixpkgs.lib.genAttrs systems (system: import ./nix/module-check.nix { inherit self nixpkgs system; });
 
       overlays.default = final: _prev: {
         akyuu = akyuuFor final;
