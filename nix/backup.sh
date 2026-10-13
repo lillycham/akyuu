@@ -6,10 +6,11 @@
 # store that did not change costs almost nothing. Objects never change, so
 # this holds for nearly the whole store.
 #
-# The order of the copy matters. The objects (store, trash, tombstones, pins,
-# reviewed)
-# come first and the refs last. An agent adds an object before it moves a ref
-# to it, so every ref in the snapshot points to an object in the snapshot.
+# The order of the copy matters. The refs and the pins come first, and the
+# objects (store, trash, tombstones, reviewed) after them. An agent adds an
+# object before it moves a ref to it, so a ref that was read before the objects
+# were copied points at an object that is in the copy. (The other order could
+# take a ref that moved to an object that was added after the copy of store.)
 #
 # To restore: copy the directories of a snapshot into an empty root, then
 # run `akyuu --root ROOT reindex`.
@@ -57,7 +58,7 @@ prev=$(find "$dest" -mindepth 1 -maxdepth 1 -type d -name '20*' | sort | tail -n
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp"
 
-for d in store trash tombstones pins reviewed refs; do
+for d in refs pins store trash tombstones reviewed; do
   [ -d "$root/$d" ] || continue
   if [ -n "$prev" ] && [ -d "$prev/$d" ]; then
     rsync -a --exclude '.DS_Store' --exclude '.tmp*' --exclude '.lock' \

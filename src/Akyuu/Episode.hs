@@ -34,13 +34,13 @@ import Data.Set qualified as Set
 -- If the ref does not exist, the log starts with this episode. Otherwise the
 -- episode gets a @derived_from@ edge to the current newest episode. The ref
 -- moves with a compare-and-set. If another agent appended at the same time,
--- the function reads the ref again and builds the episode again, up to three
+-- the function reads the ref again and builds the episode again, up to 20
 -- times, because two appends do not conflict: both belong in the log.
 --
 -- The memory must not have a @derived_from@ edge of its own: that edge is the
 -- link in the chain, and the function adds it.
 append :: Store -> Refs -> Name -> Memory -> IO (Either SupersedeError Id)
-append st rs n m = go (3 :: Int)
+append st rs n m = go (20 :: Int)
   where
     go k = do
       cur <- getRef rs n
