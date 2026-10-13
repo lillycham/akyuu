@@ -1,39 +1,63 @@
 # Changelog
 
-## Unreleased
+## 0.2.0.0 (2026-10-13)
 
-- A Wiki tab, the first tab of the web view: each ref is a page, the body is
-  rendered as Markdown (as DOM nodes, never HTML), ref names and ids are links,
-  and a page shows its links, backlinks, history and, for a log, its episodes
-  (`docs/wiki-view.md`). `GET /api/pages` serves it.
-- Search by meaning embeds a long memory in chunks (at most 8), and ranks it by
-  its best chunk. Run `akyuu embed` once after the upgrade: the table of vectors
-  changed.
-- The MCP server takes the name of the client (`clientInfo.name`, for example
-  `claude-code`) as the default agent of `note`, when `AKYUU_AGENT` is not set.
-  Before, such notes had the agent `agent`.
-- `akyuu init` starts a store: it makes the root, a short policy for agents
+The store format does not change (`docs/format.md`). The table of vectors for
+search by meaning changes, and a hook for Claude Code needs a new command: see
+"Upgrading".
+
+### Highlights
+
+- A Wiki tab, the first tab of the web view. Each ref is a page, and the body
+  of its memory is rendered as Markdown (built as DOM nodes, never as HTML).
+  Ref names and ids in the text are links. A page shows its links, backlinks,
+  history and, for a log, its episodes. The first page is the first ref of the
+  tier `always` of the manifest (`docs/wiki-view.md`, `GET /api/pages`).
+- `context --page N` (and `--budget`) splits the context into pages that fit the
+  10,000-character limit of a Claude Code hook. The MCP tool `context` takes
+  `budget` and `page` too (`docs/hooks.md`).
+- `akyuu init` starts a store: the root, a short policy for agents
   (`policy/memory`) and a manifest (`policy/tiers`). Existing refs are kept.
-  `context` on a store without a manifest says what to do, and is no longer an
-  error.
-- `log --since 7d` (and `since` for the MCP tool `log`) shows the episodes of
-  the last length of time.
-- `akyuu status`: the counts, the manifest, the policy, search by meaning and
-  versioning, in a few lines.
+- `akyuu status` shows the counts, the manifest, the policy, search by meaning
+  and versioning in a few lines.
+
+### Changes
+
+- Search by meaning embeds a long memory in chunks (at most 8) and ranks it by
+  its best chunk. `akyuu embed --prune` removes the vectors of other models and
+  of deleted memories, and the home-manager module runs it daily. The MCP
+  search takes `mode` (`fused`, `text` or `meaning`), and the web view searches
+  by meaning too.
+- `context` on a store without a manifest gives a hint, not an error.
 - `add --ref` (and `ref` for the MCP tool `add`) makes a new ref in the same
   call.
+- `log --since 7d` (and `since` for the MCP tool `log`) shows the episodes of
+  the last length of time.
+- The MCP server takes the name of the client (`clientInfo.name`, for example
+  `claude-code`) as the default agent of `note`, when `AKYUU_AGENT` is not set.
+- `akyuu --version`, and the MCP server reports the version of the package.
+- `nix flake check` checks the formatting (ormolu). CI runs on Linux and macOS.
+
+### Fixes
+
 - A file that is not a valid memory (for example one edited by hand) no longer
   stops every search: the cache skips it, and `verify` reports it.
-- `nix flake check` checks the formatting (ormolu).
-- `akyuu embed --prune`, a daily `embed` job in the home-manager module, `mode`
-  for the MCP search, and search by meaning in the web view.
-- Fixes from a review: the backup copies refs before objects; the idle stop of
-  `akyuu-embed-llama` works with GNU stat; a timeout of the embedding command
-  stops its children; errors of the vector table give a text search; the
-  settings file accepts `export`, quotes and CRLF.
-- `context --page N` (and `--budget`) splits the context into pages that fit
-  the 10,000-character limit of a Claude Code hook. The MCP tool `context` has
-  `budget` and `page` too.
+- The backup copies the refs before the objects, so a ref in a snapshot always
+  has its object.
+- The idle stop of `akyuu-embed-llama` works (it used a BSD form of `stat`), and
+  two callers can no longer start two servers.
+- A timeout of the embedding command stops its children too. An error of the
+  vector table falls back to a text search. The settings file accepts
+  `export`, quotes and CRLF.
+- An append retries up to 20 times when other agents append at the same time.
+
+### Upgrading
+
+- Run `akyuu embed` once if you use search by meaning: the vectors are now in a
+  table of chunks. The old table stays until `akyuu embed --prune`, so an older
+  akyuu on the same store keeps working.
+- If a Claude Code SessionStart hook runs `akyuu context`, use three hooks with
+  `akyuu context --page 1`, `--page 2` and `--page 3` (`docs/hooks.md`).
 
 ## 0.1.0.0 (2026-10-13)
 

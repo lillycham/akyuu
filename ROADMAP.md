@@ -18,12 +18,11 @@ of the decisions is in [TODO.md](TODO.md).
   with a person approving, is not built.
 - **Retargeting stale links.** Manual by choice for now.
 - **Search.**
-  - Chunking of long memories for the embedding. Only the first 4000
-    characters are embedded now.
-  - Removing the vectors of a model that is no longer used (`embed --prune`).
   - Try EmbeddingGemma 2 when nixpkgs has llama.cpp b11452 or later
     (see `docs/embeddings.md`).
-- **A wiki-style view.** A page for reading memories, next to the graph.
+- **Shorter MCP tool descriptions.** The answer of `tools/list` is about 16 KB,
+  and a client that loads every tool pays for it in each session.
+- **The wiki view:** Markdown tables and images.
 - **A shared helper** for `Store.orNotFound` and `Refs.orNoSuchRef` (an API
   decision, see TODO.md).
 

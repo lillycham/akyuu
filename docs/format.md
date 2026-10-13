@@ -1,6 +1,6 @@
 # Store format, version 1
 
-Status: this is the format that akyuu 0.1.0.0 writes and reads. It has no
+Status: this is the format that akyuu 0.1 and 0.2 write and read. It has no
 version marker in the files: a store without one is version 1.
 
 This note is for a person who wants to read a store without akyuu, write a
@@ -20,7 +20,7 @@ tool for it, or move it. Everything here is plain text on disk.
 
 Before 1.0, an incompatible change to the stable parts is possible. If one
 happens, the CHANGELOG says so and says how to move a store. A new version of
-akyuu reads every store that an older 0.1.x wrote. An older version refuses a
+akyuu reads every store that an older one wrote. An older version refuses a
 file with a header it does not know (it does not read it wrongly).
 
 ## A memory

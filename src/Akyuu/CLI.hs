@@ -66,7 +66,9 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Time (NominalDiffTime, getCurrentTime)
-import Options.Applicative (Alternative (many, some, (<|>)), CompletionResult (execCompletion), Parser, ParserInfo, ParserResult (CompletionInvoked, Failure, Success), ReadM, argument, auto, command, defaultPrefs, eitherReader, execParserPure, flag', footer, fullDesc, help, helper, hsubparser, info, long, metavar, option, optional, progDesc, readerError, renderFailure, short, showDefault, showDefaultWith, strArgument, strOption, switch, value, (<**>))
+import Data.Version (showVersion)
+import Options.Applicative (Alternative (many, some, (<|>)), CompletionResult (execCompletion), Parser, ParserInfo, ParserResult (CompletionInvoked, Failure, Success), ReadM, argument, auto, command, defaultPrefs, eitherReader, execParserPure, flag', footer, fullDesc, help, helper, hsubparser, info, infoOption, long, metavar, option, optional, progDesc, readerError, renderFailure, short, showDefault, showDefaultWith, strArgument, strOption, switch, value, (<**>))
+import Paths_akyuu qualified as Pkg
 import System.Directory (createDirectoryIfMissing, getCurrentDirectory)
 import System.Environment (getArgs, getProgName, lookupEnv)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess), exitWith)
@@ -431,7 +433,7 @@ cliParser =
 cliInfo :: ParserInfo Cli
 cliInfo =
   info
-    (cliParser <**> helper)
+    (cliParser <**> helper <**> infoOption ("akyuu " <> showVersion Pkg.version) (long "version" <> help "Print the version."))
     ( fullDesc
         <> progDesc "A content-addressed memory store for agents."
         <> footer "Exit codes: 0 success, 1 a failed operation, 2 bad usage."

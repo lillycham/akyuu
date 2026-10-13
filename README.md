@@ -10,14 +10,14 @@ between memories is derived from the files. An agent reads and writes it
 through a command line or an MCP server, so Claude Code, Claude Desktop and
 other MCP clients can share one memory.
 
-**Status: 0.1.0.0, pre-1.0.** It is in daily use by its author. Commands and
+**Status: 0.2.0.0, pre-1.0.** It is in daily use by its author. Commands and
 MCP tools can still change. The store format is described in
 [docs/format.md](docs/format.md), and [CHANGELOG.md](CHANGELOG.md) lists what
 changes, and [ROADMAP.md](ROADMAP.md) lists what is open. It is written in Haskell and built with Nix.
 
 What it is for:
 
-- **Facts that change.** A ref such as `claude/projects/akyuu` names the
+- **Facts that change.** A ref such as `me/projects/garden` names the
   current text. To change it, an agent adds a new memory that supersedes the
   old one. Nothing is edited, so the history is kept until GC collects it.
 - **Things that happened.** A log (`append`, `note`) keeps episodes in order.
@@ -51,8 +51,9 @@ For Claude Desktop, add this to `claude_desktop_config.json`:
 ```
 
 Use the full path of `akyuu` as the command if the app does not have it in its
-`PATH`. Then put a memory under `claude/memory-policy` that says how the agent
-should use the store: the tool descriptions point at it.
+`PATH`. The MCP server tells the agent to read the policy of the store first:
+`akyuu init` writes a short one under `policy/memory`. Change it to fit you, or
+name another ref with `--policy-ref` (or `AKYUU_POLICY_REF`).
 
 ## Trust and safety
 
