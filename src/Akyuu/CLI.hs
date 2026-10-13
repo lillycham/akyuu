@@ -41,7 +41,7 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemoriesMode, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemoriesMode, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareJSON, compareLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
@@ -128,6 +128,8 @@ data Check i
 -- to run. 'resolveCommand' makes the change, and it can fail.
 data Command i
   = Add (MemoryArgs i)
+  | -- | Add a memory and make a new ref for it (@add --ref@).
+    AddRef Name (MemoryArgs i)
   | Get (GetTarget i)
   | -- | The ref, the 'Id' that the ref must point to now (@--expect@), and
     -- the new memory.
@@ -273,7 +275,10 @@ commandParser =
       <> cmd "seed" seedP "Make a demo store in an empty directory, to try the web view."
   where
     cmd n p d = command n (info p (progDesc d))
-    addP = Add <$> memoryArgs
+    addP =
+      (\r a -> maybe (Add a) (`AddRef` a) r)
+        <$> optional (option nameReader (long "ref" <> metavar "NAME" <> help "Also make a new ref NAME for the memory. The ref must not exist."))
+        <*> memoryArgs
     getP =
       Get
         <$> ( (ById <$> argument idReader (metavar "ID"))
@@ -501,6 +506,10 @@ runCommand env c = runExceptT $ case c of
   Add a -> do
     n <- newMemory a
     i <- ExceptT (addMemory env n)
+    pure (ok [Id.render i])
+  AddRef r a -> do
+    n <- newMemory a
+    i <- ExceptT (addUnderRef env r n)
     pure (ok [Id.render i])
   Get t -> do
     i <- case t of

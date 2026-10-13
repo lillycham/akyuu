@@ -46,7 +46,7 @@ import Akyuu.Error (AkyuuError (BadId, BadInput, BadName), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseIdSpec, readLog, readRef, resolveId, reviewPair, searchMemoriesMode, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseIdSpec, readLog, readRef, resolveId, reviewPair, searchMemoriesMode, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage)
@@ -77,6 +77,8 @@ import System.IO (BufferMode (LineBuffering), hFlush, hIsEOF, hPutStrLn, hSetBin
 -- | A tool call, with its arguments checked.
 data ToolCall
   = CallAdd NewMemory
+  | -- | Add a memory and make a new ref for it.
+    CallAddRef Name NewMemory
   | -- | By 'Id' ('Right') or by the current value of a ref ('Left').
     CallGet (Either Name Id)
   | CallSupersede Name (Maybe Id) NewMemory
@@ -166,7 +168,7 @@ toolList =
   [ tool
       "add"
       "Store a new memory and return its id. A memory never changes after this. To replace the memory of a ref, use supersede. Edges point from the new memory to older ones. This tool moves no ref."
-      (objectSchema (memoryProps <> [("supersedes", idsSchema "Memories that this memory replaces. This adds edges only. It moves no ref.")]) ["kind", "agent", "body"]),
+      (objectSchema (memoryProps <> [("supersedes", idsSchema "Memories that this memory replaces. This adds edges only. It moves no ref."), ("ref", stringSchema "A new ref to make for the memory, in the same call (it must not exist). Without it, no ref moves.")]) ["kind", "agent", "body"]),
     tool
       "get"
       "Read one memory, by id or by the current value of a ref. Give exactly one of id and ref. The result is the stored file: the headers (kind, created, agent, edges), a blank line, then the body."
@@ -401,7 +403,10 @@ plainEdges = [("about", About), ("derived_from", DerivedFrom), ("refines", Refin
 -- not know is ignored.
 parseToolCall :: Text -> Args -> Either CallError ToolCall
 parseToolCall n args = case n of
-  "add" -> CallAdd <$> memoryArg args (plainEdges <> [("supersedes", Supersedes)])
+  "add" -> do
+    m <- memoryArg args (plainEdges <> [("supersedes", Supersedes)])
+    r <- optional' args "ref" asText "a string" >>= traverse parseName
+    pure (maybe (CallAdd m) (`CallAddRef` m) r)
   "get" -> do
     i <- optIdArg args "id"
     r <- optional' args "ref" asText "a string" >>= traverse parseName
@@ -580,6 +585,7 @@ runTool cfg env c = either failed id <$> go
     lines' empty ls = okText (if null ls then empty else T.intercalate "\n" ls) False
     go = case c of
       CallAdd n -> fmap (\i -> okText (Id.render i) False) <$> addMemory env n
+      CallAddRef r n -> fmap (\i -> okText (Id.render i) False) <$> addUnderRef env r n
       CallGet t -> do
         i <- either (fmap (fmap current) . readRef env) (pure . Right) t
         case i of
