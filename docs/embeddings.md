@@ -118,7 +118,8 @@ disappoints: add the line to `policy/embedding-eval`.
 - The search of the MCP server takes `mode` (`fused`, `text` or `meaning`), and
   the web view searches by meaning too.
 - After an upgrade from 0.1.0.0, run `akyuu embed` once: the table changed
-  (`chunks` in place of `vectors`) and the old one is dropped.
+  (`chunks` in place of `vectors`). The old table stays until `akyuu embed
+  --prune`, so an older akyuu on the same store keeps working.
 
 ## EmbeddingGemma 2 (2026-10-13)
 

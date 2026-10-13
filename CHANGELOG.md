@@ -5,6 +5,13 @@
 - Search by meaning embeds a long memory in chunks (at most 8), and ranks it by
   its best chunk. Run `akyuu embed` once after the upgrade: the table of vectors
   changed.
+- `akyuu status`: the counts, the manifest, the policy, search by meaning and
+  versioning, in a few lines.
+- `add --ref` (and `ref` for the MCP tool `add`) makes a new ref in the same
+  call.
+- A file that is not a valid memory (for example one edited by hand) no longer
+  stops every search: the cache skips it, and `verify` reports it.
+- `nix flake check` checks the formatting (ormolu).
 - `akyuu embed --prune`, a daily `embed` job in the home-manager module, `mode`
   for the MCP search, and search by meaning in the web view.
 - Fixes from a review: the backup copies refs before objects; the idle stop of

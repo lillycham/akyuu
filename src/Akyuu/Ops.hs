@@ -67,6 +67,10 @@ module Akyuu.Ops
     CompareReport (..),
     compareMemories,
 
+    -- * Status
+    StatusReport (..),
+    statusOf,
+
     -- * Verify
     VerifyReport (..),
     verifyOk,
@@ -84,7 +88,7 @@ import Akyuu.Compare qualified as Compare
 import Akyuu.Embed qualified as Embed
 import Akyuu.Episode (Walk)
 import Akyuu.Episode qualified as Episode
-import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), fromSupersede)
+import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
 import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom, Supersedes), Graph)
@@ -102,7 +106,7 @@ import Akyuu.SearchEval qualified as SearchEval
 import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), openStore)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersede, supersedeFrom)
-import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), parseManifest, placeLog, placeRefs, tierNames, tierRefs)
+import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), parseManifest, placeLines, placeLog, placeRefs, tierNames, tierRefs)
 import Control.Exception (SomeException, displayException, finally, try)
 import Control.Monad (forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
@@ -119,6 +123,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
 import System.Directory (doesDirectoryExist)
+import System.FilePath ((</>))
 import Text.Read (readMaybe)
 
 -- The environment ------------------------------------------------------
@@ -624,6 +629,55 @@ reindexCache env = runExceptT (cache (Cache.reindex (envCache env) (envStore env
 -- Verify ---------------------------------------------------------------
 
 -- | What 'verifyStore' found. Each list is sorted.
+-- | A short report of the setup, for a person who wants to know whether
+-- everything works (@akyuu status@). It reads; it writes nothing, and it does
+-- not run the embedding command.
+data StatusReport = StatusReport
+  { stRoot :: FilePath,
+    stMemories :: Int,
+    stRefs :: Int,
+    stPins :: Int,
+    -- | The ref of the manifest and what is wrong with it, or its tiers and the
+    -- number of at and log lines.
+    stManifest :: (Name, Either Text ([Text], (Int, Int))),
+    -- | The ref of the policy and whether it exists.
+    stPolicy :: (Name, Bool),
+    -- | The model, and how many memories have vectors for it. 'Nothing' if no
+    -- command is set.
+    stEmbed :: Maybe (Text, Either Text Int),
+    -- | Whether the root is a git repository (akyuu-version).
+    stGit :: Bool
+  }
+  deriving (Eq, Show)
+
+-- | Gather a 'StatusReport'. The manifest and the policy are named by the
+-- caller (the defaults or the environment).
+statusOf :: Env -> FilePath -> Name -> Name -> IO (Either AkyuuError StatusReport)
+statusOf env root manifestRef policyRef = runExceptT $ do
+  ids <- store (Store.list (envStore env))
+  rs <- ExceptT (listRefValues env)
+  pins <- ExceptT (listPinned env)
+  manifest <- liftIO $ do
+    r <- readRef env manifestRef
+    case r of
+      Left _ -> pure (Left "no such ref: context has no tiers.")
+      Right ref -> do
+        m <- getMemory env (current ref)
+        pure $ case m of
+          Left e -> Left (describe e)
+          Right mem -> case parseManifest (memBody mem) of
+            Left e -> Left (T.pack (show e))
+            Right mf -> Right (tierNames mf, placeLines mf)
+  let policyThere = policyRef `elem` map fst rs
+  me <- liftIO Embed.embedderFromEnv
+  emb <- liftIO $ case me of
+    Nothing -> pure Nothing
+    Just e -> do
+      r <- withVectors env (\vs -> Set.size . Set.intersection (Set.fromList ids) <$> Embed.storedIds vs (Embed.embModel e))
+      pure (Just (Embed.embModel e, r))
+  git <- liftIO (doesDirectoryExist (root </> ".git"))
+  pure StatusReport {stRoot = root, stMemories = length ids, stRefs = length rs, stPins = length pins, stManifest = (manifestRef, manifest), stPolicy = (policyRef, policyThere), stEmbed = emb, stGit = git}
+
 data VerifyReport = VerifyReport
   { -- | How many objects the store has.
     checkedObjects :: Int,

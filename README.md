@@ -105,6 +105,7 @@ akyuu search-eval                   # run a set of searches in each mode
 akyuu note "a small thing"          # an episode in the log that the manifest names for this directory
 akyuu compare 08d4 1c9b             # what each of two memories says that the other lacks
 akyuu review 08d4 1c9b --agent me   # both are true and different: check leaves the pair out
+akyuu status                        # the setup in a few lines: counts, manifest, policy, vectors, git
 akyuu check                         # stale links, forks, duplicates, memories nothing keeps
 akyuu append me/episodes --kind episode --agent me --body "..."   # a log: each episode points at the one before
 akyuu log me/episodes               # the episodes, newest first (see docs/episodes.md)

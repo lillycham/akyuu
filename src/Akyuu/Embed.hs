@@ -327,14 +327,14 @@ vectorsPath root = root </> "embeddings.sqlite"
 -- | Open the table, and make it if the file is new. The table is
 -- @chunks(id, model, chunk, dim, vec)@ with the key @(id, model, chunk)@.
 -- The table of version 0.1.0.0 (@vectors@, one vector for each memory) is
--- dropped: it is derived data, and @akyuu embed@ makes the vectors again.
+-- not read and not changed here, so an older akyuu on the same store keeps
+-- working. @akyuu embed --prune@ drops it.
 openVectors :: FilePath -> IO (Either Text VectorStore)
 openVectors path = do
   r <- try $ bracketOnError (open path) close $ \c -> do
     -- Two processes can write at once (akyuu embed and a server): wait.
     execute_ c "PRAGMA busy_timeout = 5000"
     execute_ c "PRAGMA journal_mode = WAL"
-    execute_ c "DROP TABLE IF EXISTS vectors"
     execute_ c "CREATE TABLE IF NOT EXISTS chunks (id TEXT NOT NULL, model TEXT NOT NULL, chunk INTEGER NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL, PRIMARY KEY (id, model, chunk)) WITHOUT ROWID"
     pure (VectorStore c)
   pure (either (\e -> Left (T.pack (show (e :: SomeException)))) Right r)
@@ -355,6 +355,7 @@ putVectors (VectorStore c) model i vs =
 -- set (GC deleted them). Returns the number of rows removed.
 pruneVectors :: VectorStore -> Text -> Set Id -> IO Int
 pruneVectors (VectorStore c) model live = do
+  execute_ c "DROP TABLE IF EXISTS vectors"
   rows <- query_ c "SELECT DISTINCT id, model FROM chunks" :: IO [(Text, Text)]
   let gone = [(i, m) | (i, m) <- rows, m /= model || either (const True) (`Set.notMember` live) (Id.parse i)]
   withTransaction c $ forM_ gone $ \(i, m) -> execute c "DELETE FROM chunks WHERE id = ? AND model = ?" (i, m)

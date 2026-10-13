@@ -42,6 +42,7 @@ module Akyuu.Tier
     tierRefs,
     placeRefs,
     placeLog,
+    placeLines,
   )
 where
 
@@ -128,6 +129,10 @@ parseManifest t = build . concat <$> traverse line (zip [1 ..] (T.lines t))
 -- | The names of the tiers, sorted.
 tierNames :: Manifest -> [Text]
 tierNames = Map.keys . manTiers
+
+-- | How many @at@ lines and @log@ lines the manifest has.
+placeLines :: Manifest -> (Int, Int)
+placeLines m = (length (manAt m), length (manLog m))
 
 -- | The refs of a tier, in order. 'Nothing' if the manifest has no such tier.
 tierRefs :: Text -> Manifest -> Maybe [Name]
