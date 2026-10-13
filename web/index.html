@@ -119,13 +119,35 @@ mark { background: var(--hit); color: #111; border-radius: 2px; padding: 0 1px; 
 table.list { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 table.list td, table.list th { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); }
 .split .canvas { min-height: 320px; max-height: 65vh; }
+/* The wiki: a tree of refs on the left, the page on the right. */
+#view-wiki { flex-direction: row; }
+.wnav { width: 250px; flex: none; border-right: 1px solid var(--line); overflow: auto; padding: 8px 10px; background: var(--card); }
+.wnav input { width: 100%; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 7px; margin-bottom: 6px; }
+ul.wtree { list-style: none; margin: 0; padding-left: 12px; }
+.wnav > ul.wtree { padding-left: 0; }
+ul.wtree li { margin: 1px 0; word-break: break-all; }
+ul.wtree a.current { font-weight: 600; text-decoration: underline; }
+.wpage { flex: 1; overflow: auto; padding: 14px 24px 40px; min-width: 0; }
+.wpage h1 { font-size: 20px; margin: 4px 0 2px; word-break: break-all; }
+.wpage .meta { margin: 0 0 12px; }
+.wpage h2 { font-size: 14px; margin: 18px 0 6px; }
+.md { max-width: 52em; line-height: 1.55; }
+.md h2, .md h3, .md h4, .md h5 { margin: 14px 0 6px; }
+.md p { margin: 6px 0; }
+.md ul, .md ol { margin: 4px 0; padding-left: 22px; }
+.md code { font: 12.5px ui-monospace, Menlo, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 3px; }
+.md blockquote { margin: 6px 0; padding: 2px 10px; border-left: 3px solid var(--line); color: var(--muted); }
+.md a { color: var(--accent); }
+.wlinks { max-width: 52em; border-top: 1px solid var(--line); margin-top: 18px; }
+ol.timeline.episodes li { margin-bottom: 12px; }
 </style>
 </head>
 <body>
 <header>
   <h1>akyuu</h1>
   <nav id="tabs" role="tablist">
-    <button data-tab="graph" aria-selected="true">Graph</button>
+    <button data-tab="wiki" aria-selected="true">Wiki</button>
+    <button data-tab="graph">Graph</button>
     <button data-tab="refs">Refs</button>
     <button data-tab="search">Search</button>
     <button data-tab="gc">GC</button>
@@ -135,7 +157,11 @@ table.list td, table.list th { text-align: left; padding: 3px 6px; border-bottom
   <span id="status">loading</span>
 </header>
 <main>
-  <section class="view" id="view-graph">
+  <section class="view" id="view-wiki">
+    <nav class="wnav"><input id="wiki-filter" type="search" placeholder="filter refs" autocomplete="off"><div id="wiki-nav"></div></nav>
+    <article class="wpage" id="wiki-page"></article>
+  </section>
+  <section class="view" id="view-graph" hidden>
     <div class="toolbar">
       <label>kind <select id="f-kind"></select></label>
       <label>agent <select id="f-agent"></select></label>
@@ -1043,7 +1069,178 @@ const Akyuu = (function () {
     return { shared: union === 0 ? 0 : common / union, onlyA: onlyA, onlyB: onlyB, canDropA: onlyA.length === 0, canDropB: onlyB.length === 0 };
   }
 
-  const pure = { compareText, sentences, fitScale, anchorScroll, MIN_SCALE, MAX_SCALE, OVERVIEW_BELOW, shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, planRoutes, routeEdges, roundedPath, NODE_W, NODE_H, ROW_H, COL_GAP, TRACK, TOP, LEFT };
+  // ---- wiki: Markdown and links, as data --------------------------------
+  // A memory body is untrusted text. These functions turn it into plain data
+  // (blocks and inline tokens); the page builds DOM nodes from the data with
+  // textContent only. Only a small part of Markdown is read: headings, lists
+  // (two levels), fenced code, quotes, rules, paragraphs, `code`, **strong**,
+  // *em*, [text](http...) links, bare http(s) URLs, ref names and ids.
+
+  function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+  // A matcher for the names of refs in text. A name counts only as a whole
+  // word: the characters around it are not part of a name.
+  function refMatcher(names) {
+    const list = (names || []).filter(n => typeof n === 'string' && n.length).slice().sort((a, b) => b.length - a.length);
+    if (!list.length) return null;
+    return new RegExp('(^|[^a-z0-9/_.\\-])(' + list.map(escapeRe).join('|') + ')(?![a-z0-9/_\\-]|\\.[a-z0-9])', 'g');
+  }
+
+  // Inline tokens of one line of text: {t:'text'|'code'|'strong'|'em'|'link'|'url'|'ref'|'id', ...}.
+  function mdInline(text, names) {
+    const out = [];
+    const push = (tok) => {
+      if (tok.t === 'text' && out.length && out[out.length - 1].t === 'text') out[out.length - 1].v += tok.v;
+      else if (tok.t !== 'text' || tok.v) out.push(tok);
+    };
+    const matcher = refMatcher(names);
+    // Plain text: find ids, URLs and ref names in it.
+    function plain(s) {
+      const re = /(sha256-[0-9a-f]{12,64})|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g;
+      let last = 0, m;
+      while ((m = re.exec(s))) {
+        refs(s.slice(last, m.index));
+        if (m[1]) push({ t: 'id', id: m[1] });
+        else push({ t: 'url', href: m[2], v: m[2] });
+        last = m.index + m[0].length;
+      }
+      refs(s.slice(last));
+    }
+    function refs(s) {
+      if (!matcher || !s) { push({ t: 'text', v: s }); return; }
+      matcher.lastIndex = 0;
+      let last = 0, m;
+      while ((m = matcher.exec(s))) {
+        const start = m.index + m[1].length;
+        push({ t: 'text', v: s.slice(last, start) });
+        push({ t: 'ref', name: m[2], v: m[2] });
+        last = start + m[2].length;
+        matcher.lastIndex = last;
+      }
+      push({ t: 'text', v: s.slice(last) });
+    }
+    let i = 0, buf = '';
+    const flush = () => { if (buf) { plain(buf); buf = ''; } };
+    while (i < text.length) {
+      const c = text[i];
+      if (c === '`') {
+        const j = text.indexOf('`', i + 1);
+        if (j > i) { flush(); push({ t: 'code', v: text.slice(i + 1, j) }); i = j + 1; continue; }
+      }
+      if (c === '*' && text[i + 1] === '*') {
+        const j = text.indexOf('**', i + 2);
+        if (j > i + 2) { flush(); out.push({ t: 'strong', c: mdInline(text.slice(i + 2, j), names) }); i = j + 2; continue; }
+      }
+      if (c === '*' && text[i + 1] !== ' ' && text[i + 1] !== '*') {
+        const j = text.indexOf('*', i + 1);
+        if (j > i + 1 && text[j - 1] !== ' ') { flush(); out.push({ t: 'em', c: mdInline(text.slice(i + 1, j), names) }); i = j + 1; continue; }
+      }
+      if (c === '[') {
+        const m = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/.exec(text.slice(i));
+        if (m) { flush(); push({ t: 'link', href: m[2], v: m[1] }); i += m[0].length; continue; }
+      }
+      buf += c; i++;
+    }
+    flush();
+    return out;
+  }
+
+  // Blocks of a body: {t:'h', level, c}, {t:'p', c}, {t:'list', ordered, items:[{c, sub:[...]}]},
+  // {t:'code', v}, {t:'quote', c}, {t:'hr'}. c is a list of inline tokens.
+  function mdBlocks(body, names) {
+    const lines = String(body || '').replace(/\r/g, '').split('\n');
+    const blocks = [];
+    let para = [];
+    const endPara = () => { if (para.length) { blocks.push({ t: 'p', c: mdInline(para.join(' '), names) }); para = []; } };
+    const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const t = line.trim();
+      if (/^```/.test(t)) {
+        endPara();
+        const code = [];
+        i++;
+        while (i < lines.length && !/^```/.test(lines[i].trim())) code.push(lines[i++]);
+        i++;
+        blocks.push({ t: 'code', v: code.join('\n') });
+        continue;
+      }
+      if (!t) { endPara(); i++; continue; }
+      let m = /^(#{1,4})\s+(.*)$/.exec(t);
+      if (m) { endPara(); blocks.push({ t: 'h', level: m[1].length, c: mdInline(m[2], names) }); i++; continue; }
+      if (/^([-*_])(\s*\1){2,}$/.test(t)) { endPara(); blocks.push({ t: 'hr' }); i++; continue; }
+      if (/^>\s?/.test(t)) {
+        endPara();
+        const q = [];
+        while (i < lines.length && /^>\s?/.test(lines[i].trim())) q.push(lines[i++].trim().replace(/^>\s?/, ''));
+        blocks.push({ t: 'quote', c: mdInline(q.join(' '), names) });
+        continue;
+      }
+      m = item.exec(line);
+      if (m) {
+        endPara();
+        const ordered = /\d/.test(m[2]);
+        const base = m[1].length;
+        const items = [];
+        while (i < lines.length) {
+          const mm = item.exec(lines[i]);
+          if (mm && mm[1].length <= base) {
+            items.push({ c: mdInline(mm[3], names), sub: [] });
+            i++;
+          } else if (mm && mm[1].length > base && items.length) {
+            items[items.length - 1].sub.push(mdInline(mm[3], names));
+            i++;
+          } else if (lines[i].trim() && /^\s+\S/.test(lines[i]) && items.length) {
+            // A continuation line of the item before.
+            const last = items[items.length - 1];
+            if (last.sub.length) last.sub[last.sub.length - 1] = last.sub[last.sub.length - 1].concat([{ t: 'text', v: ' ' }], mdInline(lines[i].trim(), names));
+            else last.c = last.c.concat([{ t: 'text', v: ' ' }], mdInline(lines[i].trim(), names));
+            i++;
+          } else break;
+        }
+        blocks.push({ t: 'list', ordered: ordered, items: items });
+        continue;
+      }
+      para.push(t);
+      i++;
+    }
+    endPara();
+    return blocks;
+  }
+
+  // The refs as a tree by their parts: {name, path, page, children: [...]}, sorted.
+  function wikiTree(names) {
+    const root = { name: '', path: '', page: false, children: [] };
+    for (const n of (names || []).slice().sort()) {
+      let node = root;
+      const parts = n.split('/');
+      parts.forEach((p, k) => {
+        const path = parts.slice(0, k + 1).join('/');
+        let ch = node.children.find(c => c.name === p);
+        if (!ch) { ch = { name: p, path: path, page: false, children: [] }; node.children.push(ch); }
+        if (k === parts.length - 1) ch.page = true;
+        node = ch;
+      });
+    }
+    return root;
+  }
+
+  // The pages whose body names this ref, sorted. A page does not link itself.
+  function textBacklinks(pages, name) {
+    const m = refMatcher([name]);
+    if (!m) return [];
+    return (pages || []).filter(p => p.name !== name && typeof p.body === 'string' && (m.lastIndex = 0, m.test(p.body))).map(p => p.name).sort();
+  }
+
+  // Is this page a log? Its name has a log part, or its memory is an
+  // episode or a note (the kinds that append and note write).
+  function isLogPage(name, kind) {
+    if (/(^|\/)(log|logs|episodes)(\/|$)/.test(name || '')) return true;
+    return kind === 'episode' || kind === 'note';
+  }
+
+  const pure = { mdBlocks, mdInline, refMatcher, wikiTree, textBacklinks, isLogPage, compareText, sentences, fitScale, anchorScroll, MIN_SCALE, MAX_SCALE, OVERVIEW_BELOW, shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, planRoutes, routeEdges, roundedPath, NODE_W, NODE_H, ROW_H, COL_GAP, TRACK, TOP, LEFT };
   if (typeof document === 'undefined') return pure;
 
   // ---------------------------------------------------------------------
@@ -1111,6 +1308,7 @@ const Akyuu = (function () {
       },
       memory: (id) => get('/api/memory/' + encodeURIComponent(id)),
       refs: () => get('/api/refs'),
+      pages: () => get('/api/pages'),
       search: (q, limit, hops) => get('/api/search', { q: q, limit: String(limit), hops: String(hops) }),
       plan: () => get('/api/gc/plan'),
       explain: (id) => get('/api/gc/explain/' + encodeURIComponent(id)),
@@ -1133,6 +1331,16 @@ const Akyuu = (function () {
       graph: async (w) => windowGraph(part(data.graph), w),
       memory: async (id) => found(part(data.memories)[id], 'This memory'),
       refs: async () => part(data.refs),
+      // The pages from the refs and the memories of the export.
+      pages: async () => {
+        const ms = part(data.memories);
+        return { pages: part(data.refs).refs.map(r => {
+          if (r.error) return { name: r.name, error: r.error };
+          const m = ms[r.current];
+          if (!m) return { name: r.name, id: r.current, error: 'This memory is not in this export.' };
+          return { name: r.name, id: r.current, history: r.history || [], kind: m.kind, agent: m.agent, created: m.created, body: m.body };
+        }) };
+      },
       search: async (q, limit) => staticSearch(part(data.memories), q, limit),
       plan: async () => part(data.plan),
       explain: async (id) => found(part(data.explain)[id], 'The GC explanation of this id'),
@@ -1146,7 +1354,10 @@ const Akyuu = (function () {
 
   const state = {
     src: null,
-    tab: 'graph',
+    tab: 'wiki',
+    pages: null,
+    pagesError: null,
+    wikiPage: null,
     stats: null,
     graph: null,
     gcGraph: null,
@@ -1920,13 +2131,191 @@ const Akyuu = (function () {
 
   // ---- tabs, polling, start ------------------------------------------------------------
 
-  const TABS = ['graph', 'refs', 'search', 'gc', 'check', 'health'];
+  // ---- wiki ---------------------------------------------------------------
+  // The refs as pages. The body is Markdown, built as DOM nodes from the data
+  // of mdBlocks: no HTML from the store reaches the page.
+
+  function pageNames() { return (state.pages || []).filter(p => !p.error).map(p => p.name); }
+  function pageOf(name) { return (state.pages || []).find(p => p.name === name) || null; }
+  function holderOf(id) {
+    const p = (state.pages || []).find(x => x.id === id);
+    return p ? p.name : null;
+  }
+
+  function inlineNodes(tokens) {
+    const out = [];
+    for (const k of tokens) {
+      if (k.t === 'text') out.push(document.createTextNode(k.v));
+      else if (k.t === 'code') out.push(el('code', { text: k.v }));
+      else if (k.t === 'strong') out.push(el('strong', {}, inlineNodes(k.c)));
+      else if (k.t === 'em') out.push(el('em', {}, inlineNodes(k.c)));
+      else if (k.t === 'ref') out.push(el('a', { class: 'link', href: '#wiki/' + k.name, text: k.v }));
+      else if (k.t === 'id') {
+        const full = k.id.length === 71 ? k.id : null;
+        out.push(full ? idLink(full, shortId(full)) : el('span', { class: 'mono', text: k.id }));
+      } else if (k.t === 'link' || k.t === 'url') {
+        out.push(el('a', { href: k.href, text: k.v, target: '_blank', rel: 'noopener noreferrer' }));
+      }
+    }
+    return out;
+  }
+
+  function blockNodes(blocks) {
+    const out = [];
+    for (const b of blocks) {
+      if (b.t === 'h') out.push(el('h' + Math.min(6, b.level + 1), {}, inlineNodes(b.c)));
+      else if (b.t === 'p') out.push(el('p', {}, inlineNodes(b.c)));
+      else if (b.t === 'code') out.push(el('pre', { class: 'body', text: b.v }));
+      else if (b.t === 'quote') out.push(el('blockquote', {}, inlineNodes(b.c)));
+      else if (b.t === 'hr') out.push(el('hr'));
+      else if (b.t === 'list') {
+        const l = el(b.ordered ? 'ol' : 'ul');
+        for (const it of b.items) {
+          const li = el('li', {}, inlineNodes(it.c));
+          if (it.sub.length) li.appendChild(el('ul', {}, it.sub.map(s => el('li', {}, inlineNodes(s)))));
+          l.appendChild(li);
+        }
+        out.push(l);
+      }
+    }
+    return out;
+  }
+
+  async function loadWiki() {
+    try { state.pages = (await state.src.pages()).pages; state.pagesError = null; }
+    catch (e) { state.pages = []; state.pagesError = e.message; }
+    renderWikiNav();
+    renderWikiPage();
+  }
+
+  function renderWikiNav() {
+    const nav = $('wiki-nav');
+    nav.replaceChildren();
+    if (state.pagesError) { nav.appendChild(el('p', { class: 'notice warn', text: state.pagesError })); return; }
+    const f = ($('wiki-filter').value || '').trim().toLowerCase();
+    const names = pageNames().filter(n => !f || n.toLowerCase().indexOf(f) >= 0);
+    if (!names.length) { nav.appendChild(el('p', { class: 'muted', text: f ? 'No ref matches.' : 'The store has no refs yet.' })); return; }
+    function tree(node) {
+      const ul = el('ul', { class: 'wtree' });
+      for (const c of node.children) {
+        const li = el('li');
+        if (c.page) {
+          const a = el('a', { class: 'link' + (c.path === state.wikiPage ? ' current' : ''), href: '#wiki/' + c.path, text: c.name });
+          li.appendChild(a);
+        } else li.appendChild(el('span', { class: 'muted', text: c.name + '/' }));
+        if (c.children.length) li.appendChild(tree(c));
+        ul.appendChild(li);
+      }
+      return ul;
+    }
+    nav.appendChild(tree(wikiTree(names)));
+  }
+
+  async function renderWikiPage() {
+    const art = $('wiki-page');
+    const names = pageNames();
+    if (!state.wikiPage || !pageOf(state.wikiPage)) {
+      // The first page: a policy if there is one, else the first ref.
+      const pref = ['claude/profile', 'policy/memory', 'claude/memory-policy'].find(n => names.indexOf(n) >= 0);
+      state.wikiPage = pref || names[0] || null;
+    }
+    art.replaceChildren();
+    if (!state.wikiPage) { art.appendChild(el('p', { class: 'muted', text: 'No pages: add a memory under a ref (akyuu add --ref, or akyuu init).' })); return; }
+    const p = pageOf(state.wikiPage);
+    const name = p.name;
+    if (location.hash !== '#wiki/' + name && state.tab === 'wiki') history.replaceState(null, '', '#wiki/' + name);
+    art.appendChild(el('h1', { text: name }));
+    if (p.error) { art.appendChild(el('p', { class: 'notice warn', text: p.error })); return; }
+    art.appendChild(el('p', { class: 'muted meta' }, [p.kind + ' · by ' + p.agent + ' · ' + fmtTime(p.created) + ' · ', idLink(p.id)]));
+    const body = el('div', { class: 'md' }, blockNodes(mdBlocks(p.body, names)));
+    art.appendChild(body);
+    // Links and backlinks, from the edges of the memory and from the text.
+    const side = el('div', { class: 'wlinks' });
+    art.appendChild(side);
+    let m = null;
+    try { m = await state.src.memory(p.id); } catch (e) { m = null; }
+    if (state.wikiPage !== name) return;
+    const label = (id) => {
+      const h = holderOf(id);
+      return h ? el('a', { class: 'link', href: '#wiki/' + h, text: h }) : idLink(id);
+    };
+    if (m) {
+      const outs = m.edges.filter(e => e.dir === 'out' && e.kind !== 'supersedes');
+      if (outs.length) {
+        side.appendChild(el('h2', { text: 'Links to' }));
+        side.appendChild(el('ul', { class: 'plain' }, outs.map(e => el('li', {}, [el('span', { class: 'muted', text: e.kind + ' ' }), label(e.id)]))));
+      }
+    }
+    const ins = m ? m.edges.filter(e => e.dir === 'in' && e.kind !== 'supersedes') : [];
+    const texts = textBacklinks(state.pages, name);
+    side.appendChild(el('h2', { text: 'Linked from' }));
+    if (!ins.length && !texts.length) side.appendChild(el('p', { class: 'muted', text: 'Nothing links here.' }));
+    else {
+      const ul = el('ul', { class: 'plain' });
+      for (const e of ins) ul.appendChild(el('li', {}, [label(e.id), el('span', { class: 'muted', text: ' (' + e.kind + ')' })]));
+      for (const t of texts) ul.appendChild(el('li', {}, [el('a', { class: 'link', href: '#wiki/' + t, text: t }), el('span', { class: 'muted', text: ' (names it)' })]));
+      side.appendChild(ul);
+    }
+    // History: the older values of the ref, with a comparison to now.
+    if (p.history && p.history.length) {
+      side.appendChild(el('h2', { text: 'History' }));
+      const ol = el('ol', { class: 'timeline' });
+      ol.appendChild(el('li', {}, [idLink(p.id), el('span', { class: 'muted', text: ' now' })]));
+      for (const h of p.history) {
+        ol.appendChild(el('li', {}, [idLink(h), ' ', el('button', { type: 'button', text: 'compare with now', onclick: () => showCompare(h, p.id) })]));
+      }
+      side.appendChild(ol);
+    }
+    // A log: its episodes, newest first.
+    if (isLogPage(name, p.kind)) {
+      side.appendChild(el('h2', { text: 'Episodes' }));
+      const ol = el('ol', { class: 'timeline episodes' });
+      side.appendChild(ol);
+      await showEpisodes(ol, name, p.id, 15);
+    }
+  }
+
+  // Walk a log from an episode along derived_from, n at a time.
+  async function showEpisodes(ol, name, start, n) {
+    let id = start;
+    for (let k = 0; id && k < n; k++) {
+      let m;
+      try { m = await state.src.memory(id); } catch (e) { ol.appendChild(el('li', { class: 'notkept' }, [el('span', { class: 'muted', text: 'older episodes are gone (GC) or cannot be read' })])); return; }
+      if (state.wikiPage !== name) return;
+      ol.appendChild(el('li', {}, [
+        el('div', { class: 'muted' }, [fmtTime(m.created) + ' · ' + m.kind + ' · ' + m.agent + ' · ', idLink(m.id)]),
+        el('div', { class: 'md' }, blockNodes(mdBlocks(m.body, pageNames())))
+      ]));
+      const prev = m.edges.find(e => e.dir === 'out' && e.kind === 'derived-from');
+      id = prev ? prev.id : null;
+    }
+    if (id) {
+      const more = el('li', {}, [el('button', { type: 'button', text: 'older episodes', onclick: () => { more.remove(); showEpisodes(ol, name, id, n); } })]);
+      ol.appendChild(more);
+    }
+  }
+
+  function openWikiFromHash() {
+    const h = location.hash || '';
+    if (h.indexOf('#wiki/') === 0) {
+      state.wikiPage = decodeURIComponent(h.slice(6));
+      if (state.tab !== 'wiki') switchTab('wiki');
+      else { renderWikiNav(); renderWikiPage(); }
+      $('view-wiki').scrollTop = 0;
+      $('wiki-page').scrollTop = 0;
+    }
+  }
+
+  const TABS = ['wiki', 'graph', 'refs', 'search', 'gc', 'check', 'health'];
 
   function switchTab(tab) {
     state.tab = tab;
     for (const b of document.querySelectorAll('#tabs button')) b.setAttribute('aria-selected', String(b.dataset.tab === tab));
     for (const v of document.querySelectorAll('.view')) v.hidden = v.id !== 'view-' + tab;
-    if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab);
+    if (tab === 'wiki') {
+      if (state.wikiPage && location.hash !== '#wiki/' + state.wikiPage) history.replaceState(null, '', '#wiki/' + state.wikiPage);
+      if (state.pages === null) loadWiki(); else { renderWikiNav(); renderWikiPage(); }
+    } else if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab);
     if (tab === 'gc') loadGC();
     if (tab === 'health' && state.verifyFingerprint === null) loadHealth();
     if (tab === 'check') renderCheck();
@@ -1945,6 +2334,7 @@ const Akyuu = (function () {
     await loadGraph();
     await loadCheck();
     if (state.tab === 'refs') renderRefs();
+    if (state.tab === 'wiki') await loadWiki(); else state.pages = null;
     if (state.tab === 'gc') await loadGC();
     if (state.tab === 'search') searchNotice();
     if (state.tab === 'health' && state.verifyFingerprint !== null && state.verifyFingerprint !== (state.stats && state.stats.fingerprint)) {
@@ -1998,8 +2388,11 @@ const Akyuu = (function () {
     bindZoom($('graph-canvas'));
     bindZoom($('gc-canvas'));
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
-    const start = (location.hash || '#graph').slice(1);
-    const first = TABS.indexOf(start) >= 0 ? start : 'graph';
+    $('wiki-filter').addEventListener('input', renderWikiNav);
+    window.addEventListener('hashchange', openWikiFromHash);
+    const start = (location.hash || '#wiki').slice(1);
+    if (start.indexOf('wiki/') === 0) state.wikiPage = decodeURIComponent(start.slice(5));
+    const first = start.indexOf('wiki/') === 0 ? 'wiki' : TABS.indexOf(start) >= 0 ? start : 'wiki';
     if (state.src.live) {
       poll().then(() => switchTab(first));
       setInterval(poll, 2000);

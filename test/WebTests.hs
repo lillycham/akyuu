@@ -14,7 +14,7 @@ import Akyuu.Query (SearchOptions (searchHops, searchLimit), defaultSearchOption
 import Akyuu.Refs (Expected (MustBeAbsent), mkName)
 import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Store qualified as Store
-import Akyuu.Web.Api (Endpoint (CheckEndpoint, ExplainEndpoint, GraphEndpoint, MemoryEndpoint, PageEndpoint, PlanEndpoint, RefsEndpoint, SearchEndpoint, StatsEndpoint, TrashEndpoint, VerifyEndpoint), RouteError (BadParam), WebRequest (WebRequest, reqQuery), WebResponse (resBody, resHeaders, resStatus), parseEndpoint, route, runEndpoint)
+import Akyuu.Web.Api (Endpoint (CheckEndpoint, ExplainEndpoint, GraphEndpoint, MemoryEndpoint, PageEndpoint, PagesEndpoint, PlanEndpoint, RefsEndpoint, SearchEndpoint, StatsEndpoint, TrashEndpoint, VerifyEndpoint), RouteError (BadParam), WebRequest (WebRequest, reqQuery), WebResponse (resBody, resHeaders, resStatus), parseEndpoint, route, runEndpoint)
 import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), GraphEdge (geDst, geSrc), GraphNode (gnId, gnInStore, gnStatus), GraphView (gvEdges, gvNodes, gvSeeds, gvTotalEdges, gvTotalNodes, gvTruncated), NodeStatus (HeadNode, MissingTarget, PrunedTarget, SupersededNode), Window (Window, winAll, winFocus, winHops, winLimit), defaultWindow, graphView, graphViewJSON, selectWindow)
 import Akyuu.Web.Page (dataMarker, indexPage, scriptSafeJSON, vizPage)
 import Akyuu.Web.Server (application, hostAllowed, toWebRequest)
@@ -170,6 +170,7 @@ routeCases =
         endpointOf ["api", "stats"] [] @?= Right StatsEndpoint
         endpointOf ["api", "stats", ""] [] @?= Right StatsEndpoint
         endpointOf ["api", "refs"] [] @?= Right RefsEndpoint
+        endpointOf ["api", "pages"] [] @?= Right PagesEndpoint
         endpointOf ["api", "gc", "plan"] [] @?= Right PlanEndpoint
         endpointOf ["api", "trash"] [] @?= Right TrashEndpoint
         endpointOf ["api", "verify"] [] @?= Right VerifyEndpoint
@@ -393,7 +394,17 @@ storeCases :: TestTree
 storeCases =
   testGroup
     "endpoints on a store"
-    [ testCase "stats counts the store" $
+    [ testCase "pages lists each ref with its current memory and its history" $
+        withOpsEnv $ \_ env -> do
+          (v1, v2, _) <- smallStore env
+          (s, v) <- call env ["api", "pages"] []
+          s @?= 200
+          let ps = items (at ["pages"] v)
+          map (at ["name"]) ps @?= [Just (String "claude/lang")]
+          map (at ["id"]) ps @?= [Just (String (render v2))]
+          map (at ["body"]) ps @?= [Just (String "Lilly prefers Haskell and Nix.")]
+          map (at ["history"]) ps @?= [Just (Array (pure (String (render v1))))],
+      testCase "stats counts the store" $
         withOpsEnv $ \_ env -> do
           _ <- smallStore env
           (s, v) <- call env ["api", "stats"] []

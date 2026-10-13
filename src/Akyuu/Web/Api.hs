@@ -50,7 +50,7 @@ import Akyuu.Query (SearchOptions (searchHops, searchLimit), defaultSearchOption
 import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Web.Model (Window (Window, winAll, winFocus, winHops, winLimit), defaultWindow, statsJSON)
 import Akyuu.Web.Page (indexPage)
-import Akyuu.Web.Read (readCheck, readExplain, readGraph, readMemory, readPlan, readRefs, readSearch, readStats, readTrash, readVerify)
+import Akyuu.Web.Read (readCheck, readExplain, readGraph, readMemory, readPages, readPlan, readRefs, readSearch, readStats, readTrash, readVerify)
 import Data.Aeson (Value, object, (.=))
 import Data.Aeson qualified as A
 import Data.Bifunctor (first)
@@ -95,6 +95,7 @@ data Endpoint
   | GraphEndpoint Window
   | MemoryEndpoint IdSpec
   | RefsEndpoint
+  | PagesEndpoint
   | SearchEndpoint SearchOptions Text
   | PlanEndpoint
   | ExplainEndpoint Id
@@ -128,6 +129,7 @@ parseEndpoint req
       ["api", "graph"] -> GraphEndpoint <$> window
       ["api", "memory", t] -> MemoryEndpoint <$> first (BadParam . describe) (parseIdSpec t)
       ["api", "refs"] -> Right RefsEndpoint
+      ["api", "pages"] -> Right PagesEndpoint
       ["api", "search"] -> search
       ["api", "gc", "plan"] -> Right PlanEndpoint
       ["api", "gc", "explain", t] -> ExplainEndpoint <$> wholeId t
@@ -239,6 +241,7 @@ runEndpoint env e = case e of
   GraphEndpoint w -> readGraph env w
   MemoryEndpoint spec -> readMemory env spec
   RefsEndpoint -> readRefs env
+  PagesEndpoint -> readPages env
   SearchEndpoint o q -> readSearch env o q
   PlanEndpoint -> readPlan env
   ExplainEndpoint i -> readExplain env i

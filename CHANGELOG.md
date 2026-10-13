@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A Wiki tab, the first tab of the web view: each ref is a page, the body is
+  rendered as Markdown (as DOM nodes, never HTML), ref names and ids are links,
+  and a page shows its links, backlinks, history and, for a log, its episodes
+  (`docs/wiki-view.md`). `GET /api/pages` serves it.
 - Search by meaning embeds a long memory in chunks (at most 8), and ranks it by
   its best chunk. Run `akyuu embed` once after the upgrade: the table of vectors
   changed.
