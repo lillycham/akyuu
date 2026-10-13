@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Search by meaning embeds a long memory in chunks (at most 8), and ranks it by
+  its best chunk. Run `akyuu embed` once after the upgrade: the table of vectors
+  changed.
+- `akyuu embed --prune`, a daily `embed` job in the home-manager module, `mode`
+  for the MCP search, and search by meaning in the web view.
+- Fixes from a review: the backup copies refs before objects; the idle stop of
+  `akyuu-embed-llama` works with GNU stat; a timeout of the embedding command
+  stops its children; errors of the vector table give a text search; the
+  settings file accepts `export`, quotes and CRLF.
 - `context --page N` (and `--budget`) splits the context into pages that fit
   the 10,000-character limit of a Claude Code hook. The MCP tool `context` has
   `budget` and `page` too.

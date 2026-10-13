@@ -109,8 +109,8 @@
             mac = self.moduleEvals.aarch64-darwin;
             expect = what: ok: lib.assertMsg ok "module check failed: ${what}";
             ok =
-              expect "darwin has four agents and no timer" (mac.launchd == [ "akyuu-backup" "akyuu-gc" "akyuu-serve" "akyuu-version" ] && mac.timers == [ ] && mac.services == [ ])
-              && expect "linux has four services, three timers and no agent" (linux.services == [ "akyuu-backup" "akyuu-gc" "akyuu-serve" "akyuu-version" ] && linux.timers == [ "akyuu-backup" "akyuu-gc" "akyuu-version" ] && linux.launchd == [ ])
+              expect "darwin has five agents and no timer" (mac.launchd == [ "akyuu-backup" "akyuu-embed" "akyuu-gc" "akyuu-serve" "akyuu-version" ] && mac.timers == [ ] && mac.services == [ ])
+              && expect "linux has five services, four timers and no agent" (linux.services == [ "akyuu-backup" "akyuu-embed" "akyuu-gc" "akyuu-serve" "akyuu-version" ] && linux.timers == [ "akyuu-backup" "akyuu-embed" "akyuu-gc" "akyuu-version" ] && linux.launchd == [ ])
               && expect "the timers are at the hours of the options" (linux.calendars.gc == "*-*-* 03:30:00" && linux.calendars.backup == "*-*-* 04:00:00" && linux.calendars.version == "*-*-* 04:15:00")
               && expect "a missed run is made up" linux.calendars.persistent
               && expect "a daily job is a one-shot, the web view restarts" (linux.oneshot == "oneshot" && linux.serveRestarts == "on-failure")

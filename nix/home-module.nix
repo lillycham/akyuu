@@ -69,6 +69,15 @@ let
       ];
       at = { inherit (cfg.backup) hour minute; };
     };
+    # A catch-up for search by meaning: a new memory gets its vectors when it
+    # is written, unless the model was not ready. This also removes the
+    # vectors of memories that GC deleted.
+    embed = {
+      enable = cfg.embed.enable;
+      description = "akyuu vectors for search by meaning";
+      exec = [ "${cfg.package}/bin/akyuu" "--root" cfg.root "embed" "--prune" ];
+      at = { hour = 4; minute = 30; };
+    };
     serve = {
       enable = cfg.serve.enable;
       description = "akyuu web view (read-only, 127.0.0.1)";

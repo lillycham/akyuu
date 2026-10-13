@@ -6,8 +6,8 @@ import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind (Fork),
 import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
 import Akyuu.Id (IdParseError (BadHex), parse, render)
-import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (mcpAgent, mcpPlace, mcpPolicyRef), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallNote, CallRefList, CallRefSet, CallReview, CallSearch), ToolResult (ToolResult), defaultMcpConfig, expandCall, handleLine, handleMessage, parseToolCall, resolvePrefix, runTool, supportedVersions)
-import Akyuu.Ops (NewMemory (NewMemory))
+import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (mcpAgent, mcpPlace, mcpPolicyRef), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallNote, CallRefList, CallRefSet, CallReview, CallSearch, CallSearchMode), ToolResult (ToolResult), defaultMcpConfig, expandCall, handleLine, handleMessage, parseToolCall, resolvePrefix, runTool, supportedVersions)
+import Akyuu.Ops (NewMemory (NewMemory), SearchMode (TextOnly))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), mkName)
 import Akyuu.Render (shortIds)
@@ -357,6 +357,10 @@ runToolCases =
           assertBool "agent and text" ("me  note  a small thing" `T.isInfixOf` l)
           ToolResult r2 False <- runTool cfg env (CallNote (Just "/tmp") (Just "x") (NewMemory "note" "" Set.empty "other"))
           assertBool "default log" ("noted in claude/log/general " `T.isPrefixOf` r2),
+      testCase "search takes a mode" $ do
+        parseToolCall "search" (args [("query", "x"), ("mode", "text")]) @?= Right (CallSearchMode TextOnly defaultSearchOptions "x")
+        parseToolCall "search" (args [("query", "x"), ("mode", "fused")]) @?= Right (CallSearch defaultSearchOptions "x")
+        assertBool "bad mode" (either (const True) (const False) (parseToolCall "search" (args [("query", "x"), ("mode", "vibes")]))),
       testCase "an empty search says so" $
         withOpsEnv $ \_ env -> do
           r <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "nothing")

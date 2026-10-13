@@ -2,14 +2,16 @@
 
 module EmbedTests (embedTests) where
 
-import Akyuu.Embed (Embedder (Embedder, embCommand, embModel, embTimeout), Role (Document, QueryText), closeVectors, cosine, decodeVector, embedSettings, encodeVector, fuse, loadVectors, openVectors, parseVector, putVector, rankBySimilarity, runEmbedder)
+import Akyuu.Embed (Embedder (Embedder, embCommand, embModel, embTimeout), Role (Document, QueryText), chunkText, closeVectors, cosine, decodeVector, embedSettings, encodeVector, fuse, loadVectors, openVectors, parseVector, pruneVectors, putVectors, rankBySimilarity, runEmbedder)
 import Akyuu.Embed qualified
 import Akyuu.Ops (EmbedReport (embedded), SearchMode (MeaningOnly, TextOnly), addMemory, embedMissing, searchMemoriesMode)
 import Akyuu.Query (Match (matchId), SearchResult (corrections, matches), defaultSearchOptions)
 import Akyuu.SearchEval (Case (Case, caseCategory, caseExpect, caseGuess, caseQuery), parseCases, passes)
 import Control.Exception (bracket_)
 import Data.Either (isLeft)
+import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
 import OpsTests (note, withOpsEnv)
 import Support (nid, right)
@@ -26,6 +28,7 @@ embedTests =
       evalSetCases,
       commandCases,
       tableCases,
+      chunkCases,
       searchCases
     ]
 
@@ -112,12 +115,39 @@ tableCases =
     [ testCase "a vector is kept for its model only" $
         withOpsEnv $ \dir _ -> do
           vs <- right =<< openVectors (dir </> "embeddings.sqlite")
-          putVector vs "m1" (nid 1) [1, 2]
-          putVector vs "m2" (nid 1) [3]
-          putVector vs "m1" (nid 1) [5, 6]
-          loadVectors vs "m1" >>= (@?= [(nid 1, [5, 6])])
+          putVectors vs "m1" (nid 1) [[1, 2]]
+          putVectors vs "m2" (nid 1) [[3]]
+          putVectors vs "m1" (nid 1) [[5, 6], [7, 8]]
+          loadVectors vs "m1" >>= (@?= [(nid 1, [5, 6]), (nid 1, [7, 8])])
           loadVectors vs "m2" >>= (@?= [(nid 1, [3])])
+          closeVectors vs,
+      testCase "prune removes other models and memories that are gone" $
+        withOpsEnv $ \dir _ -> do
+          vs <- right =<< openVectors (dir </> "embeddings.sqlite")
+          putVectors vs "m1" (nid 1) [[1]]
+          putVectors vs "m1" (nid 2) [[1]]
+          putVectors vs "m2" (nid 1) [[1]]
+          n <- pruneVectors vs "m1" (Set.singleton (nid 1))
+          n @?= 2
+          loadVectors vs "m1" >>= (@?= [(nid 1, [1])])
+          loadVectors vs "m2" >>= (@?= [])
           closeVectors vs
+    ]
+
+chunkCases :: TestTree
+chunkCases =
+  testGroup
+    "chunks"
+    [ testCase "a short text is one chunk" $
+        chunkText 10 "short" @?= ["short"],
+      testCase "a long text is cut at blank lines, and no chunk is too long" $ do
+        let t = "aaaa\n\nbbbb\n\ncccc"
+        chunkText 10 t @?= ["aaaa\n\nbbbb", "cccc"]
+        all ((<= 10) . T.length) (chunkText 10 t) @?= True,
+      testCase "a paragraph longer than a chunk is cut" $
+        chunkText 4 "abcdefghij" @?= ["abcd", "efgh", "ij"],
+      testCase "the best chunk of a memory gives its rank, and it appears once" $
+        rankBySimilarity [1, 0] [(nid 1, [0, 1]), (nid 1, [1, 0]), (nid 2, [1, 1])] @?= [(nid 1, 1), (nid 2, cosine [1, 0] [1, 1])]
     ]
 
 -- A command that puts a text with "tea" at [1,0] and the rest at [0,1], and a

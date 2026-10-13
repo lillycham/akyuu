@@ -46,7 +46,7 @@ import Akyuu.Error (AkyuuError (BadId, BadInput, BadName), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseIdSpec, readLog, readRef, resolveId, reviewPair, searchMemories, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseIdSpec, readLog, readRef, resolveId, reviewPair, searchMemoriesMode, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage)
@@ -81,6 +81,8 @@ data ToolCall
     CallGet (Either Name Id)
   | CallSupersede Name (Maybe Id) NewMemory
   | CallSearch SearchOptions Text
+  | -- | A search with a mode other than the default (fused).
+    CallSearchMode SearchMode SearchOptions Text
   | CallNeighbours Id
   | -- | Compare two memories by their ids.
     CallCompare Id Id
@@ -194,6 +196,7 @@ toolList =
       ( objectSchema
           [ ("query", stringSchema "The words to find. A memory matches if it has all of them."),
             ("limit", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "default" .= searchLimit defaultSearchOptions, "description" .= ("The most hits to return." :: Text)]),
+            ("mode", object ["type" .= ("string" :: Text), "enum" .= (["fused", "text", "meaning"] :: [Text]), "description" .= ("fused (the default): words and meaning together, if a model is set. text: the words only. meaning: by meaning only." :: Text)]),
             ("hops", object ["type" .= ("integer" :: Text), "minimum" .= (0 :: Int), "default" .= searchHops defaultSearchOptions, "description" .= ("How many edges away from a hit the context reaches. 0 gives no context." :: Text)]),
             ( "follow",
               object
@@ -415,7 +418,11 @@ parseToolCall n args = case n of
     limit <- atLeast "limit" 1 (maybe (searchLimit defaultSearchOptions) id l)
     hops <- atLeast "hops" 0 (maybe (searchHops defaultSearchOptions) id h)
     follow <- maybe (pure (searchFollow defaultSearchOptions)) (fmap Set.fromList . traverse kindOf) f
-    pure (CallSearch (SearchOptions limit hops follow) q)
+    m <- optional' args "mode" asText "a string" >>= traverse modeOf
+    pure $ case m of
+      Nothing -> CallSearch (SearchOptions limit hops follow) q
+      Just Fused -> CallSearch (SearchOptions limit hops follow) q
+      Just md -> CallSearchMode md (SearchOptions limit hops follow) q
   "amend" -> do
     r <- refArg args
     e <- optIdArg args "expected"
@@ -493,6 +500,11 @@ parseToolCall n args = case n of
         (argError "severity" ("is '" <> t <> "'. Use problem, suggestion or info."))
         Right
         (lookup t [(severityName s, s) | s <- [minBound .. maxBound]])
+    modeOf t =
+      maybe
+        (argError "mode" ("is '" <> t <> "'. Use fused, text or meaning."))
+        Right
+        (lookup t [("fused", Fused), ("text", TextOnly), ("meaning", MeaningOnly)])
     kindOf t =
       maybe
         (argError "follow" ("has '" <> t <> "', which is not a kind of edge."))
@@ -574,10 +586,8 @@ runTool cfg env c = either failed id <$> go
           Left e -> pure (Left e)
           Right x -> fmap (\m -> okText (memoryText m) False) <$> getMemory env x
       CallSupersede n old m -> fmap (\i -> okText (Id.render i) False) <$> supersedeMemory env n old m
-      CallSearch o q -> do
-        r <- searchMemories env o q
-        held <- either (const Map.empty) heldBy <$> listRefValues env
-        pure (fmap (shorten . lines' "No matches." . searchLinesWith held) r)
+      CallSearchMode md o q -> searchWithMode md o q
+      CallSearch o q -> searchWithMode Fused o q
       CallNeighbours i -> fmap (shorten . lines' "This memory has no edges." . neighbourLines) <$> neighboursOf env i
       CallCompare a b -> fmap (\r -> okText (T.intercalate "\n" (compareLines r)) False) <$> compareMemories env a b
       CallReview a b ag n -> fmap (const (okText ("reviewed " <> Id.render a <> " " <> Id.render b) False)) <$> reviewPair env a b ag n
@@ -607,6 +617,10 @@ runTool cfg env c = either failed id <$> go
         r <- checkStore env o
         refs <- listRefValues env
         pure ((\fs rs -> shorten (okText (T.intercalate "\n" (findingLines rs (filterFindings ks s fs))) False)) <$> r <*> refs)
+    searchWithMode md o q = do
+      r <- searchMemoriesMode env md o q
+      held <- either (const Map.empty) heldBy <$> listRefValues env
+      pure (fmap (shorten . lines' "No matches." . searchLinesWith held) r)
     -- The place of the session: the directory that the caller gave, with the
     -- home directory of the server, or else where the server runs.
     placeOf (Just d) = Just (Place (maybe "" (\(Place h _) -> h) (mcpPlace cfg)) d)
