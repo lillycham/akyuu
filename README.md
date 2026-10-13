@@ -79,7 +79,7 @@ should use the store: the tool descriptions point at it.
 | Logs and forgetting | [docs/episodes.md](docs/episodes.md) |
 | Finding duplicates, forks, stale links | [docs/check.md](docs/check.md), [docs/judgement.md](docs/judgement.md) |
 | Tiers, places, notes, hooks for agents | [docs/hooks.md](docs/hooks.md) |
-| The web view | [docs/webui-tabs.md](docs/webui-tabs.md) |
+| The web view | [docs/wiki-view.md](docs/wiki-view.md), [docs/webui-tabs.md](docs/webui-tabs.md) |
 | Security, contributing | [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Usage

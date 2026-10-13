@@ -154,6 +154,25 @@ if (vizPath) {
   eq(A.MIN_SCALE, 0.4, 'the floor');
   console.log('fitScale and anchorScroll: ok');
 }
+// ---- the wiki: Markdown and links as data -------------------------------------
+{
+  const eq = (a, b, what) => { if (a !== b) { console.log('wiki wrong: ' + what + ': ' + JSON.stringify(a) + ' vs ' + JSON.stringify(b)); problems++; } };
+  const names = ['claude/profile', 'claude/projects/akyuu', 'policy/tiers'];
+  const b = A.mdBlocks('# T\n\nSee claude/profile and **b `c`**.\n- one\n  - sub\n- two\n\n```\n<script>x</script>\n```\n> q', names);
+  eq(b.map(x => x.t).join(','), 'h,p,list,code,quote', 'the kinds of the blocks');
+  eq(b[1].c[1].t + ':' + b[1].c[1].name, 'ref:claude/profile', 'a ref name in the text is a link');
+  eq(b[2].items.length + '/' + b[2].items[0].sub.length, '2/1', 'a list with a sub item');
+  eq(b[3].v, '<script>x</script>', 'code stays text');
+  const i = A.mdInline('not claude/profilex, xclaude/profile or claude/profiles; but (claude/profile).', names);
+  eq(i.filter(k => k.t === 'ref').length, 1, 'only a whole ref name is a link');
+  eq(A.mdInline('see [x](javascript:alert(1)) and https://a.example/b.', names).filter(k => k.t === 'link' || k.t === 'url').map(k => k.href).join(' '), 'https://a.example/b', 'only http(s) becomes a link');
+  eq(A.mdInline('sha256-' + 'a'.repeat(64), []).map(k => k.t).join(), 'id', 'an id is an id');
+  const tr = A.wikiTree(names);
+  eq(tr.children.map(c => c.path).join(' '), 'claude policy', 'the tree by the first part');
+  eq(A.textBacklinks([{ name: 'a', body: 'see claude/profile' }, { name: 'claude/profile', body: 'claude/profile' }, { name: 'b', body: 'claude/profiles' }], 'claude/profile').join(), 'a', 'backlinks from the text, not from itself');
+  eq(A.isLogPage('claude/log/akyuu', 'fact') && A.isLogPage('x/y', 'episode') && !A.isLogPage('claude/profile', 'fact'), true, 'a log page');
+  console.log('wiki Markdown and links: ok');
+}
 // ---- the whole page in a small fake DOM ----------------------------------------
 function makeDom() {
   const all = [];
@@ -198,7 +217,7 @@ function makeDom() {
   const ids = ['status', 'f-kind', 'f-agent', 'f-ref', 'f-layout', 'w-hops', 'w-limit', 'w-all', 'w-focus', 'graph-notice', 'legend', 'graph-canvas',
     'refs-notice', 'refs-list', 'search-form', 's-q', 's-limit', 's-hops', 's-show', 'search-notice', 'search-results',
     'gc-summary', 'gc-notice', 'gc-legend', 'gc-canvas', 'gc-lists', 'h-run', 'h-note', 'health', 'panel',
-    'c-kind', 'c-level', 'c-run', 'c-note', 'c-summary', 'check-list', 'check-badge'];
+    'c-kind', 'c-level', 'c-run', 'c-note', 'c-summary', 'check-list', 'check-badge', 'wiki-filter', 'wiki-nav', 'wiki-page'];
   for (const id of ids) { const n = new Node('div'); n.setAttribute('id', id); byId[id] = n; }
   byId['s-limit'].value = '10'; byId['s-hops'].value = '1'; byId['w-hops'].value = '2'; byId['w-limit'].value = '200';
   for (const id of ['graph-canvas', 'gc-canvas']) { byId[id].clientWidth = 1200; byId[id].clientHeight = 700; }
@@ -208,8 +227,10 @@ function makeDom() {
     const lab = new Node('span'); lab.setAttribute('data-zoom-label', ''); bar.appendChild(lab);
     return bar;
   });
-  const tabs = ['graph', 'refs', 'search', 'gc', 'check', 'health'].map(t => { const b = new Node('button'); b.dataset.tab = t; return b; });
-  const views = ['graph', 'refs', 'search', 'gc', 'check', 'health'].map(t => { const v = new Node('section'); v.id = 'view-' + t; return v; });
+  // wiki is the first tab of the page; it is last here, so that the index of the
+  // other tabs stays as the checks below use it.
+  const tabs = ['graph', 'refs', 'search', 'gc', 'check', 'health', 'wiki'].map(t => { const b = new Node('button'); b.dataset.tab = t; return b; });
+  const views = ['graph', 'refs', 'search', 'gc', 'check', 'health', 'wiki'].map(t => { const v = new Node('section'); v.id = 'view-' + t; return v; });
   return { document, all, byId, tabs, bars, Node };
 }
 
@@ -219,7 +240,7 @@ async function runPage(html, label) {
   if (raw) { const d = new dom.Node('script'); d.setAttribute('id', 'akyuu-data'); d.textContent = raw; dom.byId['akyuu-data'] = d; }
   const errors = [];
   const ctx = {
-    document: dom.document, window: { matchMedia: () => ({ matches: false }) }, location: { hash: '' },
+    document: dom.document, window: { matchMedia: () => ({ matches: false }), addEventListener: () => {} }, location: { hash: '' },
     history: { replaceState: () => {} }, console, setInterval: () => 0, URLSearchParams,
     fetch: () => Promise.reject(new Error('no network in this check')),
     Math, Date, Map, Set, JSON, Object, Array, String, Number, RegExp, isNaN, Infinity, Promise, Error,
@@ -230,6 +251,15 @@ async function runPage(html, label) {
   const tick = () => new Promise(r => setTimeout(r, 30));
   await tick(); await tick();
   const svgNodes = () => dom.all.filter(n => n.tagName === 'g' && n.dataset && n.dataset.id);
+  {
+    // The page opens on the wiki: a tree of refs and one page with its body.
+    const nav = dom.byId['wiki-nav'].textContent, page = dom.byId['wiki-page'].textContent;
+    console.log('  wiki: nav ' + nav.length + ' chars; page: ' + page.slice(0, 120).replace(/\s+/g, ' '));
+    if (!nav) errors.push('the wiki has no tree of refs');
+    if (!page) errors.push('the wiki shows no page');
+    const links = dom.all.filter(n => n.tagName === 'a' && (n.attrs.href || '').indexOf('#wiki/') === 0).length;
+    if (!links && !page.includes('No pages')) errors.push('the wiki tree has no links');
+  }
   const drawn = svgNodes().length;
   for (const t of dom.tabs) { t.fire('click'); await tick(); await tick(); }
   // click a node of the graph, then the GC tab and a node there

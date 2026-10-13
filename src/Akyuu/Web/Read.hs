@@ -21,6 +21,7 @@ module Akyuu.Web.Read
     readMemory,
     readRefEntries,
     readRefs,
+    readPages,
     readSearch,
     readPlan,
     readExplain,
@@ -50,7 +51,7 @@ import Akyuu.Refs qualified as Refs
 import Akyuu.Render (findingJSON)
 import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Store qualified as Store
-import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), NodeStatus (HeadNode, SupersededNode), RefEntry (RefEntry), Stats (Stats, statCached, statMemories, statNewest, statPins, statRefs, statTombstones, statTrash), Window (winAll, winFocus), defaultWindow, graphView, graphViewJSON, memoryJSON, planJSON, refHolds, refsJSON, searchJSON, statsJSON, timeJSON, trashJSON, verifyJSON, whyJSON)
+import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), NodeStatus (HeadNode, SupersededNode), RefEntry (RefEntry, reName, reValue), Stats (Stats, statCached, statMemories, statNewest, statPins, statRefs, statTombstones, statTrash), Window (winAll, winFocus), defaultWindow, graphView, graphViewJSON, memoryJSON, pageJSON, planJSON, refHolds, refsJSON, searchJSON, statsJSON, timeJSON, trashJSON, verifyJSON, whyJSON)
 import Control.Exception (IOException, displayException, try, tryJust)
 import Control.Monad (forM, guard)
 import Control.Monad.IO.Class (liftIO)
@@ -233,6 +234,22 @@ readRefEntries env = runExceptT $ do
 -- | The JSON of every ref ('refsJSON').
 readRefs :: Env -> IO (Either AkyuuError Value)
 readRefs env = fmap (refsJSON (keepGenerations webPolicy)) <$> readRefEntries env
+
+-- | The pages of the wiki view: each ref with the memory that it holds now,
+-- and the older values of the ref (newest first). A ref that cannot be read,
+-- or whose memory cannot be read, has an error and no memory: one bad ref must
+-- not hide the others.
+readPages :: Env -> IO (Either AkyuuError Value)
+readPages env = runExceptT $ do
+  es <- ExceptT (readRefEntries env)
+  ps <- forM es $ \e -> case reValue e of
+    Left err -> pure (object ["name" .= Refs.nameText (reName e), "error" .= describe (RefFailed err)])
+    Right r -> do
+      m <- liftIO (getMemory env (Refs.current r))
+      pure $ case m of
+        Left err -> object ["name" .= Refs.nameText (reName e), "id" .= Id.render (Refs.current r), "error" .= describe err]
+        Right x -> pageJSON (reName e) r x
+  pure (object ["pages" .= ps])
 
 -- Search -------------------------------------------------------------------
 

@@ -39,6 +39,7 @@ module Akyuu.Web.Model
 
     -- * Other views
     memoryJSON,
+    pageJSON,
     searchJSON,
     planJSON,
     whyJSON,
@@ -359,6 +360,19 @@ statsJSON s =
 
 -- | The JSON of one memory: its headers, its body, its edges in both
 -- directions, the refs that hold it, and its status in the graph.
+-- | One page of the wiki view: a ref and its current memory.
+pageJSON :: Name -> Ref -> Memory -> Value
+pageJSON n r m =
+  object
+    [ "name" .= nameText n,
+      "id" .= idJSON (current r),
+      "history" .= idsJSON (history r),
+      "kind" .= memKind m,
+      "agent" .= memAgent m,
+      "created" .= timeJSON (memCreated m),
+      "body" .= memBody m
+    ]
+
 memoryJSON :: Id -> Memory -> [Neighbour] -> [(Name, Int)] -> NodeStatus -> Maybe UTCTime -> Value
 memoryJSON i m ns holds st stored =
   object
