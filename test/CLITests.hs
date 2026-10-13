@@ -286,6 +286,14 @@ runCases =
           let i = T.strip (decodeUtf8 (outBytes o))
           g <- run env ["get", T.unpack (T.take 12 i)]
           T.isInfixOf "find me" (decodeUtf8 (outBytes g)) @?= True,
+      testCase "status counts the memories and says what is missing" $
+        withOpsEnv $ \_ env -> do
+          _ <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "x")))
+          o <- run env ["status"]
+          let ls = T.lines (decodeUtf8 (outBytes o))
+          assertBool "count" ("memories: 1, refs: 0, pins: 0" `elem` ls)
+          assertBool "policy missing" (any ("policy policy/memory: missing" `T.isPrefixOf`) ls)
+          assertBool "no embedding" ("search by meaning: off (AKYUU_EMBED_COMMAND is not set)" `elem` ls),
       testCase "a prefix that no memory has is an error" $
         withOpsEnv $ \_ env -> do
           _ <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "x")))

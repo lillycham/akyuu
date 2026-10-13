@@ -16,6 +16,7 @@ module Akyuu.Render
     searchLines,
     searchLinesWith,
     embedLines,
+    statusLines,
     evalLines,
     heldBy,
     refListLinesWith,
@@ -50,7 +51,7 @@ import Akyuu.GC (RunReport (swept), SweepReport (deleted, trashed))
 import Akyuu.Graph (Dir (In, Out), EdgeType)
 import Akyuu.Id (Id, render)
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader, renderMemory)
-import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, Present), ContextReport (ContextReport), EmbedReport (already, embedFailed, embedded), EvalRow (evalCase, evalFound), SearchMode (Fused, MeaningOnly, TextOnly), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
+import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, Present), ContextReport (ContextReport), EmbedReport (already, embedFailed, embedded), EvalRow (evalCase, evalFound), SearchMode (Fused, MeaningOnly, TextOnly), StatusReport (stEmbed, stGit, stManifest, stMemories, stPins, stPolicy, stRefs, stRoot), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, corrections, matches))
 import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Akyuu.Review (Review (reviewAgent, reviewAt, reviewNote))
@@ -229,6 +230,25 @@ evalLines k rows = concatMap one rows <> [""] <> concatMap summary cats
     summary c =
       let rs = [r | r <- rows, caseCategory (evalCase r) == c]
        in [c <> " (" <> T.pack (show (length rs)) <> "): " <> T.intercalate ", " [modeName m <> " " <> T.pack (show (length (filter (`verdict` m) rs))) | m <- modes]]
+
+-- | The report of @status@: one line for each part, and a hint where
+-- something needs doing.
+statusLines :: StatusReport -> [Text]
+statusLines r =
+  [ "root: " <> T.pack (stRoot r),
+    "memories: " <> T.pack (show (stMemories r)) <> ", refs: " <> T.pack (show (stRefs r)) <> ", pins: " <> T.pack (show (stPins r)),
+    case stManifest r of
+      (n, Right (tiers, (ats, logs))) -> "manifest " <> nameText n <> ": tiers " <> (if null tiers then "(none)" else T.intercalate ", " tiers) <> "; " <> T.pack (show ats) <> " at lines, " <> T.pack (show logs) <> " log lines"
+      (n, Left why) -> "manifest " <> nameText n <> ": " <> why,
+    case stPolicy r of
+      (n, True) -> "policy " <> nameText n <> ": present"
+      (n, False) -> "policy " <> nameText n <> ": missing (the MCP server tells agents to read it)",
+    case stEmbed r of
+      Nothing -> "search by meaning: off (AKYUU_EMBED_COMMAND is not set)"
+      Just (m, Right k) -> "search by meaning: model " <> m <> ", vectors for " <> T.pack (show k) <> " of " <> T.pack (show (stMemories r)) <> " memories" <> (if k < stMemories r then " (run akyuu embed)" else "")
+      Just (m, Left why) -> "search by meaning: model " <> m <> ", the vectors cannot be read: " <> why,
+    "versioning: " <> if stGit r then "the root is a git repository" else "the root is not a git repository (akyuu-version makes one)"
+  ]
 
 -- | The refs that hold each memory now, from the list of refs.
 heldBy :: [(Name, Id)] -> Map Id [Name]

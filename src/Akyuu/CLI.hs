@@ -41,11 +41,12 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemoriesMode, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareJSON, compareLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
 import Akyuu.Seed qualified as Seed
+import Akyuu.Store qualified as Store
 import Akyuu.Tier (Place (Place))
 import Akyuu.Web.Page qualified as Page
 import Akyuu.Web.Read qualified as Read
@@ -164,6 +165,8 @@ data Command i
     -- and 'True' for the bodies.
     Log Name (Maybe Int) Bool
   | Search SearchMode SearchOptions Text
+  | -- | A short report of the setup.
+    Status
   | -- | Give a vector to each memory that has none.
     Embed Bool
   | -- | Run a set of searches (the ref), and show the refs found by each
@@ -261,6 +264,7 @@ commandParser =
       <> cmd "log" logP "Print the episodes of a log, newest first."
       <> cmd "context" contextP "Print the memories of a tier (the profile, the policy and so on) in one call, for the start of a session."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
+      <> cmd "status" (pure Status) "Show the setup: the counts, the manifest, the policy, search by meaning and versioning."
       <> cmd "embed" (Embed <$> switch (long "prune" <> help "Also remove the vectors of other models and of memories that GC deleted.")) "Give a vector to each memory that has none, with the command in AKYUU_EMBED_COMMAND (search by meaning)."
       <> cmd "search-eval" searchEvalP "Run a set of searches in each mode, and show which ones find the expected memories."
       <> cmd "neighbours" neighboursP "Show the edges of a memory, in both directions."
@@ -553,6 +557,10 @@ runCommand env c = runExceptT $ case c of
     who <- liftIO (maybe (maybe "agent" T.pack <$> lookupEnv "AKYUU_AGENT") pure agent)
     (n, i) <- ExceptT (noteEpisode env mr place NewMemory {newKind = kind, newAgent = who, newEdges = Set.empty, newBody = text})
     pure (ok ["noted in " <> nameText n <> " " <> Id.render i])
+  Status -> do
+    mr <- ExceptT (liftIO (manifestRef Nothing))
+    pr <- ExceptT (liftIO (refFromEnv "AKYUU_POLICY_REF" "policy/memory" Nothing))
+    ok . statusLines <$> ExceptT (statusOf env (Store.storeRoot (envStore env)) mr pr)
   Embed prune -> do
     me <- liftIO Embed.embedderFromEnv
     e <- maybe (ExceptT (pure (Left (BadInput "AKYUU_EMBED_COMMAND is not set. Set it to a command that reads a text on stdin and prints a vector (see docs/embeddings.md).")))) pure me
