@@ -1333,6 +1333,9 @@ const Akyuu = (function () {
       refs: async () => part(data.refs),
       // The pages from the refs and the memories of the export.
       pages: async () => {
+        // An export from this version has the pages; an older one has only
+        // the refs and the memories.
+        if (data.pages && !data.pages.error) return data.pages;
         const ms = part(data.memories);
         return { pages: part(data.refs).refs.map(r => {
           if (r.error) return { name: r.name, error: r.error };
@@ -1358,6 +1361,7 @@ const Akyuu = (function () {
     pages: null,
     pagesError: null,
     wikiPage: null,
+    wikiHome: null,
     stats: null,
     graph: null,
     gcGraph: null,
@@ -2182,7 +2186,7 @@ const Akyuu = (function () {
   }
 
   async function loadWiki() {
-    try { state.pages = (await state.src.pages()).pages; state.pagesError = null; }
+    try { const r = await state.src.pages(); state.pages = r.pages; state.wikiHome = r.home || null; state.pagesError = null; }
     catch (e) { state.pages = []; state.pagesError = e.message; }
     renderWikiNav();
     renderWikiPage();
@@ -2215,9 +2219,9 @@ const Akyuu = (function () {
     const art = $('wiki-page');
     const names = pageNames();
     if (!state.wikiPage || !pageOf(state.wikiPage)) {
-      // The first page: a policy if there is one, else the first ref.
-      const pref = ['claude/profile', 'policy/memory', 'claude/memory-policy'].find(n => names.indexOf(n) >= 0);
-      state.wikiPage = pref || names[0] || null;
+      // The first page: the first ref of the tier always of the manifest
+      // (the server finds it), else the first ref by name.
+      state.wikiPage = (state.wikiHome && names.indexOf(state.wikiHome) >= 0 ? state.wikiHome : names[0]) || null;
     }
     art.replaceChildren();
     if (!state.wikiPage) { art.appendChild(el('p', { class: 'muted', text: 'No pages: add a memory under a ref (akyuu add --ref, or akyuu init).' })); return; }

@@ -961,7 +961,7 @@ noteEpisode env manifestRef place new = runExceptT $ do
     Just r -> pure r
     Nothing ->
       throwE . BadInput $
-        "The manifest has no log line for this directory. Add a line such as 'log *: claude/log/general' to the memory of the ref " <> Refs.nameText manifestRef <> "."
+        "The manifest has no log line for this directory. Add a line such as 'log *: me/log' to the memory of the ref " <> Refs.nameText manifestRef <> "."
   i <- ExceptT (appendEpisode env logRef new)
   pure (logRef, i)
   where

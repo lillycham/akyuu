@@ -403,7 +403,17 @@ storeCases =
           map (at ["name"]) ps @?= [Just (String "claude/lang")]
           map (at ["id"]) ps @?= [Just (String (render v2))]
           map (at ["body"]) ps @?= [Just (String "Lilly prefers Haskell and Nix.")]
-          map (at ["history"]) ps @?= [Just (Array (pure (String (render v1))))],
+          map (at ["history"]) ps @?= [Just (Array (pure (String (render v1))))]
+          -- No manifest: no home page, the page takes the first ref.
+          at ["home"] v @?= Just Null,
+      testCase "the home page is the first ref of the tier always that exists" $
+        withOpsEnv $ \_ env -> do
+          _ <- smallStore env
+          m <- right =<< addMemory env (note "always: me/missing claude/lang\n" [])
+          t <- right (mkName "policy/tiers")
+          _ <- right =<< setRefTo env t MustBeAbsent m
+          (_, v) <- call env ["api", "pages"] []
+          at ["home"] v @?= Just (String "claude/lang"),
       testCase "stats counts the store" $
         withOpsEnv $ \_ env -> do
           _ <- smallStore env

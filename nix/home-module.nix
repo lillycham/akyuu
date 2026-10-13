@@ -103,7 +103,7 @@ in
     policyRef = mkOption {
       type = types.nullOr (types.strMatching "[a-z0-9._-]+(/[a-z0-9._-]+)*");
       default = null;
-      example = "claude/memory-policy";
+      example = "me/memory-policy";
       description = ''
         The name of the ref that holds the policy of the store: how agents
         use it for memory. `akyuu mcp` tells a client to read it first. With
