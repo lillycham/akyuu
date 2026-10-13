@@ -221,10 +221,10 @@ toolCallCases =
         parseToolCall "log" (args [("ref", "agent/episodes"), ("limit", Number 3), ("full", Bool True)])
           @?= Right (CallLog n (Just 3) True),
       testCase "context reads the tier and the refs" $ do
-        parseToolCall "context" (args []) @?= Right (CallContext Nothing Nothing [])
+        parseToolCall "context" (args []) @?= Right (CallContext Nothing Nothing [] Nothing Nothing)
         n <- right (mkName "claude/projects/x")
         parseToolCall "context" (args [("tier", "background"), ("refs", A.toJSON ["claude/projects/x" :: Text])])
-          @?= Right (CallContext (Just "background") Nothing [n]),
+          @?= Right (CallContext (Just "background") Nothing [n] Nothing Nothing),
       testCase "an unknown tool" $
         parseToolCall "rm" (args []) @?= Left (UnknownTool "rm")
     ]
@@ -328,12 +328,23 @@ runToolCases =
                 _ <- runTool cfg env (CallRefSet n MustBeAbsent (either (error . show) id (parse i)))
                 pure ()
           addRef "claude/profile" "profile text"
+          n0 <- right (mkName "claude/long")
           addRef "claude/proj" "project text"
           addRef "policy/tiers" "always: claude/profile\nat ~/devel/p: claude/proj\nlog *: claude/log/general\nlog ~/devel/p: claude/log/p"
-          ToolResult c False <- runTool cfg env (CallContext Nothing Nothing [])
+          ToolResult c False <- runTool cfg env (CallContext Nothing Nothing [] Nothing Nothing)
           assertBool "profile" ("profile text" `T.isInfixOf` c)
           assertBool "project" ("project text" `T.isInfixOf` c)
-          ToolResult c2 False <- runTool cfg env (CallContext Nothing (Just "/elsewhere") [])
+          ToolResult c2 False <- runTool cfg env (CallContext Nothing (Just "/elsewhere") [] Nothing Nothing)
+          -- With a budget, a memory that does not fit is one line and a pointer.
+          addRef "claude/long" (T.replicate 300 "long text ")
+          ToolResult c3 False <- runTool cfg env (CallContext Nothing Nothing [n0] (Just 700) Nothing)
+          assertBool "under the budget" (T.length c3 <= 700)
+          assertBool "points at the next page" ("more on page 2: claude/long" `T.isInfixOf` c3 && not ("long text long text" `T.isInfixOf` c3))
+          ToolResult c4 False <- runTool cfg env (CallContext Nothing Nothing [n0] (Just 700) (Just 2))
+          assertBool "page 2 has the long memory, cut" ("== claude/long" `T.isInfixOf` c4 && "Read it with get" `T.isInfixOf` c4 && T.length c4 < 1500)
+          ToolResult c5 False <- runTool cfg env (CallContext Nothing Nothing [n0] (Just 700) (Just 9))
+          c5 @?= ""
+          assertBool "short memory still in full" ("profile text" `T.isInfixOf` c3)
           assertBool "no project elsewhere" (not ("project text" `T.isInfixOf` c2))
           ToolResult r False <- runTool cfg env (CallNote Nothing Nothing (NewMemory "note" "" Set.empty "a small thing"))
           assertBool "named log" ("noted in claude/log/p " `T.isPrefixOf` r)

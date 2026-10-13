@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `context --page N` (and `--budget`) splits the context into pages that fit
+  the 10,000-character limit of a Claude Code hook. The MCP tool `context` has
+  `budget` and `page` too.
+
 ## 0.1.0.0 (2026-10-13)
 
 The first release. It is for people who use Nix, a Mac or Linux, and Claude

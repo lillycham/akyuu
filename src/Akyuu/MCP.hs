@@ -49,7 +49,7 @@ import Akyuu.Id qualified as Id
 import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseIdSpec, readLog, readRef, resolveId, reviewPair, searchMemories, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLines)
+import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage)
 import Akyuu.Tier (Place (Place))
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (unless)
@@ -99,7 +99,7 @@ data ToolCall
     CallLog Name (Maybe Int) Bool
   | -- | The tier ('Nothing' for always), the directory that stands for where
     -- the session works, and extra refs.
-    CallContext (Maybe Text) (Maybe Text) [Name]
+    CallContext (Maybe Text) (Maybe Text) [Name] (Maybe Int) (Maybe Int)
   | -- | A note for the log of a directory: the directory, the agent (the
     -- server's default if 'Nothing'), and the memory (its agent is not used).
     CallNote (Maybe Text) (Maybe Text) NewMemory
@@ -249,7 +249,9 @@ toolList =
       ( objectSchema
           [ ("tier", stringSchema "The tier to read. The default is always."),
             ("cwd", stringSchema "The directory that you work in. The default is the directory of the server. The manifest can add the refs of a project for a directory."),
-            ("refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("More refs to read, after the refs of the tier and the directory." :: Text)])
+            ("refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("More refs to read, after the refs of the tier and the directory." :: Text)]),
+            ("budget", object ["type" .= ("integer" :: Text), "minimum" .= (200 :: Int), "description" .= ("Split the text into pages of about this many characters and return one page. A memory too long for a page is shown as its first line; read it with get." :: Text)]),
+            ("page", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "description" .= ("The page to return, with budget. The default is 1." :: Text)])
           ]
           []
       ),
@@ -454,7 +456,9 @@ parseToolCall n args = case n of
     t <- optional' args "tier" asText "a string"
     rs <- maybe [] id <$> optional' args "refs" (asList asText) "a list of strings"
     c <- optional' args "cwd" asText "a string"
-    CallContext t c <$> traverse parseName rs
+    b <- optional' args "budget" asInt "a whole number" >>= traverse (atLeast "budget" 200)
+    p <- optional' args "page" asInt "a whole number" >>= traverse (atLeast "page" 1)
+    (\ns -> CallContext t c ns b p) <$> traverse parseName rs
   "note" -> do
     c <- optional' args "cwd" asText "a string"
     k <- maybe "note" id <$> optional' args "kind" asText "a string" >>= check . checkField "kind"
@@ -587,9 +591,9 @@ runTool cfg env c = either failed id <$> go
           Right rs -> do
             firsts <- firstLines env (map snd rs)
             pure (Right (shorten (lines' "There are no refs." (refListLinesWith firsts rs))))
-      CallContext tier cwd refs -> case mkName (mcpTiersRef cfg) of
+      CallContext tier cwd refs budget page -> case mkName (mcpTiersRef cfg) of
         Left e -> pure (Left (BadName (mcpTiersRef cfg) e))
-        Right manifest -> fmap (\r -> okText (T.intercalate "\n" (tierLines r)) False) <$> contextFor env manifest (maybe "always" id tier) (placeOf cwd) refs
+        Right manifest -> fmap (\r -> okText (T.intercalate "\n" (case (budget, page) of (Nothing, Nothing) -> tierLinesWithin Nothing r; _ -> tierPage (fromMaybe 9500 budget) (fromMaybe 1 page) r)) False) <$> contextFor env manifest (maybe "always" id tier) (placeOf cwd) refs
       CallNote cwd ag m -> case (mkName (mcpTiersRef cfg), placeOf cwd) of
         (Left e, _) -> pure (Left (BadName (mcpTiersRef cfg) e))
         (_, Nothing) -> pure (Left (BadInput "The server does not know its directory. Give cwd."))

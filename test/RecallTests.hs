@@ -8,7 +8,7 @@ import Akyuu.Cache qualified
 import Akyuu.Fuzzy (editDistance, maxEdits, nearTerms)
 import Akyuu.Id (Id)
 import Akyuu.Memory (Memory, memoryId)
-import Akyuu.Query (Boost (Boost, boostHeld, boostNow), SearchOptions, SearchResult (corrections, matches), Tuning (Tuning, tuneBoost, tuneFuzzy), defaultSearchOptions, defaultTuning, matchId, noBoost, rankHits, searchWith)
+import Akyuu.Query (Boost (Boost, boostHeld, boostNow), SearchResult (corrections, matches), Tuning (tuneBoost, tuneFuzzy), defaultSearchOptions, defaultTuning, matchId, noBoost, rankHits, searchWith)
 import Control.Exception (bracket)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set

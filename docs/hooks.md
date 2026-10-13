@@ -57,11 +57,23 @@ the context. In `~/.claude/settings.json`:
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "akyuu context" } ] }
+      { "hooks": [
+        { "type": "command", "command": "akyuu context --page 1" },
+        { "type": "command", "command": "akyuu context --page 2" },
+        { "type": "command", "command": "akyuu context --page 3" }
+      ] }
     ]
   }
 }
 ```
+
+Claude Code keeps only about 10,000 characters of the output of one hook. A
+longer output is saved to a file, and the model sees a preview of about 2,000
+characters, so most of the context is lost. `--page N` splits the output into
+pages of 9,500 characters (`--budget` sets another size), and each hook prints
+one page. A page after the last prints nothing, so a spare hook costs nothing.
+A memory that is too long for one page is shown as its first line, and the
+model reads it with `get`.
 
 `akyuu context` uses the current directory, so the refs of the project come
 too. The hook saves a tool call, but the output is long: use it in place of the

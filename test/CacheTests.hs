@@ -5,7 +5,7 @@ module CacheTests (cacheTests) where
 import Akyuu.Cache (Cache, CacheError (CacheSQL, CacheStore), Hit (hitId, hitSnippet), Summary (Summary, sumFirstLine, sumId), SyncReport (SyncReport, added, removed), cachePath, cachedIds, closeCache, firstLine, forget, ftsQuery, index, indexedBody, loadGraph, openCache, reindex, search, snippetClose, snippetOpen, summaries, sync)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, dangling, nodes)
 import Akyuu.Id (Id)
-import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memEdges, memKind), memoryGraph, memoryId)
+import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), memoryGraph, memoryId)
 import Akyuu.Store (Store, StoreError (BadMemory), add, objectPath, openStore, trash)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)

@@ -44,7 +44,7 @@ import Akyuu.Memory (renderMemory)
 import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemoriesMode, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareJSON, compareLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, syncLines, tierLines, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Tier (Place (Place))
 import Akyuu.Web.Page qualified as Page
@@ -59,6 +59,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -150,7 +151,7 @@ data Command i
     Reviews
   | -- | The tier, extra refs, the ref of the manifest ('Nothing' for the
     -- default), and the directory ('Nothing' for the current one).
-    Context (Maybe Text) [Name] (Maybe Name) (Maybe Text)
+    Context (Maybe Text) [Name] (Maybe Name) (Maybe Text) (Maybe Int) (Maybe Int)
   | -- | A note for the log of a directory: the directory ('Nothing' for the
     -- current one), the kind, the agent ('Nothing' for $AKYUU_AGENT), the
     -- ref of the manifest, and the text.
@@ -339,6 +340,8 @@ commandParser =
         <*> many (option nameReader (long "ref" <> metavar "NAME" <> help "Also print this ref. Repeat for more."))
         <*> optional (option nameReader (long "manifest" <> metavar "NAME" <> help "The ref of the manifest. The default is $AKYUU_TIERS_REF, then policy/tiers."))
         <*> optional (strOption (long "cwd" <> metavar "DIR" <> help "The directory to take the refs for. The default is the current directory."))
+        <*> optional (option (atLeast 200) (long "budget" <> metavar "CHARS" <> help "Split the output into pages of about this many characters, and print page 1 (or --page). For a hook whose output is cut."))
+        <*> optional (option (atLeast 1) (long "page" <> metavar "N" <> help "Print page N of the split output. The default size of a page is 9500 characters. A page after the last prints nothing."))
     noteP =
       Note
         <$> optional (strOption (long "cwd" <> metavar "DIR" <> help "The directory whose log gets the note. The default is the current directory."))
@@ -528,11 +531,13 @@ runCommand env c = runExceptT $ case c of
   Log n lim full -> do
     w <- ExceptT (readLog env n (maybe 20 id lim))
     pure (ok (logLines full w))
-  Context tier extra given cwd -> do
+  Context tier extra given cwd budget page -> do
     manifest <- liftIO (manifestRef given)
     place <- liftIO (placeFor cwd)
     r <- ExceptT (either (pure . Left) (\mr -> contextFor env mr (maybe "always" id tier) (Just place) extra) manifest)
-    pure (ok (tierLines r))
+    pure . ok $ case (budget, page) of
+      (Nothing, Nothing) -> tierLinesWithin Nothing r
+      _ -> tierPage (fromMaybe 9500 budget) (fromMaybe 1 page) r
   Note cwd kind agent given text -> do
     mr <- ExceptT (liftIO (manifestRef given))
     place <- liftIO (placeFor cwd)

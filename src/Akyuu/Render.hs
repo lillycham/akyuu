@@ -31,6 +31,8 @@ module Akyuu.Render
     compareJSON,
     reviewLines,
     tierLines,
+    tierLinesWithin,
+    tierPage,
     logLines,
     verifyLines,
     edgeName,
@@ -363,11 +365,69 @@ reviewLines = concatMap one
 -- body, then a blank line. A ref that the manifest names and the store lacks
 -- has one line. The last line lists the other refs.
 tierLines :: ContextReport -> [Text]
-tierLines (ContextReport tier es others) =
-  ("tier: " <> tier) : concatMap entry es <> ["other refs: " <> if null others then "none" else T.intercalate ", " (map nameText others)]
+tierLines = tierLines'
+
+-- | 'tierLines' that fits in a number of characters, for a client that cuts
+-- a long text: a hook of Claude Code keeps only about 10,000 characters. It
+-- is page 1 of 'tierPage'.
+tierLinesWithin :: Maybe Int -> ContextReport -> [Text]
+tierLinesWithin Nothing r = tierLines' r
+tierLinesWithin (Just b) r = tierPage b 1 r
+
+-- | One page of the context, for a budget of characters per page. Pages count
+-- from 1. The memories are packed in their order: a page takes memories until
+-- the next one does not fit, and that one starts the next page. A memory that
+-- does not fit on an empty page is shown as its first line and a pointer. Page
+-- 1 starts with the tier. A page that is not the last ends with a line that
+-- names the next page and its refs; the last page ends with the other refs. A
+-- page after the last is empty, so a second hook with page 2 prints nothing
+-- when one page is enough.
+tierPage :: Int -> Int -> ContextReport -> [Text]
+tierPage budget k (ContextReport tier es others)
+  | k < 1 || k > length pages = []
+  | otherwise =
+      ["tier: " <> tier | k == 1]
+        <> concatMap snd (pages !! (k - 1))
+        <> if k == length pages
+          then footer
+          else ["(more on page " <> T.pack (show (k + 1)) <> ": " <> T.intercalate ", " (map fst (concat (drop k pages))) <> ". Run context with page " <> T.pack (show (k + 1)) <> ", or read them with get.)"]
   where
-    entry (Present n i m) = ["== " <> nameText n <> " (" <> render i <> ")"] <> T.lines (memBody m) <> [""]
-    entry (Absent n) = ["== " <> nameText n <> ": the manifest names it, and there is no such ref.", ""]
+    footer = ["other refs: " <> if null others then "none" else T.intercalate ", " (map nameText others)]
+    room = max 200 (budget - 400)
+    shown e = let full = contextEntry e in if size full <= room then full else contextBrief e
+    items = [(entryName e, shown e) | e <- es]
+    pages = case pack items of
+      [] -> [[]]
+      ps -> ps
+    pack [] = []
+    pack xs = let (p, rest) = takePage 0 xs in p : pack rest
+    takePage _ [] = ([], [])
+    takePage used (x : xs)
+      | used > 0 && used + size (snd x) > room = ([], x : xs)
+      | otherwise = let (p, rest) = takePage (used + size (snd x)) xs in (x : p, rest)
+    size ls = sum (map ((+ 1) . T.length) ls)
+    entryName (Present n _ _) = nameText n
+    entryName (Absent n) = nameText n
+
+tierLines' :: ContextReport -> [Text]
+tierLines' (ContextReport tier es others) =
+  ("tier: " <> tier) : concatMap contextEntry es <> ["other refs: " <> if null others then "none" else T.intercalate ", " (map nameText others)]
+
+contextEntry :: ContextEntry -> [Text]
+contextEntry (Present n i m) = ["== " <> nameText n <> " (" <> render i <> ")"] <> T.lines (memBody m) <> [""]
+contextEntry (Absent n) = ["== " <> nameText n <> ": the manifest names it, and there is no such ref.", ""]
+
+contextBrief :: ContextEntry -> [Text]
+contextBrief (Present n i m) =
+  [ "== " <> nameText n <> " (" <> render i <> ")",
+    case filter (not . T.null) (map T.strip (T.lines (memBody m))) of
+      (l : _) | T.length l > 120 -> T.take 119 l <> "…"
+      (l : _) -> l
+      [] -> "",
+    "(" <> T.pack (show (T.length (memBody m))) <> " characters, too long for one page. Read it with get, ref " <> nameText n <> ".)",
+    ""
+  ]
+contextBrief a = contextEntry a
 
 -- Episodes -------------------------------------------------------------
 
