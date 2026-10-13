@@ -1,0 +1,35 @@
+# CI: build and test on Linux. macOS is left out on purpose for now: the
+# macOS minutes of a private repository cost ten times as much.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer run of the same branch cancels the older one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      # The unit tests, the shell checks (backup, versioning), and the check of
+      # the home-manager module for both systems.
+      - name: nix flake check
+        run: nix flake check --print-build-logs
+      # The package itself, and the command that a person runs first.
+      - name: build the package
+        run: nix build .#akyuu --print-build-logs
+      - name: run the binary
+        run: ./result/bin/akyuu --help
