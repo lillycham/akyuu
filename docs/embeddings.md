@@ -113,3 +113,28 @@ disappoints: add the line to `policy/embedding-eval`.
   embedded. Chunking is not done.
 - A launchd job for `akyuu embed`: new memories get their vector when they are
   written, so the job is only a catch-up.
+
+## EmbeddingGemma 2 (2026-10-13)
+
+Google released EmbeddingGemma 2 on 2026-10-06 (740M parameters with optional
+vision and audio encoders, 768 dimensions, 8K context, Apache 2.0). It was
+tried with the GGUF `unsloth/embeddinggemma-2-GGUF` (`UD-Q4_K_XL`, 176 MB) and
+the same 25 searches.
+
+- It needs a llama.cpp with the architecture `gemma-embedding2`, which was
+  merged in build b11452 (2026-10-06). nixpkgs had 0.4.1 (b10964) and failed
+  with `unknown model architecture`. An override of `llama-cpp` to b11452
+  works (a new `src` hash and `npmDepsHash`; it compiles locally in some
+  minutes, there is no binary cache for it).
+- Prefixes: `task: search result | query: ` and `title: none | text: `.
+- Result: the same passes as nomic (12 of 13 paraphrases, 4 of 5 vague, 1 of
+  2 typos, no regression, and "nothing relevant" works with a minimum).
+  The minimum that keeps every pass is 0.60 to 0.64 for Gemma and 0.54 to
+  0.56 for nomic. That is a slightly wider safe range, which is not much
+  evidence on 25 searches.
+- Cost: 176 MB file against 146 MB, about 335 MB of memory in use against
+  235 MB, and a llama.cpp that nixpkgs does not have yet.
+
+Conclusion: no reason to switch now. Try again when nixpkgs has llama.cpp
+b11452 or later, with a bigger set of searches. Then the change is a new model
+file, new prefixes and a new `AKYUU_EMBED_MODEL` key.
