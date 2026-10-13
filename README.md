@@ -1,5 +1,8 @@
 # Akyuu
 
+[![ci](https://github.com/lillycham/akyuu/actions/workflows/ci.yml/badge.svg)](https://github.com/lillycham/akyuu/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Akyuu is a persistent memory store for AI agents, modelled on Nix. A memory is
 an immutable plain-text file, named by the hash of its text. A small mutable
 layer of named refs says which memory is current, and a graph of links
@@ -10,7 +13,7 @@ other MCP clients can share one memory.
 **Status: 0.1.0.0, pre-1.0.** It is in daily use by its author. Commands and
 MCP tools can still change. The store format is described in
 [docs/format.md](docs/format.md), and [CHANGELOG.md](CHANGELOG.md) lists what
-changes. It is written in Haskell and built with Nix.
+changes, and [ROADMAP.md](ROADMAP.md) lists what is open. It is written in Haskell and built with Nix.
 
 What it is for:
 
@@ -77,6 +80,7 @@ should use the store: the tool descriptions point at it.
 | Finding duplicates, forks, stale links | [docs/check.md](docs/check.md), [docs/judgement.md](docs/judgement.md) |
 | Tiers, places, notes, hooks for agents | [docs/hooks.md](docs/hooks.md) |
 | The web view | [docs/webui-tabs.md](docs/webui-tabs.md) |
+| Security, contributing | [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Usage
 

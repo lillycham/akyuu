@@ -1,5 +1,8 @@
 # TODO
 
+This is the development log: the build order and the notes of each step. For
+what is open now, see [ROADMAP.md](ROADMAP.md).
+
 Build order, from the bottom up. Each module depends only on the ones above it.
 
 ```
@@ -164,7 +167,7 @@ Decided:
       3. Only if 1 and 2 are not enough: a second FTS5 table with `tokenize='trigram'` (about three times the size of the text index).
       Keep exact matches first (bm25 on the original words), and put fuzzy hits after them. Needs no new dependency and no schema break
       for 1 and 2 (the vocabulary is a view of the existing table).
-- [ ] **Search by meaning (embeddings).** Feasible and cheap at this size, and it fits the design: an embedding is a derived index
+- [x] **Search by meaning (embeddings).** Feasible and cheap at this size, and it fits the design: an embedding is a derived index
       keyed by `Id`, so it never needs invalidating. Sketch:
       - Akyuu does not run or name a model. A configured command (`AKYUU_EMBED_COMMAND`, or `--embed-command`) reads a text on stdin and
         writes a JSON vector. A local server (llama.cpp `llama-server --embeddings`, MLX, Ollama) or a script can sit behind it.
@@ -376,7 +379,7 @@ Not done:
 - [x] **Order of headers.** Done: `parseMemory` accepts only the canonical form. A file with the headers in another order,
       a repeated or unsorted edge line, or any other change gives `NotCanonical`. So for every file that parses,
       `renderMemory m == bytes`, and the `Id` of the memory is the hash of the file. All 55 objects of the live store pass.
-- [ ] **Forks.** Two memories that supersede the same one are both `heads`. Choose a policy: latest by time, or keep both and flag it.
+- [x] **Forks.** (`check` finds them and says which memories to read; the choice stays with the agent.) Two memories that supersede the same one are both `heads`. Choose a policy: latest by time, or keep both and flag it.
 - [x] **Several agents in one store.** Decided: ref names are `agent/topic`. Memories keep `agent` as a plain header.
 - [x] **`fsync`.** Done: `atomicWrite` flushes the temporary file before the rename and the directory after it.
       Not done: on macOS, `fsync` does not flush the drive cache. That needs `fcntl(F_FULLFSYNC)`, and `unix` has no wrapper for it.
@@ -471,4 +474,4 @@ Give a stronger connection more weight in search context and in the graph view:
 - [x] The memories repo has a private remote (github.com/lillycham/akyuu-mem). `akyuu-version` still never pushes.
 - [ ] **Per-log retention.** Needs a decision first: should a log summarise itself (a procedure memory that an agent runs when
       `long-log` shows), or keep only the newest N episodes (GC would then need to cut a chain)? Today the answer is the first one, by hand.
-- [ ] `akyuu-version` could push after it commits, when a remote exists and the person turns it on (`versioning.push = true`).
+- [x] `akyuu-version` could push after it commits, when a remote exists and the person turns it on (`versioning.push = true`).
