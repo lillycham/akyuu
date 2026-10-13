@@ -68,6 +68,7 @@ library
                    , Akyuu.Episode
                    , Akyuu.Embed
                    , Akyuu.Fuzzy
+                   , Akyuu.Init
                    , Akyuu.Review
                    , Akyuu.SearchEval
                    , Akyuu.Tier

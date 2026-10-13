@@ -286,6 +286,18 @@ runCases =
           let i = T.strip (decodeUtf8 (outBytes o))
           g <- run env ["get", T.unpack (T.take 12 i)]
           T.isInfixOf "find me" (decodeUtf8 (outBytes g)) @?= True,
+      testCase "init writes a policy and a manifest once, and context then reads them" $
+        withOpsEnv $ \_ env -> do
+          c0 <- run env ["context"]
+          assertBool "a hint without a manifest" ("== no manifest" `T.isInfixOf` decodeUtf8 (outBytes c0))
+          o1 <- run env ["init"]
+          assertBool "made" (all (`T.isInfixOf` decodeUtf8 (outBytes o1)) ["made policy/memory", "made policy/tiers"])
+          o2 <- run env ["init"]
+          assertBool "kept" (all (`T.isInfixOf` decodeUtf8 (outBytes o2)) ["kept policy/memory", "kept policy/tiers"])
+          c1 <- run env ["context"]
+          assertBool "the policy is read" ("How to use this store for memory." `T.isInfixOf` decodeUtf8 (outBytes c1))
+          n <- run env ["note", "a", "thing"]
+          assertBool "note works with the default manifest" ("noted in me/log" `T.isPrefixOf` decodeUtf8 (outBytes n)),
       testCase "status counts the memories and says what is missing" $
         withOpsEnv $ \_ env -> do
           _ <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "x")))

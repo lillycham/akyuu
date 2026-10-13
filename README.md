@@ -32,7 +32,7 @@ What it is for:
 nix run github:lillycham/akyuu -- --help      # or: nix profile install github:lillycham/akyuu
 
 export AKYUU_ROOT=~/.local/share/akyuu
-mkdir -p "$AKYUU_ROOT"
+akyuu init                                    # makes the root, a policy for agents and a manifest
 akyuu add --kind fact --agent me --body "Nix for every tool."
 akyuu search nix
 akyuu serve                                   # a read-only web view on http://127.0.0.1:7420

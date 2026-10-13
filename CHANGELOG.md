@@ -8,6 +8,10 @@
 - The MCP server takes the name of the client (`clientInfo.name`, for example
   `claude-code`) as the default agent of `note`, when `AKYUU_AGENT` is not set.
   Before, such notes had the agent `agent`.
+- `akyuu init` starts a store: it makes the root, a short policy for agents
+  (`policy/memory`) and a manifest (`policy/tiers`). Existing refs are kept.
+  `context` on a store without a manifest says what to do, and is no longer an
+  error.
 - `akyuu status`: the counts, the manifest, the policy, search by meaning and
   versioning, in a few lines.
 - `add --ref` (and `ref` for the MCP tool `add`) makes a new ref in the same
