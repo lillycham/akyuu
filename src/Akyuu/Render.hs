@@ -51,7 +51,7 @@ import Akyuu.GC (RunReport (swept), SweepReport (deleted, trashed))
 import Akyuu.Graph (Dir (In, Out), EdgeType)
 import Akyuu.Id (Id, render)
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader, renderMemory)
-import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, Present), ContextReport (ContextReport), EmbedReport (already, embedFailed, embedded), EvalRow (evalCase, evalFound), SearchMode (Fused, MeaningOnly, TextOnly), StatusReport (stEmbed, stGit, stManifest, stMemories, stPins, stPolicy, stRefs, stRoot), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
+import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, NoManifest, Present), ContextReport (ContextReport), EmbedReport (already, embedFailed, embedded), EvalRow (evalCase, evalFound), SearchMode (Fused, MeaningOnly, TextOnly), StatusReport (stEmbed, stGit, stManifest, stMemories, stPins, stPolicy, stRefs, stRoot), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, corrections, matches))
 import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Akyuu.Review (Review (reviewAgent, reviewAt, reviewNote))
@@ -428,6 +428,7 @@ tierPage budget k (ContextReport tier es others)
     size ls = sum (map ((+ 1) . T.length) ls)
     entryName (Present n _ _) = nameText n
     entryName (Absent n) = nameText n
+    entryName (NoManifest n) = nameText n
 
 tierLines' :: ContextReport -> [Text]
 tierLines' (ContextReport tier es others) =
@@ -436,6 +437,7 @@ tierLines' (ContextReport tier es others) =
 contextEntry :: ContextEntry -> [Text]
 contextEntry (Present n i m) = ["== " <> nameText n <> " (" <> render i <> ")"] <> T.lines (memBody m) <> [""]
 contextEntry (Absent n) = ["== " <> nameText n <> ": the manifest names it, and there is no such ref.", ""]
+contextEntry (NoManifest n) = ["== no manifest: the ref " <> nameText n <> " does not exist, so no tier is read. Run akyuu init to make a policy and a manifest, or add a memory with a line such as 'always: me/profile' under that ref.", ""]
 
 contextBrief :: ContextEntry -> [Text]
 contextBrief (Present n i m) =

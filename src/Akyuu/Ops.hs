@@ -67,6 +67,9 @@ module Akyuu.Ops
     CompareReport (..),
     compareMemories,
 
+    -- * Init
+    initStore,
+
     -- * Status
     StatusReport (..),
     statusOf,
@@ -95,6 +98,7 @@ import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom, Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
+import Akyuu.Init qualified as Init
 import Akyuu.Memory (Memory (memAgent, memBody, memEdges, memKind), MemoryError (InvalidField), MemoryParseError, mkMemory, validField)
 import Akyuu.Query (Neighbour, SearchOptions, SearchResult)
 import Akyuu.Query qualified as Query
@@ -629,6 +633,23 @@ reindexCache env = runExceptT (cache (Cache.reindex (envCache env) (envStore env
 -- Verify ---------------------------------------------------------------
 
 -- | What 'verifyStore' found. Each list is sorted.
+-- | Write the first memories of a store, if they are not there: the policy
+-- under its ref and the manifest under its ref. A ref that exists is kept as
+-- it is. Returns one line for each ref: what was done.
+initStore :: Env -> Name -> Name -> IO (Either AkyuuError [Text])
+initStore env policyRef manifestRef = runExceptT $ do
+  logRef <- either (throwE . BadInput . T.pack . show) pure (Refs.mkName "me/log")
+  let one n body kind = do
+        there <- liftIO (readRef env n)
+        case there of
+          Right _ -> pure ("kept " <> Refs.nameText n <> " (it exists)")
+          Left _ -> do
+            i <- ExceptT (addUnderRef env n NewMemory {newKind = kind, newAgent = "akyuu", newEdges = Set.empty, newBody = body})
+            pure ("made " <> Refs.nameText n <> " " <> Id.render i)
+  a <- one policyRef Init.defaultPolicy "instruction"
+  b <- one manifestRef (Init.defaultManifest (Refs.nameText policyRef) (Refs.nameText logRef)) "instruction"
+  pure [a, b]
+
 -- | A short report of the setup, for a person who wants to know whether
 -- everything works (@akyuu status@). It reads; it writes nothing, and it does
 -- not run the embedding command.
@@ -855,6 +876,8 @@ data ContextEntry
     Present Name Id Memory
   | -- | The manifest names the ref, and the store has no such ref.
     Absent Name
+  | -- | The store has no manifest (the ref of the manifest does not exist).
+    NoManifest Name
   deriving (Eq, Show)
 
 -- | What a session reads at the start: the memories of a tier and of the
@@ -877,7 +900,21 @@ data ContextReport = ContextReport
 -- and a tier that it does not have, are errors, with a text that says what
 -- to do. It writes nothing and does not sync the cache.
 contextFor :: Env -> Name -> Text -> Maybe Place -> [Name] -> IO (Either AkyuuError ContextReport)
-contextFor env manifestRef tier place extra = runExceptT $ do
+contextFor env manifestRef tier place extra = do
+  mrefE <- readRef env manifestRef
+  case mrefE of
+    Left (RefFailed (Refs.NoSuchRef _)) -> runExceptT $ do
+      -- No manifest yet (a new store): the extra refs, and a hint.
+      all' <- ExceptT (listRefValues env)
+      let held = Map.fromList all'
+      entries <- forM extra $ \n -> case Map.lookup n held of
+        Nothing -> pure (Absent n)
+        Just i -> Present n i <$> ExceptT (getMemory env i)
+      pure ContextReport {ctxTier = tier, ctxEntries = NoManifest manifestRef : entries, ctxOthers = [n | (n, _) <- all', n `notElem` extra]}
+    _ -> contextWithManifest env manifestRef tier place extra
+
+contextWithManifest :: Env -> Name -> Text -> Maybe Place -> [Name] -> IO (Either AkyuuError ContextReport)
+contextWithManifest env manifestRef tier place extra = runExceptT $ do
   mref <- ExceptT (readRef env manifestRef)
   m <- ExceptT (getMemory env (current mref))
   manifest <- either (throwE . BadInput . manifestError) pure (parseManifest (memBody m))
