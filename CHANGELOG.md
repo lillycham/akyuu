@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0.0
+## 0.1.0.0 (2026-10-13)
 
 The first release. It is for people who use Nix, a Mac or Linux, and Claude
 Code, Claude Desktop or another MCP client. Before 1.0, the commands and the
