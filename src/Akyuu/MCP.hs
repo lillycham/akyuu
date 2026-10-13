@@ -73,6 +73,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Time (NominalDiffTime)
+import Data.Version (showVersion)
+import Paths_akyuu qualified as Pkg
 import System.IO (BufferMode (LineBuffering), hFlush, hIsEOF, hPutStrLn, hSetBinaryMode, hSetBuffering, stderr, stdin, stdout)
 
 -- Tools ----------------------------------------------------------------
@@ -692,7 +694,7 @@ initializeResult cfg asked =
   object
     [ "protocolVersion" .= version,
       "capabilities" .= object ["tools" .= object ["listChanged" .= False]],
-      "serverInfo" .= object ["name" .= ("akyuu" :: Text), "version" .= ("0.1.0.0" :: Text)],
+      "serverInfo" .= object ["name" .= ("akyuu" :: Text), "version" .= showVersion Pkg.version],
       "instructions"
         .= ( "akyuu is a content-addressed memory store. A memory never changes. \
              \A ref (such as me/notes) names the current memory of a topic. \

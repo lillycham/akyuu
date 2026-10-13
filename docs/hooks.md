@@ -10,10 +10,10 @@ The manifest of the tiers (the memory under `policy/tiers`) has two more kinds
 of line, next to the tiers:
 
 ```
-always: claude/profile claude/preferences claude/memory-policy
-at ~/devel/akyuu: claude/projects/akyuu
-log ~/devel/akyuu: claude/log/akyuu
-log *: claude/log/general
+always: me/profile me/preferences policy/memory
+at ~/code/garden: me/projects/garden
+log ~/code/garden: me/log/garden
+log *: me/log
 ```
 
 - `at DIR: refs` adds the refs to the output of `context` for a session that
@@ -31,7 +31,9 @@ that does not start the server in a project.
 
 `akyuu note TEXT` and the tool `note` append an episode to the log of the
 place, with no ref to choose. The kind is `note` unless `--kind` says
-otherwise. The agent is `--agent`, then `$AKYUU_AGENT`, then `agent`. A place
+otherwise. The agent is `--agent`, then `$AKYUU_AGENT`, then (for the MCP server) the
+name that the client gives (`clientInfo.name`, for example `claude-code`), then
+`agent`. A place
 with no `log` line gives an error that says what line to add.
 
 ## Amend

@@ -12,7 +12,7 @@ a page, and the body of its current memory is rendered as Markdown.
 - The body, as Markdown: headings, lists (two levels), fenced code, quotes,
   rules, paragraphs, `code`, **strong**, *em*, `[text](https://...)` and bare
   `http(s)` URLs.
-- Links in the text: a ref name (`claude/profile`) becomes a link to its page,
+- Links in the text: a ref name (`me/profile`) becomes a link to its page,
   and a whole id becomes a link to the memory panel. Only the names of refs
   that exist are links, and only as whole words.
 - **Links to**: the `about`, `derived-from` and `refines` edges of the memory.
