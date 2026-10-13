@@ -47,7 +47,7 @@ import Akyuu.Error (AkyuuError (BadId, BadInput, BadName), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseIdSpec, readLog, readRef, resolveId, reviewPair, searchMemoriesMode, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLog, readLogSince, readRef, resolveId, reviewPair, searchMemoriesMode, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage)
@@ -72,6 +72,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
+import Data.Time (NominalDiffTime)
 import System.IO (BufferMode (LineBuffering), hFlush, hIsEOF, hPutStrLn, hSetBinaryMode, hSetBuffering, stderr, stdin, stdout)
 
 -- Tools ----------------------------------------------------------------
@@ -102,7 +103,7 @@ data ToolCall
   | -- | Append an episode to a log.
     CallAppend Name NewMemory
   | -- | Read a log: the ref, the limit, and whether to show the bodies.
-    CallLog Name (Maybe Int) Bool
+    CallLog Name (Maybe Int) Bool (Maybe NominalDiffTime)
   | -- | The tier ('Nothing' for always), the directory that stands for where
     -- the session works, and extra refs.
     CallContext (Maybe Text) (Maybe Text) [Name] (Maybe Int) (Maybe Int)
@@ -246,7 +247,8 @@ toolList =
       ( objectSchema
           [ ("ref", refSchema),
             ("limit", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "default" .= (20 :: Int), "description" .= ("The most episodes to return." :: Text)]),
-            ("full", object ["type" .= ("boolean" :: Text), "default" .= False])
+            ("full", object ["type" .= ("boolean" :: Text), "default" .= False]),
+            ("since", stringSchema "Only the episodes of the last length of time, for example 1d or 7d. With since, the default limit is 200.")
           ]
           ["ref"]
       ),
@@ -465,7 +467,9 @@ parseToolCall n args = case n of
     l <- optional' args "limit" asInt "a whole number"
     full <- maybe False id <$> optional' args "full" asBool "true or false"
     lim <- traverse (atLeast "limit" 1) l
-    pure (CallLog r lim full)
+    sinceT <- optional' args "since" asText "a string"
+    since <- traverse (check . parseDuration) sinceT
+    pure (CallLog r lim full since)
   "context" -> do
     t <- optional' args "tier" asText "a string"
     rs <- maybe [] id <$> optional' args "refs" (asList asText) "a list of strings"
@@ -603,7 +607,7 @@ runTool cfg env c = either failed id <$> go
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
       CallAppend n m -> fmap (\i -> okText (Id.render i) False) <$> appendEpisode env n m
-      CallLog n lim full -> fmap (\w -> (if full then id else shorten) (okText (T.intercalate "\n" (logLines full w)) False)) <$> readLog env n (maybe 20 id lim)
+      CallLog n lim full since -> fmap (\w -> (if full then id else shorten) (okText (T.intercalate "\n" (logLines full w)) False)) <$> maybe (readLog env n (maybe 20 id lim)) (readLogSince env n (maybe 200 id lim)) since
       CallRefList -> do
         r <- listRefValues env
         case r of

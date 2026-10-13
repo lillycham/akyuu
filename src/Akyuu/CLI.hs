@@ -41,7 +41,7 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readLogSince, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareJSON, compareLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
@@ -65,7 +65,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
-import Data.Time (getCurrentTime)
+import Data.Time (NominalDiffTime, getCurrentTime)
 import Options.Applicative (Alternative (many, some, (<|>)), CompletionResult (execCompletion), Parser, ParserInfo, ParserResult (CompletionInvoked, Failure, Success), ReadM, argument, auto, command, defaultPrefs, eitherReader, execParserPure, flag', footer, fullDesc, help, helper, hsubparser, info, long, metavar, option, optional, progDesc, readerError, renderFailure, short, showDefault, showDefaultWith, strArgument, strOption, switch, value, (<**>))
 import System.Directory (createDirectoryIfMissing, getCurrentDirectory)
 import System.Environment (getArgs, getProgName, lookupEnv)
@@ -163,7 +163,7 @@ data Command i
     Append Name (MemoryArgs i)
   | -- | Read a log: the ref, the most episodes ('Nothing' for the default),
     -- and 'True' for the bodies.
-    Log Name (Maybe Int) Bool
+    Log Name (Maybe Int) Bool (Maybe NominalDiffTime)
   | Search SearchMode SearchOptions Text
   | -- | A short report of the setup.
     Status
@@ -346,6 +346,7 @@ commandParser =
         <$> argument nameReader (metavar "REF")
         <*> optional (option (atLeast 1) (long "limit" <> short 'n' <> metavar "N" <> help "The most episodes to print. The default is 20."))
         <*> switch (long "full" <> help "Print the body of each episode.")
+        <*> optional (option (via parseDuration) (long "since" <> metavar "DURATION" <> help "Only the episodes of the last DURATION, for example 1d or 7d."))
     contextP =
       Context
         <$> optional (strOption (long "tier" <> metavar "NAME" <> help "The tier to print. The default is always."))
@@ -544,8 +545,8 @@ runCommand env c = runExceptT $ case c of
     nm <- newMemory a
     i <- ExceptT (appendEpisode env n nm)
     pure (ok [Id.render i])
-  Log n lim full -> do
-    w <- ExceptT (readLog env n (maybe 20 id lim))
+  Log n lim full since -> do
+    w <- ExceptT (maybe (readLog env n (maybe 20 id lim)) (readLogSince env n (maybe 200 id lim)) since)
     pure (ok (logLines full w))
   Context tier extra given cwd budget page -> do
     manifest <- liftIO (manifestRef given)

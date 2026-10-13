@@ -57,6 +57,7 @@ module Akyuu.Ops
     reviewPair,
     appendEpisode,
     readLog,
+    readLogSince,
     unreviewPair,
     listReviewed,
     ContextEntry (..),
@@ -99,7 +100,7 @@ import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Init qualified as Init
-import Akyuu.Memory (Memory (memAgent, memBody, memEdges, memKind), MemoryError (InvalidField), MemoryParseError, mkMemory, validField)
+import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memEdges, memKind), MemoryError (InvalidField), MemoryParseError, mkMemory, validField)
 import Akyuu.Query (Neighbour, SearchOptions, SearchResult)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (Expected, Name, Ref (current), RefError, Refs, openRefs)
@@ -125,7 +126,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
 import System.Directory (doesDirectoryExist)
 import System.FilePath ((</>))
 import Text.Read (readMaybe)
@@ -986,6 +987,17 @@ appendEpisode env n nm = runExceptT $ do
 
 -- | Read a log, newest episode first, up to a limit of episodes
 -- ('Akyuu.Episode.walk'). A ref that does not exist is an error.
+-- | 'readLog' for the episodes of the last length of time only, newest
+-- first, at most @limit@ of them. The walk stops at the first older episode, and
+-- @more@ then names it.
+readLogSince :: Env -> Name -> Int -> NominalDiffTime -> IO (Either AkyuuError Walk)
+readLogSince env n limit age = runExceptT $ do
+  now <- liftIO getCurrentTime
+  Episode.Walk es more <- ExceptT (readLog env n limit)
+  let cutoff = addUTCTime (negate age) now
+      (recent, older) = span (\(_, m) -> memCreated m >= cutoff) es
+  pure (Episode.Walk recent (case older of ((i, _) : _) -> Just i; [] -> more))
+
 readLog :: Env -> Name -> Int -> IO (Either AkyuuError Walk)
 readLog env n limit = runExceptT $ do
   ref <- ExceptT (readRef env n)

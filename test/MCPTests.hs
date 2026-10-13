@@ -219,7 +219,7 @@ toolCallCases =
         parseToolCall "append" (args [("ref", "agent/episodes"), ("kind", "episode"), ("agent", "claude"), ("body", "x")])
           @?= Right (CallAppend n (NewMemory "episode" "claude" Set.empty "x"))
         parseToolCall "log" (args [("ref", "agent/episodes"), ("limit", Number 3), ("full", Bool True)])
-          @?= Right (CallLog n (Just 3) True),
+          @?= Right (CallLog n (Just 3) True Nothing),
       testCase "context reads the tier and the refs" $ do
         parseToolCall "context" (args []) @?= Right (CallContext Nothing Nothing [] Nothing Nothing)
         n <- right (mkName "claude/projects/x")
