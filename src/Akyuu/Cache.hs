@@ -89,7 +89,7 @@ import Akyuu.Graph (Edge (Edge, kind, target), EdgeType, Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, parse, render)
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memEdges, memKind), edgeToHeader)
-import Akyuu.Store (Store, StoreError (NotFound))
+import Akyuu.Store (Store, StoreError (BadMemory, NotFound))
 import Akyuu.Store qualified as Store
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, bracketOnError, onException, tryJust)
@@ -402,8 +402,10 @@ sync cache@(Cache c) st = runExceptT $ do
   pure report {added = map fst new}
 
 -- | Read these objects from the store. An object that is not there any more
--- (GC swept it) is left out of the result. Every other store error becomes
--- 'CacheStore'.
+-- (GC swept it) is left out of the result, and so is a file that is not a valid
+-- memory (for example one that a person edited by hand): one bad file must not
+-- stop every search. 'Akyuu.Ops.verifyStore' reports such a file, and the next
+-- sync tries it again. Every other store error (the disk) becomes 'CacheStore'.
 fetchAll :: Store -> [Id] -> ExceptT CacheError IO [(Id, Memory)]
 fetchAll st ids = withExceptT CacheStore $ catMaybes <$> traverse (ExceptT . fetch) ids
   where
@@ -411,6 +413,7 @@ fetchAll st ids = withExceptT CacheStore $ catMaybes <$> traverse (ExceptT . fet
       r <- Store.get st i
       pure $ case r of
         Left (NotFound _) -> Right Nothing
+        Left (BadMemory _ _) -> Right Nothing
         _ -> (\m -> Just (i, m)) <$> r
 
 -- | Delete every row of the three tables. The tables stay.

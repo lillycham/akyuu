@@ -11,7 +11,7 @@ nix develop            # GHC, cabal, ormolu and the tools of the checks
 cabal build all
 cabal test             # the unit tests
 nix flake check        # the unit tests, the shell checks and the module check
-ormolu -i src/**/*.hs test/*.hs   # the formatter (CI does not run it yet)
+ormolu -i $(git ls-files '*.hs')  # the formatter; nix flake check checks it
 ```
 
 The tests do not touch your own store or your own embedding settings.

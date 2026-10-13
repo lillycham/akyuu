@@ -2,17 +2,17 @@
 
 module CacheTests (cacheTests) where
 
-import Akyuu.Cache (Cache, CacheError (CacheSQL, CacheStore), Hit (hitId, hitSnippet), Summary (Summary, sumFirstLine, sumId), SyncReport (SyncReport, added, removed), cachePath, cachedIds, closeCache, firstLine, forget, ftsQuery, index, indexedBody, loadGraph, openCache, reindex, search, snippetClose, snippetOpen, summaries, sync)
+import Akyuu.Cache (Cache, CacheError (CacheSQL), Hit (hitId, hitSnippet), Summary (Summary, sumFirstLine, sumId), SyncReport (SyncReport, added, removed), cachePath, cachedIds, closeCache, firstLine, forget, ftsQuery, index, indexedBody, loadGraph, openCache, reindex, search, snippetClose, snippetOpen, summaries, sync)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, dangling, nodes)
 import Akyuu.Id (Id)
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), memoryGraph, memoryId)
-import Akyuu.Store (Store, StoreError (BadMemory), add, objectPath, openStore, trash)
+import Akyuu.Store (Store, add, objectPath, openStore, trash)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
 import Control.Exception (bracket)
 import Control.Monad (forM, forM_)
 import Data.ByteString qualified as BS
-import Data.Either (isLeft, isRight)
+import Data.Either (isRight)
 import Data.List (isInfixOf, nub, sort, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -405,20 +405,13 @@ syncTests =
           _ <- addAll s ms
           _ <- right =<< sync c s
           loadGraph c >>= (@?= Right (expectedGraph ms)),
-      testCase "fails with CacheStore for an object that is not a memory" $
+      testCase "skips an object that is not a memory, and indexes the others" $
         withEnv $ \s c _ -> do
+          ids <- addAll s [mem "good one"]
           plant s (nid 5) "this is not a memory"
-          r <- sync c s
-          case r of
-            Left (CacheStore (BadMemory i _)) -> i @?= nid 5
-            other -> assertFailure ("unexpected: " ++ show other),
-      testCase "changes nothing if it fails" $
-        withEnv $ \s c _ -> do
-          _ <- addAll s [mem "good one"]
-          plant s (nid 5) "this is not a memory"
-          r <- sync c s
-          assertBool "expected Left" (isLeft r)
-          cachedIds c >>= (@?= Right Set.empty),
+          r <- right =<< sync c s
+          added r @?= ids
+          cachedIds c >>= (@?= Right (Set.fromList ids)),
       testCase "skips an object that GC sweeps after the list" $
         withEnv $ \s c _ -> do
           ids <- addAll s [mem "stays"]
@@ -434,10 +427,11 @@ syncTests =
         withEnv $ \s c _ -> do
           ids <- addAll s [mem "good one"]
           plant s (nid 5) "this is not a memory"
-          _ <- sync c s
+          _ <- right =<< sync c s
           right =<< trash s (nid 5)
           r <- right =<< sync c s
-          added r @?= ids
+          added r @?= []
+          cachedIds c >>= (@?= Right (Set.fromList ids))
     ]
 
 -- reindex --------------------------------------------------------------
@@ -460,14 +454,13 @@ reindexTests =
           _ <- right =<< reindex c s
           ids <- right =<< cachedIds c
           assertBool "the ghost is still there" (nid 77 `Set.notMember` ids),
-      testCase "changes nothing if it fails" $
+      testCase "skips an object that is not a memory" $
         withEnv $ \s c _ -> do
           _ <- addAll s [mem "good one"]
           _ <- right =<< sync c s
           before <- right =<< cachedIds c
           plant s (nid 5) "this is not a memory"
-          r <- reindex c s
-          assertBool "expected Left" (isLeft r)
+          _ <- right =<< reindex c s
           cachedIds c >>= (@?= Right before),
       testCase "gives the same graph as before" $
         withEnv $ \s c _ -> do

@@ -102,6 +102,18 @@
           (builtins.readFile ./nix/backup-check.sh);
         # The versioning script: the repository, one commit for a change, none for
         # no change, the ignore list, and a removed memory that stays in the history.
+        # The Haskell sources are formatted with ormolu (the same version as in
+        # the dev shell). Fix with: ormolu -i $(git ls-files '*.hs')
+        format = pkgs.runCommand "akyuu-format-check"
+          {
+            nativeBuildInputs = [ pkgs.haskellPackages.ormolu ];
+            src = ./.;
+          }
+          ''
+            cd $src
+            ormolu --mode check $(find app src test -name '*.hs' | sort)
+            touch $out
+          '';
         module =
           let
             lib = nixpkgs.lib;
@@ -152,6 +164,7 @@
           nativeBuildInputs = with pkgs.haskellPackages; [
             cabal-install
             haskell-language-server
+            ormolu
           ];
         };
       });
