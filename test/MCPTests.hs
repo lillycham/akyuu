@@ -297,6 +297,11 @@ runToolCases =
           -- No memory has this prefix.
           Left bad <- expandCall (resolvePrefix env) (BL.toStrict (A.encode (callReq "get" (object ["id" .= ("sha256-00000000" :: Text)]))))
           (at ["result", "isError"] bad) @?= Just (Bool True),
+      testCase "a notification with a bad prefix gets no answer" $
+        withOpsEnv $ \_ env -> do
+          let note' = BL.toStrict (A.encode (object ["jsonrpc" .= ("2.0" :: Text), "method" .= ("tools/call" :: Text), "params" .= object ["name" .= ("get" :: Text), "arguments" .= object ["id" .= ("sha256-00000000" :: Text)]]]))
+          r <- expandCall (resolvePrefix env) note'
+          r @?= Right note',
       testCase "shortIds cuts whole ids and leaves the rest" $ do
         let full = "sha256-" <> T.replicate 64 "a"
         shortIds ("x " <> full <> " y sha256-abc") @?= "x sha256-" <> T.replicate 12 "a" <> " y sha256-abc",

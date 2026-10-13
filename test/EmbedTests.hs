@@ -10,6 +10,7 @@ import Akyuu.SearchEval (Case (Case, caseCategory, caseExpect, caseGuess, caseQu
 import Control.Exception (bracket_)
 import Data.Either (isLeft)
 import Data.Text (Text)
+import Data.Time (diffUTCTime, getCurrentTime)
 import OpsTests (note, withOpsEnv)
 import Support (nid, right)
 import System.Environment (setEnv, unsetEnv)
@@ -93,6 +94,12 @@ commandCases =
         assertBool "left" (isLeft r)
         r2 <- runEmbedder (fake "no-such-command-akyuu") Document "x"
         assertBool "left" (isLeft r2),
+      testCase "a timeout stops the children of the command too" $ do
+        t0 <- getCurrentTime
+        r <- runEmbedder ((fake "sleep 20 | cat; echo '[1]'") {embTimeout = 1}) Document "x"
+        t1 <- getCurrentTime
+        assertBool "timeout" (isLeft r)
+        assertBool "returns soon, not when the child ends" (diffUTCTime t1 t0 < 10),
       testCase "a command that takes too long is a Left" $ do
         r <- runEmbedder ((fake "sleep 5; echo '[1]'") {embTimeout = 1}) Document "x"
         assertBool "timeout" (isLeft r)
@@ -152,7 +159,7 @@ searchCases =
       testCase "settings come from a config file, and the environment wins" $
         withOpsEnv $ \dir _ -> do
           let file = dir </> "embed.env"
-          writeFile file "# a comment\nAKYUU_EMBED_COMMAND=cat\nAKYUU_EMBED_QUERY_PREFIX=search_query: \nAKYUU_EMBED_MODEL=from-file\n"
+          writeFile file "# a comment\nexport AKYUU_EMBED_COMMAND=cat\r\nAKYUU_EMBED_QUERY_PREFIX=search_query: \nAKYUU_EMBED_MODEL=from-file\nAKYUU_EMBED_URL=\"http://x\"\n"
           setEnv "AKYUU_CONFIG" file
           setEnv "AKYUU_EMBED_MODEL" "from-env"
           s <- embedSettings
@@ -160,6 +167,7 @@ searchCases =
           setEnv "AKYUU_CONFIG" "/nonexistent/akyuu-embed.env"
           unsetEnv "AKYUU_EMBED_MODEL"
           lookup "AKYUU_EMBED_QUERY_PREFIX" s @?= Just "search_query: "
+          lookup "AKYUU_EMBED_URL" s @?= Just "http://x"
           fmap (\x -> (embCommand x, embModel x)) e @?= Just ("cat", "from-env"),
       testCase "a command that fails leaves a text search, with a note" $
         withOpsEnv $ \_ env -> do

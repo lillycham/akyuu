@@ -547,7 +547,9 @@ expandCall res line = case A.decodeStrict line of
   Just (Object o)
     | Just (String "tools/call") <- KM.lookup "method" o,
       Just (Object p) <- KM.lookup "params" o,
-      Just (Object a) <- KM.lookup "arguments" p -> do
+      Just (Object a) <- KM.lookup "arguments" p,
+      -- A notification gets no answer, also not an error: leave it as it is.
+      KM.member "id" o -> do
         r <- expandIds res a
         pure $ case r of
           Left why -> Left (response (fromMaybe Null (KM.lookup "id" o)) (toolResultValue (ToolResult why True)))

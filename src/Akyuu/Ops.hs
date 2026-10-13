@@ -100,7 +100,7 @@ import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), o
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersede, supersedeFrom)
 import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), parseManifest, placeLog, placeRefs, tierNames, tierRefs)
-import Control.Exception (SomeException, finally, try)
+import Control.Exception (SomeException, displayException, finally, try)
 import Control.Monad (forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE, withExceptT)
@@ -463,7 +463,11 @@ withVectors env act = do
   r <- Embed.openVectors (Embed.vectorsPath (Store.storeRoot (envStore env)))
   case r of
     Left why -> pure (Left why)
-    Right vs -> Right <$> (act vs `finally` Embed.closeVectors vs)
+    Right vs -> do
+      -- An error of SQLite (busy, disk full) is a Left: the caller falls back
+      -- to a text search, and a run of embed keeps its report.
+      r' <- try (act vs `finally` Embed.closeVectors vs)
+      pure (either (\e -> Left (T.pack (displayException (e :: SomeException)))) Right r')
 
 -- | The memories nearest to a query in meaning, if the embedding command is
 -- set and works. The other result is the notes for the person.

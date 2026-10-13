@@ -54,7 +54,8 @@ where
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Control.Applicative ((<|>))
-import Control.Exception (IOException, SomeException, try)
+import Control.Exception (IOException, SomeException, bracketOnError, onException, try)
+import Control.Monad (forM_)
 import Data.Aeson (Value (Array, Number, Object))
 import Data.Aeson qualified as A
 import Data.Aeson.KeyMap qualified as KM
@@ -78,7 +79,8 @@ import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.IO (hClose, hSetBinaryMode)
-import System.Process (CreateProcess (env, std_err, std_in, std_out), StdStream (CreatePipe, NoStream), shell, waitForProcess, withCreateProcess)
+import System.Posix.Signals (sigTERM, signalProcessGroup)
+import System.Process (CreateProcess (create_group, env, std_err, std_in, std_out), ProcessHandle, StdStream (CreatePipe, NoStream), getPid, shell, waitForProcess, withCreateProcess)
 import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
@@ -207,11 +209,19 @@ embedSettings = do
   let fromFile = case r of
         Right bs | Right t <- decodeUtf8' bs -> mapMaybe entry (T.lines t)
         _ -> []
-      entry l
+      -- A line may start with export, and may end with a carriage return. A
+      -- value in matching quotes loses them. Nothing else is interpreted.
+      entry raw
         | T.null (T.strip l) || "#" `T.isPrefixOf` T.stripStart l = Nothing
-        | otherwise = case T.breakOn "=" l of
-            (k, v) | not (T.null v) && not (T.null (T.strip k)) -> Just (T.unpack (T.strip k), T.unpack (T.drop 1 v))
+        | otherwise = case T.breakOn "=" (dropExport (T.stripStart l)) of
+            (k, v) | not (T.null v) && not (T.null (T.strip k)) -> Just (T.unpack (T.strip k), T.unpack (unquote (T.drop 1 v)))
             _ -> Nothing
+        where
+          l = fromMaybe raw (T.stripSuffix "\r" raw)
+      dropExport x = maybe x T.stripStart (T.stripPrefix "export " x)
+      unquote v
+        | T.length v >= 2, T.head v == T.last v, T.head v `elem` ['"', '\''] = T.init (T.tail v)
+        | otherwise = v
   pure (e <> [kv | kv@(k, _) <- fromFile, k `notElem` map fst e])
 
 embedderFromEnv :: IO (Maybe Embedder)
@@ -226,7 +236,8 @@ embedderFromEnv = do
             Embedder
               { embCommand = c,
                 embModel = fromMaybe c (get "AKYUU_EMBED_MODEL"),
-                embTimeout = num "AKYUU_EMBED_TIMEOUT" 10,
+                -- At most an hour, so that the microseconds cannot overflow.
+                embTimeout = min 3600 (num "AKYUU_EMBED_TIMEOUT" 10),
                 embMaxChars = num "AKYUU_EMBED_MAX_CHARS" 4000
               }
     _ -> Nothing
@@ -243,10 +254,13 @@ runEmbedder e role t = do
           { std_in = CreatePipe,
             std_out = CreatePipe,
             std_err = NoStream,
-            env = Just (("AKYUU_EMBED_ROLE", role') : filter ((/= "AKYUU_EMBED_ROLE") . fst) base)
+            env = Just (("AKYUU_EMBED_ROLE", role') : filter ((/= "AKYUU_EMBED_ROLE") . fst) base),
+            -- Its own process group, so that a timeout stops the children too
+            -- (the curl of a script), not only the shell.
+            create_group = True
           }
       input = encodeUtf8 (T.take (embMaxChars e) t)
-      go = withCreateProcess proc' $ \mi mo _ ph -> case (mi, mo) of
+      go = withCreateProcess proc' $ \mi mo _ ph -> flip onException (stopGroup ph) $ case (mi, mo) of
         (Just hin, Just hout) -> do
           hSetBinaryMode hin True
           hSetBinaryMode hout True
@@ -278,8 +292,9 @@ vectorsPath root = root </> "embeddings.sqlite"
 -- @vectors(id, model, dim, vec)@ with the key @(id, model)@.
 openVectors :: FilePath -> IO (Either Text VectorStore)
 openVectors path = do
-  r <- try $ do
-    c <- open path
+  r <- try $ bracketOnError (open path) close $ \c -> do
+    -- Two processes can write at once (akyuu embed and a server): wait.
+    execute_ c "PRAGMA busy_timeout = 5000"
     execute_ c "PRAGMA journal_mode = WAL"
     execute_ c "CREATE TABLE IF NOT EXISTS vectors (id TEXT NOT NULL, model TEXT NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL, PRIMARY KEY (id, model)) WITHOUT ROWID"
     pure (VectorStore c)
@@ -304,3 +319,10 @@ loadVectors (VectorStore c) model = do
 -- | The memories that have a vector of this model.
 storedIds :: VectorStore -> Text -> IO (Set Id)
 storedIds s model = Set.fromList . map fst <$> loadVectors s model
+
+-- | Stop the process group of a command (its shell and the children).
+-- An error (the group is gone) is ignored.
+stopGroup :: ProcessHandle -> IO ()
+stopGroup ph = do
+  mp <- getPid ph
+  forM_ mp (\p -> (try (signalProcessGroup sigTERM p) :: IO (Either SomeException ())))
