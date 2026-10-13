@@ -142,7 +142,7 @@ stringSchema :: Text -> Value
 stringSchema d = object ["type" .= ("string" :: Text), "description" .= d]
 
 refSchema :: Value
-refSchema = stringSchema "A ref name, such as claude/notes: parts of a-z, 0-9, '-', '_' and '.', joined with '/'."
+refSchema = stringSchema "A ref name, such as me/notes: parts of a-z, 0-9, '-', '_' and '.', joined with '/'."
 
 -- | The schema of an object with these properties and these required names.
 objectSchema :: [(Text, Value)] -> [Text] -> Value

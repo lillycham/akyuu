@@ -43,7 +43,7 @@ import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind))
-import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, checkStore, getMemory, listRefValues, meaningFor, missing, resolveId, searchTuning, verifyStore)
+import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, checkStore, getMemory, listRefValues, meaningFor, missing, readRef, resolveId, searchTuning, verifyStore)
 import Akyuu.Query (SearchOptions)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (RefError, nameText)
@@ -51,13 +51,15 @@ import Akyuu.Refs qualified as Refs
 import Akyuu.Render (findingJSON)
 import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Store qualified as Store
+import Akyuu.Tier (parseManifest, tierRefs)
 import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), NodeStatus (HeadNode, SupersededNode), RefEntry (RefEntry, reName, reValue), Stats (Stats, statCached, statMemories, statNewest, statPins, statRefs, statTombstones, statTrash), Window (winAll, winFocus), defaultWindow, graphView, graphViewJSON, memoryJSON, pageJSON, planJSON, refHolds, refsJSON, searchJSON, statsJSON, timeJSON, trashJSON, verifyJSON, whyJSON)
 import Control.Exception (IOException, displayException, try, tryJust)
-import Control.Monad (forM, guard)
+import Control.Monad (forM, guard, mfilter)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE, withExceptT)
 import Data.Aeson (Value, object, (.=))
 import Data.Aeson.Key qualified as K
+import Data.Bifunctor (first)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -67,6 +69,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import System.Directory (doesDirectoryExist, getModificationTime, listDirectory)
+import System.Environment (lookupEnv)
 import System.FilePath ((</>))
 import System.IO.Error (isDoesNotExistError)
 
@@ -249,7 +252,30 @@ readPages env = runExceptT $ do
       pure $ case m of
         Left err -> object ["name" .= Refs.nameText (reName e), "id" .= Id.render (Refs.current r), "error" .= describe err]
         Right x -> pageJSON (reName e) r x
-  pure (object ["pages" .= ps])
+  home <- liftIO (homePage env [reName e | e <- es, either (const False) (const True) (reValue e)])
+  pure (object ["pages" .= ps, "home" .= fmap Refs.nameText home])
+
+-- | The first page to show: the first ref of the tier @always@ of the
+-- manifest (@AKYUU_TIERS_REF@, or @policy/tiers@) that is a page. 'Nothing'
+-- if there is no manifest, or no such ref: the page then takes the first ref
+-- by name. Nothing here knows the refs of one agent or one person.
+homePage :: Env -> [Refs.Name] -> IO (Maybe Refs.Name)
+homePage env names = do
+  var <- lookupEnv "AKYUU_TIERS_REF"
+  let t = maybe "policy/tiers" T.pack (mfilter (not . null) var)
+  case Refs.mkName t of
+    Left _ -> pure Nothing
+    Right mr -> do
+      r <- readRef env mr
+      case r of
+        Left _ -> pure Nothing
+        Right ref -> do
+          m <- getMemory env (Refs.current ref)
+          pure $ case m >>= first (const (BadInput "")) . parseManifest . memBody of
+            Right manifest -> case [n | n <- maybe [] id (tierRefs "always" manifest), n `elem` names] of
+              (n : _) -> Just n
+              [] -> Nothing
+            Left _ -> Nothing
 
 -- Search -------------------------------------------------------------------
 
@@ -345,6 +371,7 @@ readBundle env = do
   trash <- part (readTrash env)
   verify <- part (readVerify env)
   checkV <- part (readCheck env)
+  pagesV <- part (readPages env)
   mems <- either (\e -> (errorValue e, errorValue e)) id <$> memories t
   pure $
     object
@@ -356,6 +383,7 @@ readBundle env = do
         "trash" .= trash,
         "verify" .= verify,
         "check" .= checkV,
+        "pages" .= pagesV,
         "memories" .= fst mems,
         "explain" .= snd mems
       ]
