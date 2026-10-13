@@ -357,6 +357,19 @@ runToolCases =
           assertBool "agent and text" ("me  note  a small thing" `T.isInfixOf` l)
           ToolResult r2 False <- runTool cfg env (CallNote (Just "/tmp") (Just "x") (NewMemory "note" "" Set.empty "other"))
           assertBool "default log" ("noted in claude/log/general " `T.isPrefixOf` r2),
+      testCase "add with a ref makes the ref, and refuses a ref that exists" $
+        withOpsEnv $ \_ env -> do
+          c1 <- either (assertFailure . show) pure (parseToolCall "add" (args [("kind", "fact"), ("agent", "claude"), ("body", "first"), ("ref", "claude/new")]))
+          ToolResult i False <- runTool defaultMcpConfig env c1
+          n <- right (mkName "claude/new")
+          ToolResult g False <- runTool defaultMcpConfig env (CallGet (Left n))
+          assertBool "the ref holds it" ("\n\nfirst" `T.isSuffixOf` g)
+          c2 <- either (assertFailure . show) pure (parseToolCall "add" (args [("kind", "fact"), ("agent", "claude"), ("body", "second"), ("ref", "claude/new")]))
+          ToolResult why True <- runTool defaultMcpConfig env c2
+          assertBool "says to supersede" ("supersede" `T.isInfixOf` why)
+          ToolResult s False <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "second")
+          s @?= "No matches."
+          assertBool "id printed" ("sha256-" `T.isPrefixOf` i),
       testCase "search takes a mode" $ do
         parseToolCall "search" (args [("query", "x"), ("mode", "text")]) @?= Right (CallSearchMode TextOnly defaultSearchOptions "x")
         parseToolCall "search" (args [("query", "x"), ("mode", "fused")]) @?= Right (CallSearch defaultSearchOptions "x")

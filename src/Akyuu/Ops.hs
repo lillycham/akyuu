@@ -22,6 +22,7 @@ module Akyuu.Ops
 
     -- * Operations
     addMemory,
+    addUnderRef,
     getMemory,
     missing,
     supersedeMemory,
@@ -224,6 +225,19 @@ addMemory env n = runExceptT $ do
   m <- buildNow n
   i <- store (Store.add (envStore env) m)
   liftIO (embedNew env i (newBody n))
+  pure i
+
+-- | Add a memory and make a new ref for it, in one step. The ref must not
+-- exist: to change the memory of a ref, use 'supersedeMemory'. The check comes
+-- first, so a refused call adds nothing.
+addUnderRef :: Env -> Name -> NewMemory -> IO (Either AkyuuError Id)
+addUnderRef env n new = runExceptT $ do
+  there <- liftIO (readRef env n)
+  case there of
+    Right _ -> throwE (BadInput ("The ref " <> Refs.nameText n <> " exists. Use supersede to change its memory."))
+    Left _ -> pure ()
+  i <- ExceptT (addMemory env new)
+  _ <- ExceptT (setRefTo env n Refs.MustBeAbsent i)
   pure i
 
 -- | The error for an 'Id' that is not in the store: 'Pruned' if GC left a
