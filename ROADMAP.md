@@ -5,8 +5,6 @@ of the decisions is in [TODO.md](TODO.md).
 
 ## Next
 
-- **macOS in CI.** Linux runs on every push and pull request. macOS can join
-  when the repository is public (the minutes are free there).
 - **A test of the systemd units on a real machine.** The module is checked by
   evaluation, and the package builds on Linux, but nobody has run the timers.
 - **Per-log retention.** A long log is found by `check` (`long-log`). Whether a

@@ -1,5 +1,4 @@
-# CI: build and test on Linux. macOS is left out on purpose for now: the
-# macOS minutes of a private repository cost ten times as much.
+# CI: build and test on Linux and macOS.
 name: ci
 
 on:
@@ -17,7 +16,11 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
