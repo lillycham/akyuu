@@ -593,7 +593,8 @@ runCommand env c = runExceptT $ case c of
     policy <- liftIO (refFromEnv "AKYUU_POLICY_REF" "policy/memory" givenPolicy)
     tiers <- liftIO (manifestRef givenTiers)
     place <- liftIO (placeFor Nothing)
-    agent <- liftIO (maybe "agent" T.pack <$> lookupEnv "AKYUU_AGENT")
+    -- Empty: the server takes the name of the client (MCP.clientAgent).
+    agent <- liftIO (maybe "" T.pack <$> lookupEnv "AKYUU_AGENT")
     mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place)) <$> policy <*> tiers))
     liftIO (MCP.serve mcpConfig env)
     pure (Output BS.empty True False)

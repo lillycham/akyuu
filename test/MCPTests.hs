@@ -6,7 +6,7 @@ import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind (Fork),
 import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
 import Akyuu.Id (IdParseError (BadHex), parse, render)
-import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (mcpAgent, mcpPlace, mcpPolicyRef), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallNote, CallRefList, CallRefSet, CallReview, CallSearch, CallSearchMode), ToolResult (ToolResult), defaultMcpConfig, expandCall, handleLine, handleMessage, parseToolCall, resolvePrefix, runTool, supportedVersions)
+import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (mcpAgent, mcpPlace, mcpPolicyRef), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallNote, CallRefList, CallRefSet, CallReview, CallSearch, CallSearchMode), ToolResult (ToolResult), clientAgent, defaultMcpConfig, expandCall, handleLine, handleMessage, parseToolCall, resolvePrefix, runTool, supportedVersions)
 import Akyuu.Ops (NewMemory (NewMemory), SearchMode (TextOnly))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), mkName)
@@ -302,6 +302,12 @@ runToolCases =
           let note' = BL.toStrict (A.encode (object ["jsonrpc" .= ("2.0" :: Text), "method" .= ("tools/call" :: Text), "params" .= object ["name" .= ("get" :: Text), "arguments" .= object ["id" .= ("sha256-00000000" :: Text)]]]))
           r <- expandCall (resolvePrefix env) note'
           r @?= Right note',
+      testCase "the name of the client becomes an agent name" $ do
+        let ini n = BL.toStrict (A.encode (req (Number 1) "initialize" (object ["clientInfo" .= object ["name" .= (n :: Text), "version" .= ("1" :: Text)]])))
+        clientAgent (ini "claude-code") @?= Just "claude-code"
+        clientAgent (ini "Claude Desktop") @?= Just "claude-desktop"
+        clientAgent (ini "") @?= Nothing
+        clientAgent "{not json" @?= Nothing,
       testCase "shortIds cuts whole ids and leaves the rest" $ do
         let full = "sha256-" <> T.replicate 64 "a"
         shortIds ("x " <> full <> " y sha256-abc") @?= "x sha256-" <> T.replicate 12 "a" <> " y sha256-abc",

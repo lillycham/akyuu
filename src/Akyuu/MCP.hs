@@ -36,6 +36,7 @@ module Akyuu.MCP
     expandIds,
     resolvePrefix,
     expandCall,
+    clientAgent,
     serve,
   )
 where
@@ -52,7 +53,7 @@ import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName,
 import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage)
 import Akyuu.Tier (Place (Place))
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
-import Control.Monad (unless)
+import Control.Monad (forM_, unless)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT)
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
@@ -64,6 +65,7 @@ import Data.Bifunctor (first)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy qualified as BL
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
@@ -616,7 +618,7 @@ runTool cfg env c = either failed id <$> go
         (Left e, _) -> pure (Left (BadName (mcpTiersRef cfg) e))
         (_, Nothing) -> pure (Left (BadInput "The server does not know its directory. Give cwd."))
         (Right manifest, Just p) -> do
-          let m' = m {newAgent = fromMaybe (mcpAgent cfg) ag}
+          let m' = m {newAgent = fromMaybe (if T.null (mcpAgent cfg) then "agent" else mcpAgent cfg) ag}
           r <- noteEpisode env manifest p m'
           pure (fmap (\(n, i) -> okText ("noted in " <> nameText n <> " " <> Id.render i) False) r)
       CallCheck o ks s -> do
@@ -665,7 +667,9 @@ data McpConfig = McpConfig
     -- | The name of the ref of the manifest of the tiers. The tool @context@
     -- reads it. See "Akyuu.Tier".
     mcpTiersRef :: Text,
-    -- | The agent of a note that names none.
+    -- | The agent of a note that names none. Empty: take the name that the
+    -- client gives in @initialize@ (@clientInfo.name@, for example
+    -- @claude-code@), or else @agent@.
     mcpAgent :: Text,
     -- | Where the server runs, to find the refs and the log of this place.
     mcpPlace :: Maybe Place
@@ -774,6 +778,21 @@ handleLine cfg run line
       Left _ -> pure (Just (errorResponse Null parseError "Parse error: the line is not JSON."))
       Right v -> handleMessage cfg run v
 
+-- | The name of the client in an @initialize@ request (@clientInfo.name@),
+-- made fit for the agent header: lower case, and spaces as hyphens. 'Nothing'
+-- for any other line, or a name that is not valid.
+clientAgent :: BS.ByteString -> Maybe Text
+clientAgent line = case A.decodeStrict line of
+  Just (Object o)
+    | Just (String "initialize") <- KM.lookup "method" o,
+      Just (Object p) <- KM.lookup "params" o,
+      Just (Object ci) <- KM.lookup "clientInfo" p,
+      Just (String n) <- KM.lookup "name" ci,
+      let name = T.intercalate "-" (T.words (T.toLower n)),
+      Right v <- checkField "agent" name ->
+        Just v
+  _ -> Nothing
+
 -- | Serve the protocol on stdin and stdout until stdin ends.
 --
 -- Each answer is one line of JSON on stdout, and stdout is flushed after
@@ -785,21 +804,26 @@ serve cfg env = do
   hSetBinaryMode stdout True
   hSetBuffering stdout LineBuffering
   logLine "akyuu mcp: ready on stdio"
-  loop
+  cfgRef <- newIORef cfg
+  loop cfgRef
   logLine "akyuu mcp: stdin closed, stopping"
   where
-    loop = do
+    loop cfgRef = do
       eof <- hIsEOF stdin
       unless eof $ do
         line <- BC.hGetLine stdin
+        -- With no agent set, the name of the client becomes the agent.
+        forM_ (clientAgent line) $ \name ->
+          modifyIORef' cfgRef (\c -> if T.null (mcpAgent c) then c {mcpAgent = name} else c)
+        now <- readIORef cfgRef
         expanded <- expandCall (resolvePrefix env) line
         answer <- case expanded of
           Left v -> pure (Just v)
-          Right l -> handleLine cfg safeRun l
+          Right l -> handleLine now (safeRun now) l
         mapM_ (\v -> BL.hPut stdout (A.encode v <> "\n") >> hFlush stdout) answer
-        loop
-    safeRun tc = do
-      r <- tryJust notAsync (runTool cfg env tc)
+        loop cfgRef
+    safeRun now tc = do
+      r <- tryJust notAsync (runTool now env tc)
       case r of
         Right x -> pure x
         Left e -> do
