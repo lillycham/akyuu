@@ -91,6 +91,7 @@ export AKYUU_ROOT=~/.local/share/akyuu   # or pass --root DIR
 mkdir -p "$AKYUU_ROOT"                   # the root must exist
 
 akyuu add --kind fact --agent me --body "Nix for every tool."   # prints the id
+akyuu add --ref me/tools --kind fact --agent me --body "..."    # the same, under a new ref
 akyuu search nix                    # text search, with the memories near each hit
 akyuu get 08d4                      # the start of an id is enough
 akyuu supersede me/notes --kind fact --agent me --body "..."
@@ -98,7 +99,9 @@ akyuu ref list                      # the name and the id of each ref
 akyuu gc --dry-run --grace 30m      # also --keep-generations N, --trash-ttl 7d
 akyuu pin 08d4                      # GC keeps a pinned memory
 akyuu pins                          # the id of each pin (akyuu unpin ID removes one)
+akyuu init                          # start a store: a policy for agents and a manifest of tiers
 akyuu context                       # the memories every session needs, in one call (the tier "always")
+akyuu context --page 1              # the same, in pages that fit a Claude Code hook (docs/hooks.md)
 akyuu amend me/notes --from tea --to coffee   # change one passage; the ref moves to a new memory (also --append TEXT)
 akyuu embed                         # vectors for search by meaning (docs/embeddings.md)
 akyuu search-eval                   # run a set of searches in each mode
@@ -109,6 +112,7 @@ akyuu status                        # the setup in a few lines: counts, manifest
 akyuu check                         # stale links, forks, duplicates, memories nothing keeps
 akyuu append me/episodes --kind episode --agent me --body "..."   # a log: each episode points at the one before
 akyuu log me/episodes               # the episodes, newest first (see docs/episodes.md)
+akyuu log me/episodes --since 7d    # only the last week
 akyuu serve                         # the read-only web UI on 127.0.0.1:7420
 akyuu seed --demo --root /tmp/demo  # a demo store, for the web UI
 ```
