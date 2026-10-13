@@ -42,7 +42,7 @@ import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind))
-import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, checkStore, getMemory, listRefValues, missing, resolveId, searchTuning, verifyStore)
+import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, checkStore, getMemory, listRefValues, meaningFor, missing, resolveId, searchTuning, verifyStore)
 import Akyuu.Query (SearchOptions)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (RefError, nameText)
@@ -241,7 +241,11 @@ readRefs env = fmap (refsJSON (keepGenerations webPolicy)) <$> readRefEntries en
 readSearch :: Env -> SearchOptions -> Text -> IO (Either AkyuuError Value)
 readSearch env o q = runExceptT $ do
   t <- liftIO (searchTuning env)
-  searchJSON q <$> cache (Query.searchWith (envCache env) t o q)
+  -- By meaning too, if a model is set. This reads the vectors and runs the
+  -- command; it writes nothing.
+  (sem, notes) <- liftIO (meaningFor env False q)
+  r <- cache (Query.searchWith (envCache env) t {Query.tuneSemantic = sem} o q)
+  pure (searchJSON q r {Query.corrections = Query.corrections r <> notes})
 
 -- GC -----------------------------------------------------------------------
 

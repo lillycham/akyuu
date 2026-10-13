@@ -41,7 +41,7 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemoriesMode, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env, IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemoriesMode, setRefTo, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareJSON, compareLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
@@ -163,7 +163,7 @@ data Command i
     Log Name (Maybe Int) Bool
   | Search SearchMode SearchOptions Text
   | -- | Give a vector to each memory that has none.
-    Embed
+    Embed Bool
   | -- | Run a set of searches (the ref), and show the refs found by each
     -- mode in the first k hits.
     SearchEvalCmd Name Int
@@ -259,7 +259,7 @@ commandParser =
       <> cmd "log" logP "Print the episodes of a log, newest first."
       <> cmd "context" contextP "Print the memories of a tier (the profile, the policy and so on) in one call, for the start of a session."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
-      <> cmd "embed" (pure Embed) "Give a vector to each memory that has none, with the command in AKYUU_EMBED_COMMAND (search by meaning)."
+      <> cmd "embed" (Embed <$> switch (long "prune" <> help "Also remove the vectors of other models and of memories that GC deleted.")) "Give a vector to each memory that has none, with the command in AKYUU_EMBED_COMMAND (search by meaning)."
       <> cmd "search-eval" searchEvalP "Run a set of searches in each mode, and show which ones find the expected memories."
       <> cmd "neighbours" neighboursP "Show the edges of a memory, in both directions."
       <> cmd "compare" compareP "Show what each of two memories says that the other lacks."
@@ -544,10 +544,12 @@ runCommand env c = runExceptT $ case c of
     who <- liftIO (maybe (maybe "agent" T.pack <$> lookupEnv "AKYUU_AGENT") pure agent)
     (n, i) <- ExceptT (noteEpisode env mr place NewMemory {newKind = kind, newAgent = who, newEdges = Set.empty, newBody = text})
     pure (ok ["noted in " <> nameText n <> " " <> Id.render i])
-  Embed -> do
+  Embed prune -> do
     me <- liftIO Embed.embedderFromEnv
     e <- maybe (ExceptT (pure (Left (BadInput "AKYUU_EMBED_COMMAND is not set. Set it to a command that reads a text on stdin and prints a vector (see docs/embeddings.md).")))) pure me
-    ok . embedLines (Embed.embModel e) <$> ExceptT (embedMissing env e)
+    removed <- if prune then ExceptT (pruneEmbeddings env e) else pure 0
+    ls <- embedLines (Embed.embModel e) <$> ExceptT (embedMissing env e)
+    pure (ok (["pruned the vectors of " <> T.pack (show removed) <> " memories or models" | prune] <> ls))
   SearchEvalCmd n k -> ok . evalLines k <$> ExceptT (evalSearch env n k)
   Search mode o q -> do
     r <- ExceptT (searchMemoriesMode env mode o q)

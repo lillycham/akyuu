@@ -104,15 +104,21 @@ guesses, and 2 of the "nothing relevant" kind. It is enough to see a large
 effect, not to tune a threshold to two decimals. Grow the set when a search
 disappoints: add the line to `policy/embedding-eval`.
 
-## Not done
+## Long memories, old vectors, the daily job
 
-- Re-embedding when `AKYUU_EMBED_MODEL` changes happens by `akyuu embed`. The
-  vectors of the old model stay in the file and are not used. A `--prune` is
-  not written.
-- A memory longer than `AKYUU_EMBED_MAX_CHARS` is cut: only its start is
-  embedded. Chunking is not done.
-- A launchd job for `akyuu embed`: new memories get their vector when they are
-  written, so the job is only a catch-up.
+- A memory longer than `AKYUU_EMBED_MAX_CHARS` is cut into chunks at blank
+  lines, and each chunk gets a vector (at most 8). A search ranks a memory by
+  its best chunk. On the eval set this took the paraphrases from 12 to 13 of
+  13, because the long memory policy is now embedded whole.
+- `akyuu embed --prune` removes the vectors of other models and of memories
+  that GC deleted.
+- The home-manager module runs `akyuu embed --prune` every day at 04:30 when
+  `embed.enable` is set. New memories get their vectors when they are written,
+  so this is a catch-up for the times when the model was not ready.
+- The search of the MCP server takes `mode` (`fused`, `text` or `meaning`), and
+  the web view searches by meaning too.
+- After an upgrade from 0.1.0.0, run `akyuu embed` once: the table changed
+  (`chunks` in place of `vectors`) and the old one is dropped.
 
 ## EmbeddingGemma 2 (2026-10-13)
 

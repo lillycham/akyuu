@@ -31,6 +31,8 @@ module Akyuu.Embed
     decodeVector,
     parseVector,
     rankBySimilarity,
+    chunkText,
+    maxChunks,
     fuse,
 
     -- * The command
@@ -39,15 +41,17 @@ module Akyuu.Embed
     embedderFromEnv,
     embedSettings,
     runEmbedder,
+    embedText,
 
     -- * The table
     VectorStore,
     vectorsPath,
     openVectors,
     closeVectors,
-    putVector,
+    putVectors,
     loadVectors,
     storedIds,
+    pruneVectors,
   )
 where
 
@@ -73,7 +77,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
-import Database.SQLite.Simple (Connection, Only (Only), close, execute, execute_, open, query, withTransaction)
+import Database.SQLite.Simple (Connection, Only (Only), close, execute, execute_, open, query, query_, withTransaction)
 import GHC.Float (castWord32ToFloat)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitSuccess))
@@ -153,9 +157,36 @@ parseVector bs = case A.eitherDecodeStrict bs of
 -- | The memories ordered by cosine similarity to the query, best first,
 -- with the similarity. Vectors of another length than the query are left
 -- out. This function is pure.
+--
+-- A memory can have several vectors (one for each chunk of a long text). It
+-- appears once, with the best of them.
 rankBySimilarity :: Vector -> [(Id, Vector)] -> [(Id, Double)]
 rankBySimilarity q vs =
-  sortOn (\(i, s) -> (Down s, i)) [(i, cosine q v) | (i, v) <- vs, length v == length q]
+  sortOn (\(i, s) -> (Down s, i)) (Map.toList (Map.fromListWith max [(i, cosine q v) | (i, v) <- vs, length v == length q]))
+
+-- | The most chunks of one memory that get a vector. A longer memory is
+-- embedded from its start: that is its first 'maxChunks' chunks.
+maxChunks :: Int
+maxChunks = 8
+
+-- | Cut a text into chunks of at most @n@ characters, for a model with a
+-- limited input. The cuts are at blank lines where they can be, so a
+-- paragraph stays whole; a paragraph longer than @n@ is cut at @n@. A text
+-- that fits is one chunk. An empty text is one empty chunk. This function is
+-- pure.
+chunkText :: Int -> Text -> [Text]
+chunkText n t
+  | T.length t <= n = [t]
+  | otherwise = pack' [] (concatMap hard (T.splitOn "\n\n" t))
+  where
+    hard p
+      | T.length p <= n = [p]
+      | otherwise = T.chunksOf n p
+    pack' acc [] = [T.intercalate "\n\n" (reverse acc) | not (null acc)]
+    pack' acc (p : ps)
+      | null acc = pack' [p] ps
+      | T.length (T.intercalate "\n\n" (reverse (p : acc))) <= n = pack' (p : acc) ps
+      | otherwise = T.intercalate "\n\n" (reverse acc) : pack' [p] ps
 
 -- | Reciprocal rank fusion of ranked lists: a memory scores @1 / (60 + r)@
 -- in each list (r from 1), and the scores add. The order is by score, and
@@ -279,6 +310,11 @@ runEmbedder e role t = do
       | code /= ExitSuccess -> Left ("The embedding command failed (" <> T.pack (show code) <> ").")
       | otherwise -> either (Left . ("The embedding command: " <>)) Right (parseVector out)
 
+-- | The vectors of a whole memory: one for each chunk ('chunkText'), at most
+-- 'maxChunks'. The first failure is the result.
+embedText :: Embedder -> Role -> Text -> IO (Either Text [Vector])
+embedText e role t = sequence <$> mapM (runEmbedder e role) (take maxChunks (chunkText (embMaxChars e) t))
+
 -- The table ------------------------------------------------------------
 
 -- | The open table of vectors.
@@ -289,31 +325,45 @@ vectorsPath :: FilePath -> FilePath
 vectorsPath root = root </> "embeddings.sqlite"
 
 -- | Open the table, and make it if the file is new. The table is
--- @vectors(id, model, dim, vec)@ with the key @(id, model)@.
+-- @chunks(id, model, chunk, dim, vec)@ with the key @(id, model, chunk)@.
+-- The table of version 0.1.0.0 (@vectors@, one vector for each memory) is
+-- dropped: it is derived data, and @akyuu embed@ makes the vectors again.
 openVectors :: FilePath -> IO (Either Text VectorStore)
 openVectors path = do
   r <- try $ bracketOnError (open path) close $ \c -> do
     -- Two processes can write at once (akyuu embed and a server): wait.
     execute_ c "PRAGMA busy_timeout = 5000"
     execute_ c "PRAGMA journal_mode = WAL"
-    execute_ c "CREATE TABLE IF NOT EXISTS vectors (id TEXT NOT NULL, model TEXT NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL, PRIMARY KEY (id, model)) WITHOUT ROWID"
+    execute_ c "DROP TABLE IF EXISTS vectors"
+    execute_ c "CREATE TABLE IF NOT EXISTS chunks (id TEXT NOT NULL, model TEXT NOT NULL, chunk INTEGER NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL, PRIMARY KEY (id, model, chunk)) WITHOUT ROWID"
     pure (VectorStore c)
   pure (either (\e -> Left (T.pack (show (e :: SomeException)))) Right r)
 
 closeVectors :: VectorStore -> IO ()
 closeVectors (VectorStore c) = close c
 
--- | Keep a vector. A second vector for the same memory and model replaces the
--- first.
-putVector :: VectorStore -> Text -> Id -> Vector -> IO ()
-putVector (VectorStore c) model i v =
-  withTransaction c $
-    execute c "INSERT OR REPLACE INTO vectors (id, model, dim, vec) VALUES (?, ?, ?, ?)" (Id.render i, model, length v, encodeVector v)
+-- | Keep the vectors of a memory, one for each chunk. They replace the vectors
+-- that the memory had for the model.
+putVectors :: VectorStore -> Text -> Id -> [Vector] -> IO ()
+putVectors (VectorStore c) model i vs =
+  withTransaction c $ do
+    execute c "DELETE FROM chunks WHERE id = ? AND model = ?" (Id.render i, model)
+    forM_ (zip [0 :: Int ..] vs) $ \(k, v) ->
+      execute c "INSERT INTO chunks (id, model, chunk, dim, vec) VALUES (?, ?, ?, ?, ?)" (Id.render i, model, k, length v, encodeVector v)
+
+-- | Remove the vectors of other models, and of memories that are not in the
+-- set (GC deleted them). Returns the number of rows removed.
+pruneVectors :: VectorStore -> Text -> Set Id -> IO Int
+pruneVectors (VectorStore c) model live = do
+  rows <- query_ c "SELECT DISTINCT id, model FROM chunks" :: IO [(Text, Text)]
+  let gone = [(i, m) | (i, m) <- rows, m /= model || either (const True) (`Set.notMember` live) (Id.parse i)]
+  withTransaction c $ forM_ gone $ \(i, m) -> execute c "DELETE FROM chunks WHERE id = ? AND model = ?" (i, m)
+  pure (length gone)
 
 -- | The vectors of a model. A row that cannot be read is left out.
 loadVectors :: VectorStore -> Text -> IO [(Id, Vector)]
 loadVectors (VectorStore c) model = do
-  rows <- query c "SELECT id, vec FROM vectors WHERE model = ?" (Only model) :: IO [(Text, ByteString)]
+  rows <- query c "SELECT id, vec FROM chunks WHERE model = ?" (Only model) :: IO [(Text, ByteString)]
   pure (mapMaybe (\(i, b) -> (,) <$> either (const Nothing) Just (Id.parse i) <*> decodeVector b) rows)
 
 -- | The memories that have a vector of this model.

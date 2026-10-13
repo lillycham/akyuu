@@ -42,6 +42,8 @@ module Akyuu.Ops
     searchMemoriesMode,
     EmbedReport (..),
     embedMissing,
+    pruneEmbeddings,
+    meaningFor,
     EvalRow (..),
     evalSearch,
     searchTuning,
@@ -434,10 +436,10 @@ embedNew env i body = do
   me <- Embed.embedderFromEnv
   forM_ me $ \e0 -> do
     let e = e0 {Embed.embTimeout = min 5 (Embed.embTimeout e0)}
-    r <- try (Embed.runEmbedder e Embed.Document body) :: IO (Either SomeException (Either Text Embed.Vector))
+    r <- try (Embed.embedText e Embed.Document body) :: IO (Either SomeException (Either Text [Embed.Vector]))
     case r of
-      Right (Right v) -> do
-        _ <- try (withVectors env (\vs -> Embed.putVector vs (Embed.embModel e) i v)) :: IO (Either SomeException (Either Text ()))
+      Right (Right vs') -> do
+        _ <- try (withVectors env (\vs -> Embed.putVectors vs (Embed.embModel e) i vs')) :: IO (Either SomeException (Either Text ()))
         pure ()
       _ -> pure ()
 
@@ -520,12 +522,20 @@ embedMissing env e = runExceptT $ do
               case m of
                 Left _ -> loop n bad run is
                 Right mem -> do
-                  v <- Embed.runEmbedder e Embed.Document (memBody mem)
+                  v <- Embed.embedText e Embed.Document (memBody mem)
                   case v of
-                    Right vec -> Embed.putVector vs (Embed.embModel e) i vec >> loop (n + 1) bad 0 is
+                    Right vecs -> Embed.putVectors vs (Embed.embModel e) i vecs >> loop (n + 1) bad 0 is
                     Left why -> loop n ((i, why) : bad) (run + 1) is
     (n, bad) <- loop (0 :: Int) [] 0 todo
     pure (EmbedReport n (Set.size have) bad)
+  either (throwE . BadInput) pure r
+
+-- | Remove the vectors of other models and of memories that are gone. Returns
+-- the number of memories whose vectors were removed.
+pruneEmbeddings :: Env -> Embed.Embedder -> IO (Either AkyuuError Int)
+pruneEmbeddings env e = runExceptT $ do
+  ids <- store (Store.list (envStore env))
+  r <- liftIO (withVectors env (\vs -> Embed.pruneVectors vs (Embed.embModel e) (Set.fromList ids)))
   either (throwE . BadInput) pure r
 
 -- | One case of a search set, with the refs that each mode found.
