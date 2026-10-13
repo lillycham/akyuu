@@ -5,6 +5,9 @@
 - Search by meaning embeds a long memory in chunks (at most 8), and ranks it by
   its best chunk. Run `akyuu embed` once after the upgrade: the table of vectors
   changed.
+- The MCP server takes the name of the client (`clientInfo.name`, for example
+  `claude-code`) as the default agent of `note`, when `AKYUU_AGENT` is not set.
+  Before, such notes had the agent `agent`.
 - `akyuu status`: the counts, the manifest, the policy, search by meaning and
   versioning, in a few lines.
 - `add --ref` (and `ref` for the MCP tool `add`) makes a new ref in the same
