@@ -160,9 +160,9 @@ parseCases =
         a <- parses ["append", "agent/episodes", "--kind", "episode", "--agent", "claude", "--body", "x"]
         cliCommand a @?= Append n (MemoryArgs "episode" "claude" [] (BodyText "x"))
         l <- parses ["log", "agent/episodes", "-n", "5", "--full"]
-        cliCommand l @?= Log n (Just 5) True
+        cliCommand l @?= Log n (Just 5) True Nothing
         d <- parses ["log", "agent/episodes"]
-        cliCommand d @?= Log n Nothing False,
+        cliCommand d @?= Log n Nothing False Nothing,
       testCase "gc takes the policy flags" $ do
         c <- parses ["gc", "--dry-run", "--keep-generations", "2", "--grace", "30m", "--trash-ttl", "1d"]
         cliCommand c @?= GC True (Policy 2 1800 86400),
@@ -403,6 +403,8 @@ runCases =
           l <- run env ["log", "agent/episodes"]
           let ls = T.lines (decodeUtf8 (outBytes l))
           length ls @?= 2
+          recent <- run env ["log", "agent/episodes", "--since", "1h"]
+          length (T.lines (decodeUtf8 (outBytes recent))) @?= 2
           assertBool "newest first" ("second thing" `T.isSuffixOf` (ls !! 0))
           assertBool "then the older" ("first thing" `T.isSuffixOf` (ls !! 1))
           full <- run env ["log", "agent/episodes", "--full", "-n", "1"]

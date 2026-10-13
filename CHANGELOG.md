@@ -12,6 +12,8 @@
   (`policy/memory`) and a manifest (`policy/tiers`). Existing refs are kept.
   `context` on a store without a manifest says what to do, and is no longer an
   error.
+- `log --since 7d` (and `since` for the MCP tool `log`) shows the episodes of
+  the last length of time.
 - `akyuu status`: the counts, the manifest, the policy, search by meaning and
   versioning, in a few lines.
 - `add --ref` (and `ref` for the MCP tool `add`) makes a new ref in the same
