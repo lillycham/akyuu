@@ -133,17 +133,17 @@ where
 
 import Akyuu.Cache (Cache, CacheError, SyncReport)
 import Akyuu.Cache qualified as Cache
-import Akyuu.Fs (atomicWrite, tryWith)
+import Akyuu.Fs (atomicWrite, ifMissing, tryWith)
 import Akyuu.Graph (EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, nodes, predecessors, reachable, singleton, successors)
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (memEdges))
+import Akyuu.Memory (Memory (memEdges), timeFormat)
 import Akyuu.Refs (RefError (NoSuchRef), Refs, getRef, listRefs, retained)
 import Akyuu.Store (Store, StoreError (NotFound), objectPath, storeRoot, trashPath)
 import Akyuu.Store qualified as Store
 import Control.Concurrent (threadDelay)
-import Control.Exception (IOException, tryJust)
-import Control.Monad (guard, unless)
+import Control.Exception (IOException)
+import Control.Monad (unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, withExceptT)
 import Data.Bifunctor (first)
@@ -178,7 +178,6 @@ import System.Directory
   )
 import System.FileLock (SharedExclusive (Exclusive), withTryFileLock)
 import System.FilePath ((</>))
-import System.IO.Error (isDoesNotExistError)
 
 -- Liveness -------------------------------------------------------------
 
@@ -276,11 +275,6 @@ allRoots r = rootRefs r <> rootPins r <> rootTemps r
 -- 'GCIO'. Other exceptions, for example a timeout, are not caught.
 tryIO :: IO a -> IO (Either GCError a)
 tryIO = tryWith GCIO
-
--- | Run an action. If it fails because a file or directory is missing, give
--- the default value. Other exceptions go up.
-ifMissing :: a -> IO a -> IO a
-ifMissing d act = either (const d) id <$> tryJust (guard . isDoesNotExistError) act
 
 -- | Read the roots from disk: the refs and the pins. 'rootTemps' is empty.
 -- Set it in the result if the run has temporary roots.
@@ -828,11 +822,6 @@ data TombstoneParseError
   | -- | The text is not @pruned: \<time\>@. The error holds the text.
     BadTombstone Text
   deriving (Eq, Show)
-
--- | The format of the time, for example @2026-10-10T12:00:00Z@. It is the
--- same format as the @created@ header of a memory.
-timeFormat :: String
-timeFormat = "%Y-%m-%dT%H:%M:%SZ"
 
 -- | Write a tombstone as bytes: @pruned: \<time\>@ and a newline. The time
 -- keeps whole seconds only.

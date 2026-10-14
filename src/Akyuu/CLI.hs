@@ -45,6 +45,7 @@ import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAgent, newBod
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareJSON, compareLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
+import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Store qualified as Store
 import Akyuu.Tier (Place (Place))
@@ -53,7 +54,7 @@ import Akyuu.Web.Read qualified as Read
 import Akyuu.Web.Server qualified as Server
 import Control.Exception (IOException, try)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT)
+import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT)
 import Data.Aeson (encode, toJSON)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
@@ -173,9 +174,9 @@ data Command i
     Init
   | -- | Give a vector to each memory that has none.
     Embed Bool
-  | -- | Run a set of searches (the ref), and show the refs found by each
-    -- mode in the first k hits.
-    SearchEvalCmd Name Int
+  | -- | Run a set of searches (the ref, or 'defaultEvalSetRef'), and show
+    -- the refs found by each mode in the first k hits.
+    SearchEvalCmd (Maybe Name) Int
   | Neighbours i
   | -- | Two memories to compare, and 'True' for JSON.
     Compare i i Bool
@@ -339,7 +340,7 @@ commandParser =
         <*> many (option kindReader (long "follow" <> metavar "KIND" <> help "Follow only this kind of edge. Repeat for more. The default is all kinds."))
     searchEvalP =
       SearchEvalCmd
-        <$> option nameReader (long "set" <> metavar "NAME" <> value (either (error "name") id (mkName "policy/embedding-eval")) <> help "The ref of the set of searches. The default is policy/embedding-eval.")
+        <$> optional (option nameReader (long "set" <> metavar "NAME" <> help "The ref of the set of searches. The default is policy/embedding-eval."))
         <*> option (atLeast 1) (long "k" <> metavar "N" <> value 3 <> showDefault <> help "How many hits count.")
     neighboursP = Neighbours <$> argument idReader (metavar "ID")
     appendP = Append <$> argument nameReader (metavar "REF") <*> memoryArgs
@@ -578,7 +579,9 @@ runCommand env c = runExceptT $ case c of
     removed <- if prune then ExceptT (pruneEmbeddings env e) else pure 0
     ls <- embedLines (Embed.embModel e) <$> ExceptT (embedMissing env e)
     pure (ok (["pruned the vectors of " <> T.pack (show removed) <> " memories or models" | prune] <> ls))
-  SearchEvalCmd n k -> ok . evalLines k <$> ExceptT (evalSearch env n k)
+  SearchEvalCmd given k -> do
+    set <- except (maybe (first (BadName defaultEvalSetRef) (mkName defaultEvalSetRef)) Right given)
+    ok . evalLines k <$> ExceptT (evalSearch env set k)
   Search mode o q -> do
     r <- ExceptT (searchMemoriesMode env mode o q)
     held <- either (const Map.empty) heldBy <$> liftIO (listRefValues env)

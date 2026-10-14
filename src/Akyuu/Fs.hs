@@ -4,17 +4,19 @@ module Akyuu.Fs
     tryAs,
     tryWith,
     ignoreIO,
+    ifMissing,
   )
 where
 
-import Control.Exception (Exception, IOException, bracket, bracketOnError, finally, try)
-import Control.Monad (void)
+import Control.Exception (Exception, IOException, bracket, bracketOnError, finally, try, tryJust)
+import Control.Monad (guard, void)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import System.Directory (removeFile, renameFile)
 import System.FilePath (takeDirectory)
 import System.IO (hClose, openBinaryTempFile)
+import System.IO.Error (isDoesNotExistError)
 import System.Posix.IO (OpenMode (ReadOnly), closeFd, defaultFileFlags, handleToFd, openFd)
 import System.Posix.Unistd (fileSynchronise)
 
@@ -35,6 +37,11 @@ tryWith = tryAs
 -- | Run an action and ignore an 'IOException'. Use it only for cleanup.
 ignoreIO :: IO () -> IO ()
 ignoreIO = void . try @IOException
+
+-- | Run an action. If it fails because a file or directory is missing, give
+-- the default value. Other exceptions go up.
+ifMissing :: a -> IO a -> IO a
+ifMissing d act = either (const d) id <$> tryJust (guard . isDoesNotExistError) act
 
 -- | Write bytes to a file so that a reader sees the old content or the new
 -- content, and never a part of it. This holds also after a crash and after a

@@ -43,6 +43,7 @@ module Akyuu.Memory
     memoryId,
     memoryGraph,
     edgeToHeader,
+    timeFormat,
   )
 where
 

@@ -14,11 +14,16 @@ module Akyuu.SearchEval
   ( Case (..),
     parseCases,
     passes,
+    defaultEvalSetRef,
   )
 where
 
 import Data.Text (Text)
 import Data.Text qualified as T
+
+-- | The ref of the set of searches when none is given.
+defaultEvalSetRef :: Text
+defaultEvalSetRef = "policy/embedding-eval"
 
 -- | One search and the answer that is expected.
 data Case = Case
