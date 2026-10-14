@@ -18,7 +18,7 @@
   --wire: #5b6b8f; --sora: #2a62bd; --fuji: #6a52c9; --on-accent: #f4f2ec;
   --rule: #dde2ec; --rule-page: #e8e8ea; --rule-strong: #c9d1e2; --rule-label: #a9b3c9; --line: #cdd3e0; --control: #727d9c;
   --shu: #b3361f; --matsu: #2a7451; --kin: #f2d67e;
-  --glow-accent: none; --glow-ink: none;
+  --glow-accent: none; --glow-ink: none; --glow-filter: none;
   --font-display: 'Shippori Mincho B1', 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif CJK JP', Georgia, serif;
   --font-mono: 'Spline Sans Mono', ui-monospace, Menlo, monospace;
   /* The names the rest of this sheet uses. */
@@ -34,7 +34,7 @@
     --wire: #aebcd8; --sora: #8fc0ff; --fuji: #b3a3f2; --on-accent: #0a1226;
     --rule: #131f3d; --rule-page: #0f1932; --rule-strong: #1a2a52; --rule-label: #2e3f6e; --line: #24345e; --control: #63729a;
     --shu: #ff8a70; --matsu: #86d4a8; --kin: #e8c66a;
-    --glow-accent: 0 0 14px rgba(143,192,255,.40); --glow-ink: 0 0 18px rgba(210,225,255,.22);
+    --glow-accent: 0 0 14px rgba(143,192,255,.40); --glow-ink: 0 0 18px rgba(210,225,255,.22); --glow-filter: drop-shadow(0 0 4px rgba(143,192,255,.55));
     --grey: #17244a;
     color-scheme: dark;
   }
@@ -75,38 +75,44 @@ button { cursor: pointer; }
 .notice.warn::before { content: "※ "; }
 .canvas { flex: 1; overflow: auto; position: relative; }
 svg.graph { display: block; }
-svg.graph text { font: 12px system-ui, sans-serif; fill: var(--fg); }
-svg.graph .date { fill: var(--muted); font-size: 11px; }
+svg.graph text { font: 12px var(--font-mono); fill: var(--fg); }
+svg.graph .date { fill: var(--ink-dim); font-size: 11px; }
 svg.graph .node { cursor: pointer; }
-svg.graph .node rect.box { stroke: var(--line); stroke-width: 1; }
-svg.graph .node.superseded rect.box { fill: var(--grey); }
+svg.graph .node text.top { font-size: 9.5px; fill: var(--ink-muted); }
+svg.graph .node text.line { font: 700 13px var(--font-display); }
+svg.graph .node rect.box { stroke: var(--wire); stroke-width: 1.2; }
+svg.graph .node .cut { fill: var(--bg); stroke: none; }
+svg.graph .node .fold { fill: none; stroke: var(--wire); stroke-width: 1.2; }
+svg.graph .node.superseded rect.box { fill: var(--grey); stroke: var(--ink-dim); }
+svg.graph .node.superseded .fold { stroke: var(--ink-dim); }
 svg.graph .node.superseded text { fill: var(--grey-fg); }
 svg.graph .node.missing rect.box, svg.graph .node.pruned rect.box { fill: none; stroke-dasharray: 5 4; stroke-width: 1.5; }
 svg.graph .node.missing rect.box { stroke: var(--warn); }
-svg.graph .node.pruned rect.box { stroke: var(--muted); }
+svg.graph .node.pruned rect.box { stroke: var(--ink-dim); }
 svg.graph .node.cacheonly rect.box { stroke: var(--warn); stroke-width: 2; }
 svg.graph .node.dim { opacity: .18; }
-svg.graph .node.nb rect.box { stroke: var(--accent); stroke-width: 2; }
-svg.graph .node.selected rect.box { stroke: var(--sel); stroke-width: 2.5; }
-svg.graph .node.seed rect.box { stroke: var(--accent); stroke-width: 2; }
-svg.graph .halo { fill: none; stroke: var(--hit); stroke-width: 6; opacity: .8; }
-svg.graph .doomed { fill: none; stroke: var(--planned); stroke-width: 2.5; stroke-dasharray: 3 3; }
-svg.graph .edge { fill: none; }
-svg.graph .edge.supersedes { stroke: var(--sup); stroke-width: 2.6; }
-svg.graph .edge.about { stroke: var(--about); stroke-width: 1.2; stroke-dasharray: 6 4; }
-svg.graph .edge.derived-from { stroke: var(--derived); stroke-width: 1.2; stroke-dasharray: 2 3; }
-svg.graph .edge.refines { stroke: var(--refines); stroke-width: 1.2; }
+svg.graph .node.nb rect.box { stroke: var(--sora); stroke-width: 1.8; }
+svg.graph .node.selected rect.box { stroke: var(--sora); stroke-width: 2.4; filter: var(--glow-filter); }
+svg.graph .node.seed rect.box { stroke: var(--sora); stroke-width: 1.8; }
+svg.graph .halo { fill: none; stroke: var(--hit); stroke-width: 5; opacity: .85; }
+svg.graph .doomed { fill: none; stroke: var(--planned); stroke-width: 2; stroke-dasharray: 3 3; }
+svg.graph .edge { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+svg.graph .edge.supersedes { stroke: var(--sup); stroke-width: 2.2; }
+svg.graph .edge.about { stroke: var(--about); stroke-width: 1.3; stroke-dasharray: 6 4; }
+svg.graph .edge.derived-from { stroke: var(--derived); stroke-width: 1.3; stroke-dasharray: 1 4; }
+svg.graph .edge.refines { stroke: var(--refines); stroke-width: 1.3; }
 svg.graph .edge.dim { opacity: .12; }
+svg.graph marker path { fill: none; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 /* Highlight: the edges of the hovered or selected node are bold, the rest is faint. */
 svg.graph.hl .edge { opacity: .08; }
-svg.graph .edge.hot { opacity: 1; stroke-width: 2.6; }
-svg.graph .edge.supersedes.hot { stroke-width: 3.8; }
+svg.graph .edge.hot { opacity: 1; stroke-width: 2.2; }
+svg.graph .edge.supersedes.hot { stroke-width: 3.2; }
 svg.graph.hl .edge.hot.dim { opacity: .35; }
-svg.graph .reftag rect { fill: var(--card); stroke: var(--accent); }
-svg.graph .reftag text { fill: var(--accent); font-size: 11px; }
-svg.graph .reftag.ghost rect { stroke-dasharray: 3 2; stroke: var(--muted); fill: none; }
-svg.graph .reftag.ghost text { fill: var(--muted); }
-svg.graph .rootmark { font-size: 11px; fill: var(--accent); }
+svg.graph .reftag rect { fill: var(--bg); stroke: var(--sora); stroke-width: 1.3; filter: var(--glow-filter); }
+svg.graph .reftag text { fill: var(--sora); font-size: 10px; font-weight: 500; }
+svg.graph .reftag.ghost rect { stroke-dasharray: 3 2; stroke: var(--ink-dim); fill: none; filter: none; }
+svg.graph .reftag.ghost text { fill: var(--ink-muted); font-weight: 400; }
+svg.graph .rootmark { font-size: 11px; fill: var(--sora); }
 svg.graph[data-overview="1"] .node > text:not(.rootmark) { display: none; }
 .canvas.panning { cursor: grabbing; user-select: none; }
 .zoombar { display: inline-flex; gap: 4px; align-items: center; margin-left: auto; }
@@ -723,7 +729,7 @@ const Akyuu = (function () {
   // generations. At most MAX_GHOSTS older ones are drawn. Then a "+N" tag
   // follows, and its title names the rest.
   const TAG_H = 15, TAG_GAP = 4, MAX_GHOSTS = 2, COL_GAP = 40;
-  const tagWidth = (label) => 8 + label.length * 6.2;
+  const tagWidth = (label) => 14 + label.length * 6.1;
   const rowWidth = (row) => row.reduce((s, t) => s + tagWidth(t.label) + TAG_GAP, 0);
   function tagRows(list) {
     const cur = [], old = [];
@@ -1343,7 +1349,11 @@ const Akyuu = (function () {
     return isNaN(d) ? String(t) : d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
   }
   function count(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
-  function kindFill(kind) { const h = kindHue(kind); return dark ? 'hsl(' + h + ',32%,30%)' : 'hsl(' + h + ',60%,86%)'; }
+  // The fill of a kind: a hue from teal to violet, to sit in the indigo palette.
+  function kindFill(kind) {
+    const h = 150 + kindHue(kind) % 160;
+    return dark ? 'hsl(' + h + ',30%,21%)' : 'hsl(' + h + ',42%,88%)';
+  }
   function idLink(id, label) {
     return el('span', { class: 'link mono', text: label || shortId(id), title: id, onclick: () => selectNode(id) });
   }
@@ -1523,8 +1533,8 @@ const Akyuu = (function () {
     const root = svg('svg', { class: 'graph', width: width, height: height, viewBox: '0 0 ' + width + ' ' + height, 'data-overview': '0' });
     const defs = svg('defs');
     for (const k of Object.keys(EDGE_VAR)) {
-      const m = svg('marker', { id: 'arrow-' + k, viewBox: '0 0 10 10', refX: '10', refY: '5', markerUnits: 'userSpaceOnUse', markerWidth: '9', markerHeight: '9', orient: 'auto' });
-      m.appendChild(svg('path', { d: 'M0,0 L10,5 L0,10 z', style: 'fill: var(--' + EDGE_VAR[k] + '); stroke: none' }));
+      const m = svg('marker', { id: 'arrow-' + k, viewBox: '0 0 10 10', refX: '9', refY: '5', markerUnits: 'userSpaceOnUse', markerWidth: '9', markerHeight: '9', orient: 'auto' });
+      m.appendChild(svg('path', { d: 'M1,1 L9,5 L1,9', style: 'stroke: var(--' + EDGE_VAR[k] + ')' }));
       defs.appendChild(m);
     }
     root.appendChild(defs);
@@ -1577,21 +1587,24 @@ const Akyuu = (function () {
       if (seeds.has(id) && state.window.focus) cls.push('seed');
       const nodeBase = cls.join(' ');
       const g = svg('g', { class: nodeBase, transform: 'translate(' + x + ',' + y + ')', 'data-id': id });
-      if (opts.halo && opts.halo.has(id)) g.appendChild(svg('rect', { class: 'halo', x: -5, y: -5, width: NODE_W + 10, height: NODE_H + 10, rx: 10 }));
-      const box = svg('rect', { class: 'box', width: NODE_W, height: NODE_H, rx: 7 });
+      if (opts.halo && opts.halo.has(id)) g.appendChild(svg('rect', { class: 'halo', x: -5, y: -5, width: NODE_W + 10, height: NODE_H + 10, rx: 0 }));
+      const box = svg('rect', { class: 'box', width: NODE_W, height: NODE_H, rx: 0 });
       if (n.status === 'head') box.setAttribute('style', 'fill: ' + kindFill(n.kind));
       g.appendChild(box);
-      if (n.status === 'superseded') g.appendChild(svg('rect', { x: 0, y: 0, width: 5, height: NODE_H, rx: 2, style: 'fill: ' + kindFill(n.kind) }));
+      // A folded corner, as on a page.
+      g.appendChild(svg('path', { class: 'cut', d: 'M' + (NODE_W - 9) + ',0 L' + NODE_W + ',0 L' + NODE_W + ',9 Z' }));
+      g.appendChild(svg('path', { class: 'fold', d: 'M' + (NODE_W - 9) + ',-0.5 L' + (NODE_W - 9) + ',9 L' + (NODE_W + 0.5) + ',9 M' + (NODE_W - 9) + ',0 L' + NODE_W + ',9' }));
+      if (n.status === 'superseded') g.appendChild(svg('rect', { x: 0, y: 0, width: 4, height: NODE_H, rx: 0, style: 'fill: ' + kindFill(n.kind) }));
       let top, bottom;
       if (n.status === 'missing') { top = 'missing target'; bottom = shortId(id); }
       else if (n.status === 'pruned') { top = 'pruned ' + fmtTime(n.prunedAt).slice(0, 10); bottom = shortId(id); }
       else { top = (n.kind || '?') + ' · ' + (n.agent || '?') + ' · ' + shortId(id).slice(0, 8); bottom = n.line || '(empty first line)'; }
-      if (bottom.length > 30) bottom = bottom.slice(0, 29) + '…';
+      if (bottom.length > 27) bottom = bottom.slice(0, 26) + '…';
       if (top.length > 34) top = top.slice(0, 33) + '…';
-      g.appendChild(svg('text', { x: 10, y: 14, style: 'font-size: 10.5px; opacity: .75', text: top }));
-      g.appendChild(svg('text', { x: 10, y: 29, text: bottom }));
+      g.appendChild(svg('text', { class: 'top', x: 10, y: 14, text: top }));
+      g.appendChild(svg('text', { class: 'line', x: 10, y: 30, text: bottom }));
       g.appendChild(svg('title', { text: id + '\n' + (n.line || n.status) }));
-      if (opts.doomed && opts.doomed.has(id)) g.appendChild(svg('rect', { class: 'doomed', x: -3, y: -3, width: NODE_W + 6, height: NODE_H + 6, rx: 9 }));
+      if (opts.doomed && opts.doomed.has(id)) g.appendChild(svg('rect', { class: 'doomed', x: -3, y: -3, width: NODE_W + 6, height: NODE_H + 6, rx: 0 }));
       // Ref names: the current values solid in the first row, the older
       // values as ghosts in the second row.
       tagsOf.get(id).forEach((row, r) => {
@@ -1599,8 +1612,8 @@ const Akyuu = (function () {
         for (const t of row) {
           const w = tagWidth(t.label);
           const tag = svg('g', { class: 'reftag' + (t.ghost ? ' ghost' : ''), transform: 'translate(' + tx + ',' + (r === 0 ? 2 : 19) + ')' });
-          tag.appendChild(svg('rect', { width: w, height: TAG_H, rx: 3 }));
-          tag.appendChild(svg('text', { x: 4, y: 11, text: t.label }));
+          tag.appendChild(svg('rect', { width: w, height: TAG_H, rx: TAG_H / 2 }));
+          tag.appendChild(svg('text', { x: w / 2, y: 11, 'text-anchor': 'middle', text: t.label }));
           tag.appendChild(svg('title', { text: t.title }));
           g.appendChild(tag);
           tx += w + TAG_GAP;
