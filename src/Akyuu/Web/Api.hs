@@ -202,7 +202,7 @@ securityHeaders =
     ("X-Frame-Options", "DENY"),
     ( "Content-Security-Policy",
       "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
-      \connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+      \connect-src 'self'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     )
   ]
 
