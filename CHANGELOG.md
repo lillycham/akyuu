@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- The web view has a new look, "Akyuu Manuscript": a page of a chronicle
+  in indigo ink. It has a paper theme (light) and an indigo theme (dark), one
+  accent for what is current, and status colours for problems (vermilion),
+  good results (pine) and search hits (gold). Text is in Shippori Mincho B1,
+  and labels, ids and dates are in Spline Sans Mono. Every tab changes.
+- The web view contains its fonts (Latin subsets, as data: URIs). It still
+  loads nothing from the network. The Content-Security-Policy now allows
+  `font-src data:`. A page and an `akyuu viz` export are about 134 KB bigger.
+  The fonts are under the SIL Open Font License 1.1 (see "Licence" in the
+  README, and `web/fonts/`).
+- Graph nodes show their kind as a strip at the left edge. The colours follow
+  the theme, also when it changes after the page loads. Labels are cut to fit
+  by their measured width.
+- The web view works in small windows and on phones (below 720 px), and in
+  forced colours (Windows high contrast).
+
 ## 0.2.0.0 (2026-10-13)
 
 The store format does not change (`docs/format.md`). The table of vectors for
