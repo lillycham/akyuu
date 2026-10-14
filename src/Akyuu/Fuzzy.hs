@@ -60,14 +60,19 @@ maxEdits w
 -- | The terms of a vocabulary that are near a word, the nearest first.
 --
 -- The vocabulary is a list of terms with the number of memories that hold
--- each one. A term is near if it is within 'maxEdits' of the word, or of the
--- start of the word that is as long as the term (a stem is shorter than the
--- word that it comes from; that second distance counts one more, so a long
--- word is not near every term that it starts with; a term of fewer than five
--- characters, or one that does not start like the word, is not compared this
--- way: it would be near too many long words). The
--- word itself is not a result. The terms with the same distance go by number of memories. At most
--- @k@ terms are returned.
+-- each one. A term is near if its distance is at most 'maxEdits' of the word.
+-- The distance of a term is the smaller of:
+--
+-- * the edits from the word, or from the word without a common ending
+--   ('forms'), to the term;
+-- * the edits from the start of the word that is as long as the term, plus
+--   one ('prefixDistance'). A stem is shorter than the word that it comes
+--   from, so this finds it; the extra edit stops a long word from being near
+--   every term that it starts with.
+--
+-- The word itself is not a result. Terms at the same distance go by the
+-- number of memories that hold them, the most first. At most @k@ terms are
+-- returned.
 nearTerms :: Int -> Text -> [(Text, Int)] -> [Text]
 nearTerms k w vocab =
   map fst . take k . sortOn (\(t, (d, c)) -> (d, Down c, t)) $
@@ -81,11 +86,18 @@ nearTerms k w vocab =
     ]
   where
     limit = maxEdits w
+    distance t = min (minimum [editDistance f t | f <- forms]) (prefixDistance t)
     -- The index holds stems (porter), so a plural or another ending of the
     -- word is cut too: "emcas" is one edit from the stem "emac" once the
-    -- "s" is gone. Each form must stay at 4 characters or more.
+    -- "s" is gone. Each form must stay at 4 characters or more. The endings
+    -- are a rough copy of what the Porter stemmer cuts, not the stemmer.
     forms = w : [x | suf <- ["ing", "es", "ed", "s", "e", "y"], Just x <- [T.stripSuffix suf w], T.length x >= 4]
-    distance t =
-      min
-        (minimum [editDistance f t | f <- forms])
-        (if T.length w > T.length t && T.length t >= 5 && T.take 3 t == T.take 3 w then editDistance (T.take (T.length t) w) t + 1 else maxBound)
+    -- The term may be the stem of the word. Only a term of 5 characters or
+    -- more that starts like the word is compared this way: a shorter one
+    -- would be near too many long words.
+    prefixDistance t
+      | T.length w > T.length t,
+        T.length t >= 5,
+        T.take 3 t == T.take 3 w =
+          editDistance (T.take (T.length t) w) t + 1
+      | otherwise = maxBound
