@@ -26,9 +26,23 @@ import Data.ByteString.Builder qualified as B
 import Data.ByteString.Lazy qualified as BL
 import Data.FileEmbed (embedFile)
 
--- | The page, as the build read it from @web/index.html@.
+-- | The page, as the build read it from @web/index.html@, with the fonts of
+-- @web/fonts.css@ in place of 'fontsMarker'.
 indexPage :: ByteString
-indexPage = $(embedFile "web/index.html")
+indexPage = splice fontsMarker $(embedFile "web/fonts.css") $(embedFile "web/index.html")
+
+-- | The place in the page's @\<style\>@ element where the @\@font-face@
+-- rules go. The fonts are @data:@ URIs, so the page still loads nothing
+-- from the network. @web/fonts/make-fonts-css.sh@ makes the file.
+fontsMarker :: ByteString
+fontsMarker = "/*AKYUU-FONTS*/"
+
+-- | Put a text in place of the first marker in a page. If the page has no
+-- marker, the text goes at the end.
+splice :: ByteString -> ByteString -> ByteString -> ByteString
+splice marker text page = before <> text <> BS.drop (BS.length marker) after
+  where
+    (before, after) = BS.breakSubstring marker page
 
 -- | The place in the page where 'vizPage' puts the data. It is an HTML
 -- comment, so the live page ignores it.
@@ -42,9 +56,8 @@ dataMarker = "<!--AKYUU-DATA-->"
 -- for that place with 'scriptSafeJSON'. If the page has no marker, the
 -- element goes at the end.
 vizPage :: Value -> ByteString
-vizPage v = before <> element <> BS.drop (BS.length dataMarker) after
+vizPage v = splice dataMarker element indexPage
   where
-    (before, after) = BS.breakSubstring dataMarker indexPage
     element =
       "<script type=\"application/json\" id=\"akyuu-data\">"
         <> BL.toStrict (scriptSafeJSON v)
