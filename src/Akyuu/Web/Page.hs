@@ -13,6 +13,7 @@
 module Akyuu.Web.Page
   ( indexPage,
     dataMarker,
+    fontsMarker,
     vizPage,
     scriptSafeJSON,
   )

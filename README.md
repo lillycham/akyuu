@@ -267,3 +267,14 @@ not delete them at once.
 ## Data Format
 
 See [docs/format.md](docs/format.md): the file of a memory, the edges, the refs and the other files, and what is stable.
+
+## Licence
+
+Akyuu is under the MIT licence ([LICENSE](LICENSE)).
+
+The web view contains two fonts under the SIL Open Font License, Version 1.1:
+Shippori Mincho B1 (The Shippori Mincho Project Authors) and Spline Sans Mono
+(The Spline Sans Mono Project Authors). The build puts them in the page, so they
+are also in the binary and in each `akyuu viz` export, with a notice in the
+page's stylesheet. Their licences are in [web/fonts/](web/fonts/), with the
+script that makes `web/fonts.css`.
