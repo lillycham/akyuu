@@ -161,6 +161,15 @@ pre.body { white-space: pre-wrap; word-break: break-word; background: var(--card
 #search-results li.old .snippet { color: var(--ink-muted); }
 #search-results h3 { font: 500 12px/1.4 var(--font-mono); color: var(--sora); margin: 22px 0 8px; }
 #search-results h3::before { content: "※ "; }
+/* GC: the count of a run as a large numeral, and the lists as ledgers. */
+#gc-summary { display: block; line-height: 1.9; }
+#gc-summary > span + span { margin-left: .5ch; }
+.tally { font: 700 26px/1 var(--font-display); padding: 0 2px; }
+.tally.bad { color: var(--shu); }
+.tally.good { color: var(--matsu); }
+#gc-lists { align-items: start; }
+#gc-lists .card { background: var(--bg); border-color: var(--rule-strong); }
+#gc-lists table.list td:last-child { word-break: break-word; }
 ol.timeline { list-style: none; margin: 0; padding: 0 0 0 12px; border-left: 1.4px solid var(--wire); }
 ol.timeline li { margin: 0 0 6px; padding-left: 8px; position: relative; }
 ol.timeline li::before { content: ""; position: absolute; left: -18px; top: 5px; width: 9px; height: 9px; transform: rotate(45deg); background: var(--bg); border: 1.6px solid var(--wire); }
@@ -2062,7 +2071,7 @@ const Akyuu = (function () {
     const refRoots = new Set(plan.roots.refs), pins = new Set(plan.roots.pins);
     $('gc-summary').replaceChildren(
       el('span', { text: 'A run now (' + fmtTime(plan.now) + ') would collect' }),
-      el('span', { class: 'pill ' + (doomed.size ? 'bad' : 'good'), text: String(doomed.size) }),
+      el('span', { class: 'tally ' + (doomed.size ? 'bad' : 'good'), text: String(doomed.size) }),
       el('span', { class: 'muted', text: 'of ' + plan.nodes + ' memories. ' + count(young.size, 'is young', 'are young') + ', ' + count(refRoots.size, 'is held by a ref', 'are held by refs') + ', ' + count(pins.size, 'is pinned', 'are pinned') + '. Policy: keep ' +
         plan.policy.keepGenerations + ' older generations, a grace period of ' + ago(plan.policy.gracePeriod * 1000) + ', trash for ' + ago(plan.policy.trashTTL * 1000) + '.' }));
     legend($('gc-legend'), state.gcGraph, [el('span', { text: 'red dashed: in the plan · ◆ held by a ref · ● pinned · ✦ young. Click a node to see why it stays.' })]);
