@@ -11,7 +11,7 @@ passes, skip the step, so that a second run of the guide changes nothing.
 - **Ask** where a step says so. These steps change files that the person owns,
   or install software. Show the exact change, and wait for a yes.
 - Never delete a store, a memory or a config file. Before you edit a config
-  file, copy it to `FILE.bak`.
+  file that is not in git, copy it to `FILE.bak`.
 - Read this guide from a release tag, and install that same tag. If the person
   gave you a link to `main`, tell them, and use the newest tag:
   `git ls-remote --tags https://github.com/lillycham/akyuu`. Below, `TAG` is
@@ -35,12 +35,53 @@ Check: `nix --version` works, and `nix flake --help` works.
 Check: `command -v akyuu` finds it, and `akyuu --version` prints the version of
 `TAG`.
 
-If the person uses home-manager, ask if they want the module (step 6.3). The
-module installs the binary too, so then skip this step.
+Most Nix users keep their software in a configuration, not in an imperative
+profile. Ask the person how they manage their setup, and where its files are.
+Then use the first choice that fits:
 
-```sh
-nix profile install github:lillycham/akyuu/TAG
-```
+1. **home-manager.** Use the module of the flake: it installs the binary, sets
+   `AKYUU_ROOT` and makes the store directory, and it has the daily jobs of
+   step 6.3. **Ask**, then add the input and the module:
+
+   ```nix
+   # flake.nix of the configuration
+   inputs.akyuu.url = "github:lillycham/akyuu/TAG";
+
+   # the home-manager configuration
+   imports = [ inputs.akyuu.homeModules.default ];
+   programs.akyuu = {
+     enable = true;
+     root = "ROOT";   # see step 3
+   };
+   ```
+
+2. **NixOS or nix-darwin, with no home-manager.** **Ask**, then add the input
+   and the package:
+
+   ```nix
+   inputs.akyuu.url = "github:lillycham/akyuu/TAG";
+
+   environment.systemPackages = [ inputs.akyuu.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+   environment.variables.AKYUU_ROOT = "ROOT";
+   ```
+
+   (Or add `inputs.akyuu.overlays.default` and use `pkgs.akyuu`.)
+
+3. **Nix with no configuration.** Install into the profile, and tell the person
+   that this is imperative:
+
+   ```sh
+   nix profile install github:lillycham/akyuu/TAG
+   ```
+
+For a configuration: show the diff, and do not run `home-manager switch`,
+`darwin-rebuild switch` or `nixos-rebuild switch` without a yes. A switch can
+need `sudo`: then the person runs it. If the configuration is a git repository,
+ask before you commit. A flake sees only files that git knows, so a new file
+must be added with `git add` before the build.
+
+If the configuration is not a flake, do not convert it. Ask the person what
+they want.
 
 ## 3. The store
 
@@ -59,8 +100,9 @@ akyuu --root ROOT status
 `init` writes a policy for agents (`policy/memory`) and a manifest of the tiers
 (`policy/tiers`). The person can change both later.
 
-For the command line, `AKYUU_ROOT` must be set. **Ask** before you add
-`export AKYUU_ROOT=ROOT` to a shell profile. The home-manager module sets it.
+For the command line, `AKYUU_ROOT` must be set. A configuration from step 2
+sets it. With a profile install, **ask** before you add
+`export AKYUU_ROOT=ROOT` to a shell profile.
 
 ## 4. Connect the agent
 
@@ -162,14 +204,13 @@ akyuu --root ROOT amend policy/tiers --from "always: policy/memory" --to "always
 
 ### 6.3 Daily jobs, the web view and search by meaning
 
-These need the home-manager module. **Ask**, then add this to the configuration
-of the person (as a flake input `akyuu.url = "github:lillycham/akyuu/TAG";`).
-Show it, and do not run `home-manager switch` or `darwin-rebuild` without a yes:
+These need the home-manager module (step 2, choice 1). **Ask**, then add the
+options that the person wants to `programs.akyuu`, with the same rules for the
+diff and the switch as in step 2:
 
 ```nix
-imports = [ inputs.akyuu.homeModules.default ];
 programs.akyuu = {
-  enable = true;              # the binary, AKYUU_ROOT and the store directory
+  enable = true;
   root = "ROOT";
   gc.enable = true;           # akyuu gc, daily at 03:30
   backup.enable = true;       # akyuu-backup, daily at 04:00
@@ -190,7 +231,7 @@ Tell the person:
 
 - the version, the root and the clients that you connected;
 - the extras that you set up, and the ones that you skipped;
-- each file that you changed, and its `.bak` copy;
+- each file that you changed, and its `.bak` copy or the git diff;
 - what they must do now, for example open the app again or start a new session;
 - that akyuu has no access control: each connected agent can read and change
   every memory, so they must not store passwords or keys in it.
