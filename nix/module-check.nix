@@ -58,6 +58,8 @@ in
   serveRestarts = lib.optionalAttrs (c.systemd.user.services != { }) c.systemd.user.services.akyuu-serve.Service.Restart;
   # A timer and its service must have the same name, so that systemd pairs them.
   oneshot = lib.optionalAttrs (c.systemd.user.services != { }) c.systemd.user.services.akyuu-gc.Service.Type;
+  hasConfigFile = c.xdg.configFile ? "akyuu/config.toml";
   hasEmbedFile = c.xdg.configFile ? "akyuu/embed.env";
+  settings = c.programs.akyuu.generatedConfig;
   pushFlag = lib.optionalAttrs (c.launchd.agents != { }) (lib.elem "--push" c.launchd.agents.akyuu-version.config.ProgramArguments);
 }

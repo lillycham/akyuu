@@ -153,7 +153,9 @@
               && expect "the timers are at the hours of the options" (linux.calendars.gc == "*-*-* 03:30:00" && linux.calendars.backup == "*-*-* 04:00:00" && linux.calendars.version == "*-*-* 04:15:00")
               && expect "a missed run is made up" linux.calendars.persistent
               && expect "a daily job is a one-shot, the web view restarts" (linux.oneshot == "oneshot" && linux.serveRestarts == "on-failure")
-              && expect "the embedding settings file is written on both" (linux.hasEmbedFile && mac.hasEmbedFile)
+              && expect "config.toml is written on both, and embed.env no more" (linux.hasConfigFile && mac.hasConfigFile && !linux.hasEmbedFile && !mac.hasEmbedFile)
+              && expect "the older embed options make the profile default" (mac.settings.embed.profile == "default" && mac.settings.embed.profiles.default.key == "m" && mac.settings.embed.profiles.default.timeout == 60 && mac.settings.embed.profiles.default.args ? gguf)
+              && expect "the root is in the file" (mac.settings.root == "/home/test/.local/share/akyuu")
               && expect "push is passed on macOS" mac.pushFlag;
           in
           assert ok;
@@ -181,7 +183,7 @@
         akyuu-embed-llama = embedLlamaFor final;
       };
 
-      # A home-manager module: the binary, AKYUU_ROOT, and optional launchd
+      # A home-manager module: the binary, config.toml, and optional launchd
       # agents for GC, backup and the web UI. See nix/home-module.nix.
       homeModules.default = import ./nix/home-module.nix self;
 
