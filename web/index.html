@@ -19,6 +19,8 @@
   --rule: #dde2ec; --rule-page: #e8e8ea; --rule-strong: #c9d1e2; --rule-label: #a9b3c9; --line: #cdd3e0; --control: #727d9c;
   --shu: #b3361f; --matsu: #2a7451; --kin: #f2d67e;
   --glow-accent: none; --glow-ink: none; --glow-filter: none;
+  --kind-s: 46%; --kind-l: 44%; --kind-mix: 11%;
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%234c5878' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --font-display: 'Shippori Mincho B1', 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif CJK JP', Georgia, serif;
   --font-mono: 'Spline Sans Mono', ui-monospace, Menlo, monospace;
   /* The names the rest of this sheet uses. */
@@ -36,6 +38,8 @@
     --shu: #ff8a70; --matsu: #86d4a8; --kin: #e8c66a;
     --glow-accent: 0 0 14px rgba(143,192,255,.40); --glow-ink: 0 0 18px rgba(210,225,255,.22); --glow-filter: drop-shadow(0 0 4px rgba(143,192,255,.55));
     --grey: #17244a;
+    --kind-s: 52%; --kind-l: 70%; --kind-mix: 15%;
+    --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239aa8c8' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     color-scheme: dark;
   }
 }
@@ -67,6 +71,7 @@ main { flex: 1; display: flex; min-height: 0; }
 .toolbar input[type=search] { border-radius: 9999px; padding: 4px 14px; }
 .toolbar button:hover, .panel button:hover, .wpage button:hover { border-color: var(--sora); color: var(--sora); }
 .toolbar input[type=number] { width: 4.5em; }
+.toolbar select { appearance: none; -webkit-appearance: none; padding-right: 30px; background-image: var(--chevron); background-repeat: no-repeat; background-position: right 11px center; background-size: 10px 6px; }
 button { cursor: pointer; }
 .chip { display: inline-flex; align-items: center; gap: 4px; border: 1.6px solid var(--sora); color: var(--sora); border-radius: 9999px; padding: 1px 4px 1px 10px; background: var(--bg); box-shadow: var(--glow-accent); }
 .chip button { border: none; background: none; padding: 0 4px; color: inherit; }
@@ -78,6 +83,11 @@ svg.graph { display: block; }
 svg.graph text { font: 12px var(--font-mono); fill: var(--fg); }
 svg.graph .date { fill: var(--ink-dim); font-size: 11px; }
 svg.graph .node { cursor: pointer; }
+svg.graph .node { --kind: hsl(var(--kh, 220) var(--kind-s) var(--kind-l)); }
+svg.graph .node rect.box { fill: color-mix(in oklab, var(--kind) var(--kind-mix), var(--bg)); }
+svg.graph .node .kindbar { fill: var(--kind); }
+svg.graph .node.superseded .kindbar { opacity: .5; }
+svg.graph .ell, .ell { font-family: var(--font-mono); font-weight: 400; }
 svg.graph .node text.top { font-size: 9.5px; fill: var(--ink-muted); }
 svg.graph .node text.line { font: 700 13px var(--font-display); }
 svg.graph .node rect.box { stroke: var(--wire); stroke-width: 1.2; }
@@ -125,6 +135,7 @@ nav .badge { background: var(--shu); color: var(--on-accent); border-radius: 999
 .legend { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 4px 14px 8px; color: var(--muted); font-size: 12px; }
 .legend svg { vertical-align: middle; display: inline-block; }
 .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line); vertical-align: middle; margin-right: 3px; }
+.swatch.kind { background: hsl(var(--kh, 220) var(--kind-s) var(--kind-l)); border-color: transparent; }
 aside.panel { width: 380px; flex: none; overflow-wrap: anywhere; border-left: 1px solid var(--rule-strong); background: var(--bg); overflow: auto; padding: 12px 16px; }
 aside.panel[hidden] { display: none; }
 .panel h2 { font: 700 18px/1.3 var(--font-display); margin: 8px 0 6px; word-break: break-all; }
@@ -1359,7 +1370,6 @@ const Akyuu = (function () {
   // ---------------------------------------------------------------------
 
   const SVGNS = 'http://www.w3.org/2000/svg';
-  const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   const GC_ALL_LIMIT = 2000;
   // A store up to this size starts with the whole graph. A bigger one starts
   // with the window of the server: the newest heads and two hops.
@@ -1390,13 +1400,43 @@ const Akyuu = (function () {
     const d = new Date(t);
     return isNaN(d) ? String(t) : d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
   }
-  // A text cut to at most n characters, with an ellipsis if it was cut.
-  function clip(t, n) { return t.length > n ? t.slice(0, n - 1) + '…' : t; }
+  // A text cut to at most n characters, as nodes: the ellipsis of a cut text
+  // is in its own span, set in mono. (The ellipsis of the Mincho face is the
+  // Japanese one, centred on the line.)
+  function clip(t, n) { return t.length > n ? [t.slice(0, n - 1).trimEnd(), el('span', { class: 'ell', text: '…' })] : [t]; }
   function count(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
-  // The fill of a kind: a hue from teal to violet, to sit in the indigo palette.
-  function kindFill(kind) {
-    const h = 150 + kindHue(kind) % 160;
-    return dark ? 'hsl(' + h + ',30%,21%)' : 'hsl(' + h + ',42%,88%)';
+  // The hue of a kind, from teal to violet, to sit in the indigo palette. The
+  // stylesheet makes the colours from it, so they follow the theme.
+  function kindStyle(kind) { return '--kh: ' + (150 + kindHue(kind) % 160); }
+
+  // The width of a text in a CSS font, measured on a canvas. Without a canvas
+  // (the check in node) it is about 0.6em a character.
+  let measure;
+  function textWidth(text, font, size) {
+    if (measure === undefined) {
+      const c = document.createElement('canvas');
+      measure = c && c.getContext ? c.getContext('2d') : null;
+    }
+    if (!measure) return text.length * size * 0.6;
+    measure.font = font;
+    return measure.measureText(text).width;
+  }
+  function fontVar(name, fallback) {
+    const v = typeof getComputedStyle === 'function' ? getComputedStyle(document.documentElement).getPropertyValue(name).trim() : '';
+    return v || fallback;
+  }
+  // The text of an SVG label that fits in max pixels: the longest start of
+  // the text that fits with an ellipsis, as tspans. The ellipsis is in mono.
+  function fitLabel(text, weight, size, family, max) {
+    const font = weight + ' ' + size + 'px ' + fontVar(family, 'monospace');
+    if (textWidth(text, font, size) <= max) return [svg('tspan', { text: text })];
+    const room = max - textWidth('…', '400 ' + size + 'px ' + fontVar('--font-mono', 'monospace'), size);
+    let lo = 0, hi = text.length;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (textWidth(text.slice(0, mid).trimEnd(), font, size) <= room) lo = mid; else hi = mid - 1;
+    }
+    return [svg('tspan', { text: text.slice(0, lo).trimEnd() }), svg('tspan', { class: 'ell', text: '…' })];
   }
   function idLink(id, label) {
     return el('span', { class: 'link mono', text: label || shortId(id), title: id, onclick: () => selectNode(id) });
@@ -1630,23 +1670,21 @@ const Akyuu = (function () {
       if (state.selected === id) cls.push('selected');
       if (seeds.has(id) && state.window.focus) cls.push('seed');
       const nodeBase = cls.join(' ');
-      const g = svg('g', { class: nodeBase, transform: 'translate(' + x + ',' + y + ')', 'data-id': id });
+      const g = svg('g', { class: nodeBase, transform: 'translate(' + x + ',' + y + ')', 'data-id': id, style: kindStyle(n.kind) });
       if (opts.halo && opts.halo.has(id)) g.appendChild(svg('rect', { class: 'halo', x: -5, y: -5, width: NODE_W + 10, height: NODE_H + 10, rx: 0 }));
       const box = svg('rect', { class: 'box', width: NODE_W, height: NODE_H, rx: 0 });
-      if (n.status === 'head') box.setAttribute('style', 'fill: ' + kindFill(n.kind));
       g.appendChild(box);
       // A folded corner, as on a page.
       g.appendChild(svg('path', { class: 'cut', d: 'M' + (NODE_W - 9) + ',0 L' + NODE_W + ',0 L' + NODE_W + ',9 Z' }));
       g.appendChild(svg('path', { class: 'fold', d: 'M' + (NODE_W - 9) + ',-0.5 L' + (NODE_W - 9) + ',9 L' + (NODE_W + 0.5) + ',9 M' + (NODE_W - 9) + ',0 L' + NODE_W + ',9' }));
-      if (n.status === 'superseded') g.appendChild(svg('rect', { x: 0, y: 0, width: 4, height: NODE_H, rx: 0, style: 'fill: ' + kindFill(n.kind) }));
+      if (n.status === 'head' || n.status === 'superseded') g.appendChild(svg('rect', { class: 'kindbar', x: 0, y: 0, width: 4, height: NODE_H, rx: 0 }));
       let top, bottom;
       if (n.status === 'missing') { top = 'missing target'; bottom = shortId(id); }
       else if (n.status === 'pruned') { top = 'pruned ' + fmtTime(n.prunedAt).slice(0, 10); bottom = shortId(id); }
       else { top = (n.kind || '?') + ' · ' + (n.agent || '?') + ' · ' + shortId(id).slice(0, 8); bottom = n.line || '(empty first line)'; }
-      if (bottom.length > 27) bottom = bottom.slice(0, 26) + '…';
-      if (top.length > 34) top = top.slice(0, 33) + '…';
-      g.appendChild(svg('text', { class: 'top', x: 10, y: 14, text: top }));
-      g.appendChild(svg('text', { class: 'line', x: 10, y: 30, text: bottom }));
+      // The top line stays clear of the folded corner.
+      g.appendChild(svg('text', { class: 'top', x: 10, y: 14 }, fitLabel(top, 400, 9.5, '--font-mono', NODE_W - 24)));
+      g.appendChild(svg('text', { class: 'line', x: 10, y: 30 }, fitLabel(bottom, 700, 13, '--font-display', NODE_W - 18)));
       g.appendChild(svg('title', { text: id + '\n' + (n.line || n.status) }));
       if (opts.doomed && opts.doomed.has(id)) g.appendChild(svg('rect', { class: 'doomed', x: -3, y: -3, width: NODE_W + 6, height: NODE_H + 6, rx: 0 }));
       // Ref names: the current values solid in the first row, the older
@@ -1802,7 +1840,7 @@ const Akyuu = (function () {
   function legend(container, graph, extra) {
     container.replaceChildren();
     const kinds = graph ? Array.from(new Set(graph.nodes.map(n => n.kind).filter(Boolean))).sort() : [];
-    for (const k of kinds) container.appendChild(el('span', {}, [el('span', { class: 'swatch', style: 'background:' + kindFill(k) }), k]));
+    for (const k of kinds) container.appendChild(el('span', {}, [el('span', { class: 'swatch kind', style: kindStyle(k) }), k]));
     for (const k of Object.keys(EDGE_VAR)) {
       const s = svg('svg', { class: 'graph', width: 34, height: 10 });
       s.appendChild(svg('path', { d: 'M2,5 L32,5', class: 'edge ' + k }));
@@ -1993,7 +2031,7 @@ const Akyuu = (function () {
         ol.appendChild(el('li', { class: kept ? '' : 'notkept' }, [
           el('span', { class: 'gen' + (gen === 0 ? ' now' : ''), text: gen === 0 ? 'current ' : 'generation ' + gen + ' ' }),
           idLink(id),
-          n ? el('div', { class: 'line', text: clip(n.line || '', 60) }) : null,
+          n ? el('div', { class: 'line' }, clip(n.line || '', 60)) : null,
           n && n.status !== 'head' && n.status !== 'superseded' ? el('span', { class: 'pill bad', text: n.status }) : null,
           kept ? null : el('span', { class: 'pill', text: 'GC does not keep it' })]));
       });
@@ -2514,6 +2552,8 @@ const Akyuu = (function () {
     bindZoom($('graph-canvas'));
     bindZoom($('gc-canvas'));
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePanel(); });
+    // The graph labels are fitted by measure: draw again once the fonts are in.
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(redrawCurrent);
     $('wiki-filter').addEventListener('input', renderWikiNav);
     window.addEventListener('hashchange', openWikiFromHash);
     const start = (location.hash || '#wiki').slice(1);
