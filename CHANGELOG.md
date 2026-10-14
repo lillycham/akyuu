@@ -2,7 +2,31 @@
 
 ## Unreleased
 
+### Added
+
+- A config file, `~/.config/akyuu/config.toml` (or `$AKYUU_CONFIG`), for every
+  setting: the root, the refs of the policy and the manifest, the agent, and
+  search by meaning. A variable of the environment wins over the file, and an
+  option wins over both. An unknown key is reported with its line.
+- Embedding profiles: `[embed.profiles.NAME]` keeps the command, the key, the
+  prefixes, the minimum similarity and the arguments of one model together.
+  `embed.profile` picks one, and `--embed-profile NAME` (or
+  `$AKYUU_EMBED_PROFILE`) picks another for one command.
+- `akyuu config` shows each setting in effect and where it came from. It needs
+  no store.
+- `embed` and `status` warn when the vectors of a key were made by another
+  command, other arguments or other prefixes (a fingerprint in
+  `embeddings.sqlite`).
+- The home-manager module writes `config.toml`, has the options
+  `embed.profiles`, `embed.profile` and `settings`, and no longer sets session
+  variables or writes `embed.env`.
+
 ### Changes
+
+- akyuu puts the prefix of the model before the text. The commands
+  `akyuu-embed-llama` and `akyuu-embed-openai` no longer add it, so a command
+  of your own that adds the prefix itself must stop, or the text gets it twice.
+- `status` names the profile and the key, and the config file.
 
 - The web view has a new look, "Akyuu Manuscript": a page of a chronicle
   in indigo ink. It has a paper theme (light) and an indigo theme (dark), one

@@ -6,7 +6,7 @@ akyuu, akyuu-backup, akyuu-version - a memory store for agents
 
 # SYNOPSIS
 
-*akyuu* [*--root* _dir_] _command_ [_arg_ ...]
+*akyuu* [*--root* _dir_] [*--embed-profile* _name_] _command_ [_arg_ ...]
 
 *akyuu* *--version*
 
@@ -23,7 +23,8 @@ an agent writes a new memory that supersedes the old one and moves the ref to
 it. The old memory stays until *gc* collects it. Memories link to older ones
 with edges, and the links form a graph. The format on disk is in *akyuu*(5).
 
-The store is the directory _dir_ of *--root*, or *$AKYUU_ROOT*. An _id_ is
+The store is the directory _dir_ of *--root*, or *$AKYUU_ROOT*, or *root* in
+the config file (see CONFIGURATION). An _id_ is
 *sha256-* and 64 hex digits; a command takes the first 4 or more of them, with
 or without *sha256-*, when only one memory starts with them. A _duration_ is a
 number and a unit: *30m*, *1h*, *7d* (*s*, *m*, *h* or *d*).
@@ -89,7 +90,7 @@ before it, so the log keeps its whole history.
 *note* [*--cwd* _dir_] [*--kind* _text_] [*--agent* _text_] [*--manifest* _name_] _text_ ...
 	Append a note (kind *note*) to the log that the manifest names for the
 	current directory, or _dir_. The agent is *--agent*, then *$AKYUU_AGENT*,
-	then *agent*.
+	then *agent* in the config file, then *agent*.
 
 *log* _ref_ [*-n* _n_ | *--limit* _n_] [*--full*] [*--since* _duration_]
 	Print the episodes of a log, newest first: 20 of them, or _n_, or those of
@@ -98,10 +99,10 @@ before it, so the log keeps its whole history.
 ## Context
 
 The _manifest_ is the memory of the ref *policy/tiers* (or *--manifest*, or
-*$AKYUU_TIERS_REF*). Each line is a tier and its refs, *always:* _refs_; or
-*at* _dir_*:* _refs_, refs for a session in _dir_ or below it; or *log* _dir_*:*
-_ref_, the log that *note* writes to (_dir_ may be *\**, and *~* is the home
-directory).
+*$AKYUU_TIERS_REF*, or *tiers-ref* in the config file). Each line is a tier and
+its refs, *always:* _refs_; or *at* _dir_*:* _refs_, refs for a session in _dir_
+or below it; or *log* _dir_*:* _ref_, the log that *note* writes to (_dir_ may
+be *\**, and *~* is the home directory).
 
 *context* [*--tier* _name_] [*--ref* _name_] [*--manifest* _name_] [*--cwd* _dir_] [*--budget* _chars_] [*--page* _n_]
 	Print the memories of the tier *always* (or _name_) and of the place, with
@@ -115,8 +116,14 @@ directory).
 	(*policy/tiers*). Refs that exist are kept.
 
 *status*
-	Print the root, the counts, the manifest, the policy, and whether search by
-	meaning and versioning are set up.
+	Print the root, the counts, the manifest, the policy, whether search by
+	meaning and versioning are set up, and the config file.
+
+*config*
+	Print each setting in effect and where it came from: an option, a
+	variable, the config file or the default. Then print the notes about the
+	file: unknown keys, values that were left out, an older file. It needs no
+	store, so it also explains a setup that does not work.
 
 ## Search
 
@@ -128,9 +135,11 @@ directory).
 	meaning, the default), *text* or *meaning*.
 
 *embed* [*--prune*]
-	Give a vector to each memory that has none, with the command in
-	*$AKYUU_EMBED_COMMAND*. *--prune* also removes the vectors of other models
-	and of deleted memories. Without the command, search uses words only.
+	Give a vector to each memory that has none, with the embedding profile in
+	use (see CONFIGURATION). *--prune* also removes the vectors of other keys
+	and of deleted memories. It warns when the vectors of the key were made by
+	another command, other arguments or other prefixes. Without a profile,
+	search uses words only.
 
 *search-eval* [*--set* _name_] [*--k* _n_]
 	Run the searches in the memory of _name_ (*policy/embedding-eval* by
@@ -178,7 +187,7 @@ directory).
 	Serve the Model Context Protocol (JSON-RPC 2.0) on the standard input and
 	output until the input ends. The tools are the commands above. The server
 	tells the agent to read the policy (*policy/memory*, or *--policy-ref*, or
-	*$AKYUU_POLICY_REF*) first.
+	*$AKYUU_POLICY_REF*, or *policy-ref* in the config file) first.
 
 *serve* [*-p* _n_ | *--port* _n_]
 	Serve a read-only web view of the store on 127.0.0.1, port _n_ (7420; *0*
@@ -206,32 +215,74 @@ for each run that finds a change, with a message that counts what changed.
 *--message* adds a line. *--push* pushes to the first remote; a failed push is
 a warning.
 
+# CONFIGURATION
+
+The settings are in a TOML file, *~/.config/akyuu/config.toml* (or
+*$XDG_CONFIG_HOME/akyuu/config.toml*, or *$AKYUU_CONFIG*). Every key is
+optional. A variable of the environment wins over the file, and an option wins
+over both; *akyuu config* shows which one set each value.
+
+```
+root = "~/.local/share/akyuu"
+policy-ref = "me/policy"
+tiers-ref = "policy/tiers"
+agent = "me"
+
+[embed]
+profile = "nomic"
+
+[embed.profiles.nomic]
+command = "akyuu-embed-llama"
+key = "llama:nomic-v1.5-q8_0"
+query-prefix = "search_query: "
+document-prefix = "search_document: "
+min = 0.55
+timeout = 60
+args = { gguf = "/models/nomic-embed-text-v1.5.Q8_0.gguf" }
+```
+
+*root*, *policy-ref*, *tiers-ref* and *agent* are the store, the refs of the
+policy and the manifest, and the agent of *note* and *mcp*; *~/* at the start
+of *root* is the home directory.
+
+An embedding profile turns search by meaning on. Its *command*, run by *sh -c*,
+reads a text on its standard input and prints a vector as JSON. *key* names
+the vectors: vectors with different keys are never compared, so change it
+when the model, its runtime or its quantisation changes. Akyuu puts
+*query-prefix* before a search and *document-prefix* before a memory. *min* is
+the lowest cosine similarity that counts as near (none by default; it depends
+on the model, so find it with *search-eval*). *timeout* is the seconds for one
+call (10), and *max-chars* the most characters sent (4000). Each key of *args*
+reaches the command as a variable: *gguf* as *AKYUU_EMBED_GGUF*, *api-model*
+as *AKYUU_EMBED_API_MODEL*; akyuu itself does not read them.
+
+*embed.profile* names the profile in use; a file with one profile needs no
+name. *--embed-profile* or *$AKYUU_EMBED_PROFILE* picks another for one
+command, which suits a comparison of models with *search-eval*.
+
 # ENVIRONMENT
 
-*AKYUU_ROOT*
-	The store, when *--root* is not given.
+*AKYUU_ROOT*, *AKYUU_POLICY_REF*, *AKYUU_TIERS_REF*, *AKYUU_AGENT*
+	The settings *root*, *policy-ref*, *tiers-ref* and *agent*, over the
+	config file. An empty value is no value.
 
-*AKYUU_AGENT*
-	The agent of *note*, when *--agent* is not given.
+*AKYUU_EMBED_PROFILE*
+	The embedding profile in use, over *embed.profile*.
 
-*AKYUU_POLICY_REF*, *AKYUU_TIERS_REF*
-	The refs of the policy and the manifest, in place of *policy/memory* and
-	*policy/tiers*.
+*AKYUU_EMBED_MIN*, *AKYUU_EMBED_TIMEOUT*, *AKYUU_EMBED_MAX_CHARS*
+	The *min*, *timeout* and *max-chars* of the profile in use, over the file.
 
-*AKYUU_EMBED_COMMAND*
-	A command, run by *sh -c*, that reads a text on its standard input and
-	prints a vector as JSON. It sets search by meaning on. The command gets
-	*AKYUU_EMBED_ROLE*, *query* or *document*.
+*AKYUU_EMBED_COMMAND*, *AKYUU_EMBED_MODEL*, *AKYUU_EMBED_QUERY_PREFIX*, *AKYUU_EMBED_DOCUMENT_PREFIX*
+	The older way to set search by meaning: a profile named *environment*,
+	with the command, the key and the prefixes. It wins over the profiles of
+	the file. The command gets every *AKYUU_EMBED_* variable, as before.
 
-*AKYUU_EMBED_MODEL*, *AKYUU_EMBED_TIMEOUT*, *AKYUU_EMBED_MAX_CHARS*, *AKYUU_EMBED_MIN*
-	The key of the vectors (vectors with different keys are never compared),
-	the seconds for one call (10), the most characters sent (4000), and the
-	lowest similarity that counts as near.
+*AKYUU_EMBED_ROLE*
+	Set for the command: *query* or *document*.
 
 *AKYUU_CONFIG*
-	A file of *NAME=value* lines for the variables above, read when they are
-	not set. The default is *$XDG_CONFIG_HOME/akyuu/embed.env*, then
-	*~/.config/akyuu/embed.env*.
+	The config file. A name that ends in *.toml* is read as TOML; any other
+	name is read in the older format of *embed.env*.
 
 # FILES
 
@@ -248,15 +299,24 @@ _root_/cache.sqlite, _root_/embeddings.sqlite
 	The text index and the vectors. They are made from the store, and can be
 	deleted at any time.
 
+_root_/embeddings.sqlite also keeps a fingerprint of the profile that made
+the vectors of each key, for the warning of *embed* and *status*.
+
+*~/.config/akyuu/config.toml*
+	The settings; see CONFIGURATION.
+
 *~/.config/akyuu/embed.env*
-	Settings for search by meaning.
+	The older settings for search by meaning: *NAME=value* lines of the
+	*AKYUU_EMBED_* variables. It is read only when there is no
+	*config.toml*, and *akyuu config* says to move it.
 
 # EXAMPLES
 
 Start a store, write a memory under a ref, and change it:
 
 ```
-export AKYUU_ROOT=~/.local/share/akyuu
+mkdir -p ~/.config/akyuu
+echo 'root = "~/.local/share/akyuu"' > ~/.config/akyuu/config.toml
 akyuu init
 akyuu add --ref me/garden --kind fact --agent me --body 'Water the tomatoes daily.'
 akyuu amend me/garden --from daily --to 'every second day'
@@ -268,6 +328,14 @@ Keep a log, and read the last week of it:
 ```
 akyuu append me/episodes --kind episode --agent me --body 'Picked the first basil.'
 akyuu log me/episodes --since 7d
+```
+
+Compare a second embedding profile with the one in use:
+
+```
+akyuu --embed-profile gemma embed
+akyuu --embed-profile gemma search-eval
+akyuu search-eval
 ```
 
 See what *gc* would collect, and what needs attention:

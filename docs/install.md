@@ -10,7 +10,7 @@ inputs.akyuu.url = "github:lillycham/akyuu";
 # in the home-manager configuration
 imports = [ inputs.akyuu.homeModules.default ];
 programs.akyuu = {
-  enable = true;        # the binary, AKYUU_ROOT, and the store directory
+  enable = true;        # the binary, ~/.config/akyuu/config.toml, and the store directory
   gc.enable = true;     # `akyuu gc` once a day (03:30)
   backup.enable = true; # `akyuu-backup` once a day (04:00)
   # gc.keepGenerations = 5;  # older values of each ref that GC keeps
@@ -23,6 +23,12 @@ programs.akyuu = {
 
 The three `gc` options are passed to `akyuu gc` as `--keep-generations`, `--grace` and `--trash-ttl`.
 A time is a number and a unit (`s`, `m`, `h` or `d`). The values above are the defaults.
+
+The module writes the root, `policyRef`, `tiersRef` and the embedding profiles
+to `~/.config/akyuu/config.toml`, so a shell, a desktop app and a service all
+read the same settings. `programs.akyuu.settings` adds any other key of the
+file (see CONFIGURATION in `man akyuu`), and `akyuu config` shows each setting
+and where it came from.
 
 The daily jobs are launchd agents on macOS, with their logs in `~/Library/Logs`.
 On Linux they are systemd user timers (`systemctl --user list-timers 'akyuu-*'`,
@@ -38,6 +44,10 @@ inputs.akyuu.url = "github:lillycham/akyuu";
 environment.systemPackages = [ inputs.akyuu.packages.${pkgs.stdenv.hostPlatform.system}.default ];
 environment.variables.AKYUU_ROOT = "/home/you/.local/share/akyuu";
 ```
+
+A variable reaches only the programs that start with it. To give every client
+the same root, put it in the config file instead:
+`root = "~/.local/share/akyuu"` in `~/.config/akyuu/config.toml`.
 
 The flake also has an overlay (`overlays.default`) that adds `pkgs.akyuu`.
 

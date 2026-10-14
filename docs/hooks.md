@@ -31,9 +31,9 @@ that does not start the server in a project.
 
 `akyuu note TEXT` and the tool `note` append an episode to the log of the
 place, with no ref to choose. The kind is `note` unless `--kind` says
-otherwise. The agent is `--agent`, then `$AKYUU_AGENT`, then (for the MCP server) the
-name that the client gives (`clientInfo.name`, for example `claude-code`), then
-`agent`. A place
+otherwise. The agent is `--agent`, then `$AKYUU_AGENT`, then `agent` in the
+config file, then (for the MCP server) the name that the client gives
+(`clientInfo.name`, for example `claude-code`), then `agent`. A place
 with no `log` line gives an error that says what line to add.
 
 ## Amend
