@@ -119,7 +119,7 @@ searchLinesWith held r = concatMap matchLines (matches r) <> contextLines <> map
     oneLine = T.unwords . T.words
 
 -- | A snippet as text for a person: each match is in square brackets, for
--- example @Lilly prefers [Haskell] for the@.
+-- example @water the [tomatoes] every@.
 --
 -- A snippet from 'Akyuu.Cache.search' has the marks 'snippetOpen' and
 -- 'snippetClose'. A bracket in the text of the body gets a backslash, so a

@@ -14,8 +14,8 @@
 -- The format of the manifest is one line for each group of refs:
 --
 -- > # A comment.
--- > always: claude/profile claude/preferences claude/memory-policy
--- > background: claude/values, claude/thinking
+-- > always: me/profile me/preferences policy/memory
+-- > background: me/values, me/reading
 --
 -- A line is a tier name, a colon, and ref names that white space or commas
 -- separate. A tier can have more than one line. A ref that appears twice in a
@@ -26,9 +26,9 @@
 -- is the word @at@ or @log@ and a directory. A directory may start with
 -- @~@, and it matches itself and the directories below it.
 --
--- > at ~/devel/akyuu: claude/projects/akyuu
--- > log ~/devel/akyuu: claude/log/akyuu
--- > log *: claude/log/general
+-- > at ~/code/garden-app: me/projects/garden-app
+-- > log ~/code/garden-app: me/log/garden-app
+-- > log *: me/log
 --
 -- An @at@ line adds refs to the context of a session that works in that
 -- directory. A @log@ line names the log that a note goes to. The most

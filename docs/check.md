@@ -2,8 +2,8 @@
 
 Status: built on 2026-10-11 (detectors 1 to 5 and 7, the CLI, the MCP tool and the web view).
 Detector 6 (`SameProject`) is not built. The seed has no extra cases: the tests build their own stores.
-On the real store the first run found the two orphans of the import, a stale link to the old profile, and an
-unreferenced copy of the akyuu project memory that nobody knew about. The threshold of 0.8 gave no false positive there.
+On a real store of about 80 memories, the first run found two orphans of an import, a stale link, and an
+unreferenced copy of a project memory that nobody knew about. The threshold of 0.8 gave no false positive there.
 
 ## Purpose
 
@@ -162,7 +162,7 @@ Each step is a commit that builds and passes. Steps 1 and 2 are enough to use it
 
 ## Open questions
 
-- **Threshold.** 0.8 is a guess. It should come from the real store: run it on
+- **Threshold.** 0.8 is a guess. It should come from real stores: run it on
   yours and look at the pairs between 0.5 and 0.9.
 - **Where it is allowed to be loud.** Should `gc` print `check` Problems before it
   runs? Probably not: GC is a timer job and nobody reads the log. A `launchd` job

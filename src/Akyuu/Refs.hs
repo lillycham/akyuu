@@ -9,7 +9,7 @@
 --
 -- Layout, under the root directory of the store:
 --
--- > refs/claude/notes      the ref named claude/notes
+-- > refs/me/notes          the ref named me/notes
 -- > refs/.lock             the lock file (see below)
 --
 -- A ref file holds one 'Id' on each line, in the text form, newest first.
@@ -101,7 +101,7 @@ import System.IO.Error
 
 -- Names ----------------------------------------------------------------
 
--- | The name of a ref, for example @claude/notes@.
+-- | The name of a ref, for example @me/notes@.
 --
 -- A name becomes a path on disk, so the constructor is not exported. Make a
 -- name with 'mkName'. Then no name can leave the @refs@ directory.

@@ -3,8 +3,8 @@
 Status: built 2026-10-11; settings in profiles of the config file since
 2026-10-14. It is off until a profile is set. Without one, nothing changes.
 
-Text search finds the words of a query. It does not find "her computer is
-running out of room" when the memory says "mirai is short of disk". An
+Text search finds the words of a query. It does not find "my computer is
+running out of room" when the memory says "the laptop is short of disk". An
 embedding model turns a text into a vector, and texts with a near meaning have
 near vectors. Akyuu keeps a vector for each memory, and a search joins the
 nearest vectors with the text hits.
@@ -105,7 +105,7 @@ makes a profile named `default`; `programs.akyuu.embed.profiles` adds more.
 
 ## Evaluation (2026-10-11)
 
-25 searches in the memory `policy/embedding-eval`, run on a copy of the real
+25 searches in the memory `policy/embedding-eval`, run on a copy of a real
 store (80 memories) with `akyuu search-eval`. A search passes if a memory that
 a ref holds, and that the set expects, is among the first 3 hits. The set itself
 and memories that no ref holds (old versions, episodes of logs) do not count.
@@ -132,7 +132,7 @@ Findings:
 - **A pure meaning search is as good as the fused one on this set.** Fusion is
   still the default: the words are the safer signal for a name or a command.
 
-Limits of this evaluation: 25 searches that one model (me) drafted, 5 of them
+Limits of this evaluation: 25 searches that one AI model drafted, 5 of them
 guesses, and 2 of the "nothing relevant" kind. It is enough to see a large
 effect, not to tune a threshold to two decimals. Grow the set when a search
 disappoints: add the line to `policy/embedding-eval`.
@@ -142,7 +142,7 @@ disappoints: add the line to `policy/embedding-eval`.
 - A memory longer than `max-chars` (of the profile) is cut into chunks at blank
   lines, and each chunk gets a vector (at most 8). A search ranks a memory by
   its best chunk. On the eval set this took the paraphrases from 12 to 13 of
-  13, because the long memory policy is now embedded whole.
+  13, because the long policy memory is now embedded whole.
 - `akyuu embed --prune` removes the vectors of other models and of memories
   that GC deleted.
 - The home-manager module runs `akyuu embed --prune` every day at 04:30 when
