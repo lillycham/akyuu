@@ -43,7 +43,7 @@ import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind))
-import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, checkStore, getMemory, listRefValues, meaningFor, missing, readRef, resolveId, searchTuning, verifyStore)
+import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, checkStore, getMemory, listRefValues, meaningFor, missing, readRef, resolveId, resolveTiersRef, searchTuning, verifyStore)
 import Akyuu.Query (SearchOptions)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (RefError, nameText)
@@ -54,7 +54,7 @@ import Akyuu.Store qualified as Store
 import Akyuu.Tier (parseManifest, tierRefs)
 import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), NodeStatus (HeadNode, SupersededNode), RefEntry (RefEntry, reName, reValue), Stats (Stats, statCached, statMemories, statNewest, statPins, statRefs, statTombstones, statTrash), Window (winAll, winFocus), defaultWindow, graphView, graphViewJSON, memoryJSON, pageJSON, planJSON, refHolds, refsJSON, searchJSON, statsJSON, timeJSON, trashJSON, verifyJSON, whyJSON)
 import Control.Exception (IOException, displayException, try, tryJust)
-import Control.Monad (forM, guard, mfilter)
+import Control.Monad (forM, guard)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE, withExceptT)
 import Data.Aeson (Value, object, (.=))
@@ -69,7 +69,6 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import System.Directory (doesDirectoryExist, getModificationTime, listDirectory)
-import System.Environment (lookupEnv)
 import System.FilePath ((</>))
 import System.IO.Error (isDoesNotExistError)
 
@@ -261,9 +260,8 @@ readPages env = runExceptT $ do
 -- by name. Nothing here knows the refs of one agent or one person.
 homePage :: Env -> [Refs.Name] -> IO (Maybe Refs.Name)
 homePage env names = do
-  var <- lookupEnv "AKYUU_TIERS_REF"
-  let t = maybe "policy/tiers" T.pack (mfilter (not . null) var)
-  case Refs.mkName t of
+  tiers <- resolveTiersRef Nothing
+  case tiers of
     Left _ -> pure Nothing
     Right mr -> do
       r <- readRef env mr

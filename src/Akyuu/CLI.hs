@@ -41,7 +41,7 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readLogSince, readRef, reindexCache, resolveId, resolveRoot, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readLogSince, readRef, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareJSON, compareLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
@@ -551,26 +551,26 @@ runCommand env c = runExceptT $ case c of
     w <- ExceptT (maybe (readLog env n (maybe 20 id lim)) (readLogSince env n (maybe 200 id lim)) since)
     pure (ok (logLines full w))
   Context tier extra given cwd budget page -> do
-    manifest <- liftIO (manifestRef given)
+    manifest <- liftIO (resolveTiersRef given)
     place <- liftIO (placeFor cwd)
     r <- ExceptT (either (pure . Left) (\mr -> contextFor env mr (maybe "always" id tier) (Just place) extra) manifest)
     pure . ok $ case (budget, page) of
       (Nothing, Nothing) -> tierLinesWithin Nothing r
       _ -> tierPage (fromMaybe 9500 budget) (fromMaybe 1 page) r
   Note cwd kind agent given text -> do
-    mr <- ExceptT (liftIO (manifestRef given))
+    mr <- ExceptT (liftIO (resolveTiersRef given))
     place <- liftIO (placeFor cwd)
     who <- liftIO (maybe (maybe "agent" T.pack <$> lookupEnv "AKYUU_AGENT") pure agent)
     (n, i) <- ExceptT (noteEpisode env mr place NewMemory {newKind = kind, newAgent = who, newEdges = Set.empty, newBody = text})
     pure (ok ["noted in " <> nameText n <> " " <> Id.render i])
   Init -> do
-    mr <- ExceptT (liftIO (manifestRef Nothing))
-    pr <- ExceptT (liftIO (refFromEnv "AKYUU_POLICY_REF" "policy/memory" Nothing))
+    mr <- ExceptT (liftIO (resolveTiersRef Nothing))
+    pr <- ExceptT (liftIO (resolvePolicyRef Nothing))
     ls <- ExceptT (initStore env pr mr)
     pure (ok (ls <> ["next: connect an agent (akyuu mcp), and see akyuu status"]))
   Status -> do
-    mr <- ExceptT (liftIO (manifestRef Nothing))
-    pr <- ExceptT (liftIO (refFromEnv "AKYUU_POLICY_REF" "policy/memory" Nothing))
+    mr <- ExceptT (liftIO (resolveTiersRef Nothing))
+    pr <- ExceptT (liftIO (resolvePolicyRef Nothing))
     ok . statusLines <$> ExceptT (statusOf env (Store.storeRoot (envStore env)) mr pr)
   Embed prune -> do
     me <- liftIO Embed.embedderFromEnv
@@ -601,8 +601,8 @@ runCommand env c = runExceptT $ case c of
           | otherwise = encodeUtf8 (T.unlines (findingLines refs fs))
     pure (Output out (not (caStrict a && any ((== Problem) . findingSeverity) fs)) False)
   Mcp givenPolicy givenTiers -> do
-    policy <- liftIO (refFromEnv "AKYUU_POLICY_REF" "policy/memory" givenPolicy)
-    tiers <- liftIO (manifestRef givenTiers)
+    policy <- liftIO (resolvePolicyRef givenPolicy)
+    tiers <- liftIO (resolveTiersRef givenTiers)
     place <- liftIO (placeFor Nothing)
     -- Empty: the server takes the name of the client (MCP.clientAgent).
     agent <- liftIO (maybe "" T.pack <$> lookupEnv "AKYUU_AGENT")
@@ -706,19 +706,6 @@ unitDouble = do
   x <- auto
   if x >= 0 && x <= 1 then pure x else readerError "the number must be from 0 to 1"
 
--- | A ref name from an option, then from an environment variable, then the
--- default.
-refFromEnv :: String -> Text -> Maybe Name -> IO (Either AkyuuError Name)
-refFromEnv _ _ (Just n) = pure (Right n)
-refFromEnv var def Nothing = do
-  fromEnv <- lookupEnv var
-  let t = case fromEnv of
-        Just v | not (null v) -> T.pack v
-        _ -> def
-  pure (first (BadName t) (mkName t))
-
--- | The ref of the manifest of the tiers: the option, then @AKYUU_TIERS_REF@,
--- then @policy/tiers@.
 -- | Where the command runs: the home directory, and the directory that was
 -- given or else the current one.
 placeFor :: Maybe Text -> IO Place
@@ -726,6 +713,3 @@ placeFor given = do
   home <- maybe "" T.pack <$> lookupEnv "HOME"
   dir <- maybe (T.pack <$> getCurrentDirectory) pure given
   pure (Place home dir)
-
-manifestRef :: Maybe Name -> IO (Either AkyuuError Name)
-manifestRef = refFromEnv "AKYUU_TIERS_REF" "policy/tiers"
