@@ -8,7 +8,7 @@ unreferenced copy of the akyuu project memory that nobody knew about. The thresh
 ## Purpose
 
 Find the memories that need a person's or an agent's attention, without a model.
-It is the first half of the consolidation pass in `TODO.md`. The second half
+It is the first half of the consolidation pass in [development-log.md](development-log.md). The second half
 (judgement: duplicate, supersedes, or both true) is not in this design.
 
 It would have found, in one run, the two problems that we found by hand on

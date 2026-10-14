@@ -227,7 +227,7 @@ openConn path = do
 -- not 'schemaVersion'. The result is then an empty cache, and 'sync' fills it.
 --
 -- The function also turns on the options for many agents at once: WAL mode
--- and a busy timeout. See the notes in @TODO.md@.
+-- and a busy timeout. See the notes in @docs/development-log.md@.
 --
 -- The whole call runs under a lock file, @cache.sqlite.lock@ (see
 -- 'withOpenLock'). Two processes that find a bad file at the same time then

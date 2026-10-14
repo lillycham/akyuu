@@ -1,7 +1,7 @@
 # Roadmap
 
-What is open, in the order that matters. The development log with the history
-of the decisions is in [TODO.md](TODO.md).
+What is open, in the order that matters. This is the only list of open work.
+The history of the decisions is in [docs/development-log.md](docs/development-log.md).
 
 ## Next
 
@@ -36,7 +36,7 @@ of the decisions is in [TODO.md](TODO.md).
   and a client that loads every tool pays for it in each session.
 - **The wiki view:** Markdown tables and images.
 - **A shared helper** for `Store.orNotFound` and `Refs.orNoSuchRef` (an API
-  decision, see TODO.md).
+  decision, see docs/development-log.md).
 
 ## Not planned
 

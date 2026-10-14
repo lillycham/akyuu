@@ -1,7 +1,9 @@
-# TODO
+# Development log
 
-This is the development log: the build order and the notes of each step. For
-what is open now, see [ROADMAP.md](ROADMAP.md).
+This is the history of how akyuu was built: the build order, the notes of each
+step, and why each decision went the way it did. It is a record, not a list of
+work: a "Not done" note says what was left at that step, and later work may
+have done it. What is open now is only in [ROADMAP.md](../ROADMAP.md).
 
 Build order, from the bottom up. Each module depends only on the ones above it.
 
@@ -388,7 +390,7 @@ Not done:
       The lock file stays on disk. This is normal.
 - [x] **Dangling targets in `reachable`.** The result can include them. Decided: GC does not rely on it either way.
       `plan` takes the live set away from `nodes g`, so a dangling target in the live set has no effect. A test and a property check this.
-- [ ] **Automatic supersession.** Today an agent says so explicitly. A consolidation pass that finds superseded memories is a separate layer that emits `supersede` operations.
+- [ ] **Automatic supersession.** (Open: see ROADMAP.md.) Today an agent says so explicitly. A consolidation pass that finds superseded memories is a separate layer that emits `supersede` operations.
       See "Consolidation pass" below for the plan.
 - [x] **A link to a memory that GC deleted.** Done in part. `Query.resolve` follows `Supersedes` edges backwards from an old `Id` to the memories that replace it.
       It works after GC, because the edge of the newer memory stays in the cache as a dangling target. `get` on a deleted memory names the replacements
@@ -455,7 +457,7 @@ Give a stronger connection more weight in search context and in the graph view:
 - [x] `Store.add`: wrap `removeFile tmp` in the cleanup with `ignoreIO`, so a cleanup error cannot hide the real one. Already true: `add` has no cleanup of its own now.
       `Fs.atomicWrite` removes the temporary file with `ignoreIO`, and `add` calls it.
 - [x] Move `ignoreIO` and a generic `tryWith` from `Akyuu.Store` to `Akyuu.Fs`.
-- [ ] Do the same for `orNotFound` once `getRef` shows what it needs.
+- [ ] (Open: see ROADMAP.md.) Do the same for `orNotFound` once `getRef` shows what it needs.
       `Store.orNotFound` and `Refs.orNoSuchRef` have one shape: `tryWith`, then one test on the `IOException`. They differ in the test:
       `isDoesNotExistError` for the store, `isMissing` (also `InappropriateType`) for refs. A shared helper needs that test as a parameter,
       for example `orMissing :: (IOException -> Bool) -> e -> (IOException -> e) -> IO a -> IO (Either e a)`. That is a choice about the API, so it waits for a decision.
@@ -472,6 +474,6 @@ Give a stronger connection more weight in search context and in the graph view:
 - [x] Fuzzy search: a stem is near a long word only if it has 5 characters or more and starts like the word (no more `perl` for `persnoa`).
 - [x] `check` finding `long-log`: a log with more than 30 episodes (`--long-log N`, `long_log`).
 - [x] The memories repo has a private remote (github.com/lillycham/akyuu-mem). `akyuu-version` still never pushes.
-- [ ] **Per-log retention.** Needs a decision first: should a log summarise itself (a procedure memory that an agent runs when
+- [ ] **Per-log retention.** (Open: see ROADMAP.md.) Needs a decision first: should a log summarise itself (a procedure memory that an agent runs when
       `long-log` shows), or keep only the newest N episodes (GC would then need to cut a chain)? Today the answer is the first one, by hand.
 - [x] `akyuu-version` could push after it commits, when a remote exists and the person turns it on (`versioning.push = true`).
