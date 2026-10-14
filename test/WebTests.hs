@@ -16,7 +16,7 @@ import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Store qualified as Store
 import Akyuu.Web.Api (Endpoint (CheckEndpoint, ExplainEndpoint, GraphEndpoint, MemoryEndpoint, PageEndpoint, PagesEndpoint, PlanEndpoint, RefsEndpoint, SearchEndpoint, StatsEndpoint, TrashEndpoint, VerifyEndpoint), RouteError (BadParam), WebRequest (WebRequest, reqQuery), WebResponse (resBody, resHeaders, resStatus), parseEndpoint, route, runEndpoint)
 import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), GraphEdge (geDst, geSrc), GraphNode (gnId, gnInStore, gnStatus), GraphView (gvEdges, gvNodes, gvSeeds, gvTotalEdges, gvTotalNodes, gvTruncated), NodeStatus (HeadNode, MissingTarget, PrunedTarget, SupersededNode), Window (Window, winAll, winFocus, winHops, winLimit), defaultWindow, graphView, graphViewJSON, selectWindow)
-import Akyuu.Web.Page (dataMarker, indexPage, scriptSafeJSON, vizPage)
+import Akyuu.Web.Page (dataMarker, fontsMarker, indexPage, scriptSafeJSON, vizPage)
 import Akyuu.Web.Server (application, hostAllowed, toWebRequest)
 import Control.Monad (forM, forM_)
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), object, (.=))
@@ -333,6 +333,13 @@ pageCases =
     "page"
     [ testCase "the page has the data marker" $
         BS.isInfixOf dataMarker indexPage @?= True,
+      testCase "the build puts the fonts in place of the fonts marker" $ do
+        BS.isInfixOf fontsMarker indexPage @?= False
+        BS.isInfixOf "@font-face { font-family: 'Shippori Mincho B1'" indexPage @?= True
+        BS.isInfixOf "@font-face { font-family: 'Spline Sans Mono'" indexPage @?= True
+        BS.isInfixOf "SIL Open Font License" indexPage @?= True,
+      testCase "the CSP of the page allows the data: fonts" $
+        BS.isInfixOf "font-src data:" indexPage @?= True,
       testCase "vizPage puts the data in a JSON script element, in place of the marker" $ do
         let p = vizPage (object ["a" .= (1 :: Int)])
         BS.isInfixOf "<script type=\"application/json\" id=\"akyuu-data\">{\"a\":1}</script>" p @?= True
