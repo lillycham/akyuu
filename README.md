@@ -11,9 +11,9 @@ through a command line or an MCP server, so Claude Code, Claude Desktop and
 other MCP clients can share one memory.
 
 **Status: 0.2.0.0, pre-1.0.** It is in daily use by its author. Commands and
-MCP tools can still change. The store format is described in
-[docs/format.md](docs/format.md), and [CHANGELOG.md](CHANGELOG.md) lists what
-changes, and [ROADMAP.md](ROADMAP.md) lists what is open. It is written in Haskell and built with Nix.
+MCP tools can still change. The store format is in [docs/format.md](docs/format.md),
+the changes are in [CHANGELOG.md](CHANGELOG.md), and open work is in
+[ROADMAP.md](ROADMAP.md). It is written in Haskell and built with Nix.
 
 What it is for:
 
@@ -25,6 +25,14 @@ What it is for:
   search by meaning with an embedding model that you choose.
 - **Keeping it tidy.** `check` finds duplicates, forks and stale links, and an
   agent decides what to do.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/webui-wiki-dark.png">
+  <img alt="The web view of akyuu: the wiki page of a ref, with its text, links and history" src="docs/images/webui-wiki-light.png">
+</picture>
+
+The read-only web view (`akyuu serve`) shows each ref as a wiki page, and the
+store as a graph, with search, GC, check and health tabs.
 
 ## Quick start
 
@@ -85,11 +93,8 @@ name another ref with `--policy-ref` (or `AKYUU_POLICY_REF`).
 
 ## Usage
 
-Akyuu can be interfaced with through a command-line tool `akyuu` or the MCP (Model Context Protocol) server.
-
 ```sh
 export AKYUU_ROOT=~/.local/share/akyuu   # or pass --root DIR
-mkdir -p "$AKYUU_ROOT"                   # the root must exist
 
 akyuu add --kind fact --agent me --body "Nix for every tool."   # prints the id
 akyuu add --ref me/tools --kind fact --agent me --body "..."    # the same, under a new ref
@@ -148,11 +153,7 @@ On Linux they are systemd user timers (`systemctl --user list-timers 'akyuu-*'`,
 logs with `journalctl --user -u akyuu-gc`). A timer that was missed, because the
 machine was off, runs at the next start.
 
-To give an agent the store, run the MCP server over stdio. For Claude Code:
-
-```sh
-claude mcp add --scope user akyuu -- akyuu --root ~/.local/share/akyuu mcp
-```
+Then give an agent the store as in [Quick start](#quick-start).
 
 ## Backup
 
@@ -181,9 +182,6 @@ remote: add one with `git -C ROOT remote add …`. The script pushes only with
 `--push` (`programs.akyuu.versioning.push = true`), to the first remote, and a
 failed push is a warning. Keep that remote private.
 
-Forgetting: a memory that you asked to forget stays in the history. To remove it
-for good, rewrite the history by hand.
-
 With the home-manager module: `programs.akyuu.versioning.enable = true;` runs it
 daily at 04:15, after GC (03:30) and the backup (04:00).
 
@@ -194,14 +192,7 @@ sandbox. For day to day work, `nix develop -c cabal test`.
 
 ## Design
 
-Akyuu consists of 4 main "parts":
-
-- The store: A content-addressable store. Immutable plaintext on disk.
-- The graph: An acyclic graph derived from the store, representing relations between memories.
-- Refs: The mutable layer. Akin to Nix profiles or Git refs. Old memories are "superseded" by new ones.
-- GC: Garbage collector prunes superseded memories.
-
-In pseudo-Haskell:
+Akyuu has four parts, in pseudo-Haskell:
 
 ```hs
 Store  :: Id -> Memory          -- immutable, content-addressed, plaintext on disk
@@ -264,17 +255,9 @@ On disk, `store/` and `refs/` are the sources of truth. `cache.sqlite` is derive
 them, so it can be deleted at any time. GC moves swept objects to `trash/` and does
 not delete them at once.
 
-## Data Format
-
-See [docs/format.md](docs/format.md): the file of a memory, the edges, the refs and the other files, and what is stable.
-
 ## Licence
 
 Akyuu is under the MIT licence ([LICENSE](LICENSE)).
 
-The web view contains two fonts under the SIL Open Font License, Version 1.1:
-Shippori Mincho B1 (The Shippori Mincho Project Authors) and Spline Sans Mono
-(The Spline Sans Mono Project Authors). The build puts them in the page, so they
-are also in the binary and in each `akyuu viz` export, with a notice in the
-page's stylesheet. Their licences are in [web/fonts/](web/fonts/), with the
-script that makes `web/fonts.css`.
+The web view contains two fonts under the SIL Open Font License 1.1: Shippori
+Mincho B1 and Spline Sans Mono. Their licences are in [web/fonts/](web/fonts/).
