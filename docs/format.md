@@ -94,6 +94,6 @@ and a change takes a lock (`refs/.lock`) and can check the current value.
 
 ## Moving or copying a store
 
-Copy `store`, `refs`, `pins`, `reviewed` and `tombstones`. Copy the objects
-first and the refs last, so that every ref points at an object that is there
-(`akyuu-backup` does this). Then `akyuu reindex` and `akyuu verify`.
+Copy `refs` and `pins` first, then `store`, `reviewed` and `tombstones`. An agent
+writes a memory before it moves a ref to it, so refs that were copied first
+point only at memories that the later copy has (`akyuu-backup` does this). Then `akyuu reindex` and `akyuu verify`.
