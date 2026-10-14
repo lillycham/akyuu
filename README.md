@@ -7,81 +7,63 @@ Akyuu is a persistent memory store for AI agents, modelled on Nix. A memory is
 an immutable plain-text file, named by the hash of its text. A small mutable
 layer of named refs says which memory is current, and a graph of links
 between memories is derived from the files. An agent reads and writes it
-through a command line or an MCP server, so Claude Code, Claude Desktop and
+through a command line or an MCP server, so Claude Code, Codex and
 other MCP clients can share one memory.
 
-**Status: 0.2.0.0, pre-1.0.** It is in daily use by its author. Commands and
-MCP tools can still change. The store format is in [docs/format.md](docs/format.md),
-the changes are in [CHANGELOG.md](CHANGELOG.md), and open work is in
-[ROADMAP.md](ROADMAP.md). It is written in Haskell and built with Nix.
+**Status: 0.2.0.0, pre-1.0.** I daily drive Akyuu with all my agents, and
+have found it to work well for holding general information and task-specific
+information. I test a lot and run the latest main build in my config, so I find
+issues quite quickly. With that said, Akyuu should be treated as beta software,
+and features and interfaces are likely to change.
 
-What it is for:
+## Features
 
-- **Facts that change.** A ref such as `me/projects/garden` names the
-  current text. To change it, an agent adds a new memory that supersedes the
-  old one. Nothing is edited, so the history is kept until GC collects it.
-- **Things that happened.** A log (`append`, `note`) keeps episodes in order.
-- **Finding things.** Text search that forgives typing mistakes, and optional
-  search by meaning with an embedding model that you choose.
-- **Keeping it tidy.** `check` finds duplicates, forks and stale links, and an
-  agent decides what to do.
+- **Remembering facts** - A ref like `me/projects/garden` names the latest memory. When it needs to be updated, an agent "supersedes" it, and the old one will eventually be *garbage-collected*. History is retained until this happens.
+- **Noting down events** - A log (`append`, `note`) keeps episodic memory in order.
+- **Recall** - Fuzzy search allows some leeway in searching for memories, and you can optionally use an embedding model to get semantic searching.
+- **Self-tidying** - `check` finds forks, stale links, duplicates, and an agent can use that to clean up and consolidate memories.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/webui-wiki-dark.png">
   <img alt="The web view of akyuu: the wiki page of a ref, with its text, links and history" src="docs/images/webui-wiki-light.png">
 </picture>
 
-The read-only web view (`akyuu serve`) shows each ref as a wiki page, and the
-store as a graph, with search, GC, check and health tabs.
+A web UI (shown above, `akyuu serve`) is included. This allows the memory bank
+to be explored through a wiki interface, as well as visualising the graph,
+providing search, and displaying information about the health and function of
+the akyuu store.
 
-## Quick start
+## Quick start & installation
 
 To let an agent do the install, point it at
 [docs/agent-install.md](docs/agent-install.md) from a release tag. It asks you
-before it changes your files. To do it yourself:
+before it changes your files.
 
-```sh
-nix run github:lillycham/akyuu -- --help      # try it; to install it, see Install below
+The intended way to install Akyuu is through Nix with home-manager.
+The home-manager module configures the root, GC, backups and versioning, and
+sets up `launchd` or `systemd` services to run the above automatically.
+The home-manager module of the flake installs the binary, sets `AKYUU_ROOT`,
 
-export AKYUU_ROOT=~/.local/share/akyuu
-akyuu init                                    # makes the root, a policy for agents and a manifest
-akyuu add --kind fact --agent me --body "Nix for every tool."
-akyuu search nix
-akyuu serve                                   # a read-only web view on http://127.0.0.1:7420
-```
+See [docs/install.md](docs/install.md) for both, the daily jobs, `akyuu-backup`
+and `akyuu-version`.
 
-Give an agent the store. For Claude Code:
 
-```sh
-claude mcp add --scope user akyuu -- akyuu --root ~/.local/share/akyuu mcp
-```
-
-For Claude Desktop, add this to `claude_desktop_config.json`:
-
-```json
-{ "mcpServers": { "akyuu": { "command": "akyuu", "args": ["--root", "/Users/you/.local/share/akyuu", "mcp"] } } }
-```
-
-Use the full path of `akyuu` as the command if the app does not have it in its
-`PATH`. The MCP server tells the agent to read the policy of the store first:
-`akyuu init` writes a short one under `policy/memory`. Change it to fit you, or
-name another ref with `--policy-ref` (or `AKYUU_POLICY_REF`).
 
 ## Trust and safety
 
-- **One user.** There is no access control. A client of the MCP server can
-  add, supersede and point refs, so give it only to agents that you trust with
-  the memories.
-- **Local.** The MCP server speaks on stdio. The web view is read-only and
-  listens on `127.0.0.1` only, and it checks the `Host` header.
+- **One user.** We do not currently implement access controls. Any agent
+  connected to the MCP can write to and read from the store. Only give Akyuu
+  to agents you trust to see your memories.
+- **Local.** The MCP server speaks on stdio, and the webview only listens on
+  localhost.
 - **Commands from settings.** `AKYUU_EMBED_COMMAND` is run with `sh -c`. It
   comes from the environment or from `~/.config/akyuu/embed.env`: protect that
   file like a script.
-- **Forgetting.** To forget a memory, supersede it with a text that leaves it
-  out. GC then deletes the old text after the grace period and the ref
-  generations. If you keep the store in git (`akyuu-version`), the old text
-  stays in the history until you rewrite it.
-- **Secrets.** Do not store passwords or keys in memories.
+- **Forgetting.** Memories that have been superseded will be garbage collected,
+  and eventually deleted completely. You can make backups, and `akyuu-version`
+  serves to bring memories into Git for versioning and sync.
+- **Secrets.** Do not store passwords or keys in memories, as they are
+  plaintext and readable by anyone on your device.
 
 ## Documents
 
@@ -129,14 +111,6 @@ akyuu serve                         # the read-only web UI on 127.0.0.1:7420
 akyuu seed --demo --root /tmp/demo  # a demo store, for the web UI
 ```
 
-## Install
-
-Install akyuu in your Nix configuration. The home-manager module of the flake
-installs the binary, sets `AKYUU_ROOT`, and can run GC, backups and versioning
-every day. On NixOS or nix-darwin without home-manager, add the package of the
-flake to `environment.systemPackages`. See [docs/install.md](docs/install.md)
-for both, the daily jobs, `akyuu-backup` and `akyuu-version`.
-
 ## Checks
 
 `nix flake check` runs the unit tests and tests of `akyuu-backup` and `akyuu-version` in the Nix
@@ -144,7 +118,7 @@ sandbox. For day to day work, `nix develop -c cabal test`.
 
 ## Design
 
-Akyuu has four parts, in pseudo-Haskell:
+Akyuu has four main parts, in pseudo-Haskell:
 
 ```hs
 Store  :: Id -> Memory          -- immutable, content-addressed, plaintext on disk
