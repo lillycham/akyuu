@@ -7,10 +7,11 @@
 #     backup.enable = true;
 #   };
 #
-# It installs the binary, sets AKYUU_ROOT, and makes the store directory (the
-# program needs the root to exist, so that a typo cannot make a new store).
-# The jobs get the root as an argument, because a service does not see the
-# session variables.
+# It installs the binary, writes ~/.config/akyuu/config.toml (the root, the
+# refs and the embedding profiles), and makes the store directory (the program
+# needs the root to exist, so that a typo cannot make a new store). Every
+# client reads the same file: a shell, a desktop app and a service. The jobs
+# also get the root as an argument.
 #
 # The daily jobs are launchd agents on macOS and systemd user timers on Linux.
 # They are the same jobs: one list, `jobs`, makes both. A timer has
@@ -88,6 +89,63 @@ let
 
   # A length of time as `akyuu gc` reads it: a whole number and a unit.
   durationType = types.strMatching "[0-9]+[smhd]";
+
+  toml = pkgs.formats.toml { };
+
+  # One embedding profile, as in the [embed.profiles.NAME] table of the file.
+  profileType = types.submodule {
+    options = {
+      command = mkOption { type = types.str; description = "The command: it reads a text on stdin and prints a vector."; };
+      key = mkOption { type = types.str; description = "The key of the vectors. Change it when the model, its runtime or its quantisation changes."; };
+      queryPrefix = mkOption { type = types.str; default = ""; description = "Text that akyuu puts before a search."; };
+      documentPrefix = mkOption { type = types.str; default = ""; description = "Text that akyuu puts before a memory."; };
+      min = mkOption { type = types.nullOr types.float; default = null; description = "The lowest cosine similarity that counts as near. Find it with akyuu search-eval."; };
+      timeout = mkOption { type = types.nullOr types.ints.positive; default = null; description = "Seconds for one call (default 10)."; };
+      maxChars = mkOption { type = types.nullOr types.ints.positive; default = null; description = "The most characters of a text in one call (default 4000)."; };
+      args = mkOption {
+        type = types.attrsOf (types.oneOf [ types.str types.int types.bool ]);
+        default = { };
+        description = "Arguments for the command. `gguf` arrives as AKYUU_EMBED_GGUF; akyuu does not read them.";
+      };
+    };
+  };
+
+  profileToml = p:
+    { inherit (p) command key; }
+    // lib.optionalAttrs (p.queryPrefix != "") { query-prefix = p.queryPrefix; }
+    // lib.optionalAttrs (p.documentPrefix != "") { document-prefix = p.documentPrefix; }
+    // lib.optionalAttrs (p.min != null) { inherit (p) min; }
+    // lib.optionalAttrs (p.timeout != null) { inherit (p) timeout; }
+    // lib.optionalAttrs (p.maxChars != null) { max-chars = p.maxChars; }
+    // lib.optionalAttrs (p.args != { }) { inherit (p) args; };
+
+  # The profile that the older options (embed.enable, embed.command, ...)
+  # describe. It is named "default".
+  defaultProfile = {
+    inherit (cfg.embed) command queryPrefix documentPrefix;
+    key = cfg.embed.model;
+    min = cfg.embed.minScore;
+    # The first start of a local model compiles shaders and takes longer.
+    timeout = if cfg.embed.local.enable then 60 else null;
+    maxChars = null;
+    args =
+      if cfg.embed.local.enable
+      then { gguf = toString cfg.embed.local.gguf; idle = cfg.embed.local.idleSeconds; }
+      else { url = cfg.embed.url; } // lib.optionalAttrs (cfg.embed.apiModel != null) { api-model = cfg.embed.apiModel; };
+  };
+
+  profiles = cfg.embed.profiles // lib.optionalAttrs cfg.embed.enable { default = defaultProfile; };
+  profileName = if cfg.embed.profile != null then cfg.embed.profile else if cfg.embed.enable then "default" else null;
+
+  configToml = lib.recursiveUpdate
+    ({ inherit (cfg) root; }
+      // lib.optionalAttrs (cfg.policyRef != null) { policy-ref = cfg.policyRef; }
+      // lib.optionalAttrs (cfg.tiersRef != null) { tiers-ref = cfg.tiersRef; }
+      // lib.optionalAttrs (profiles != { }) {
+        embed = { profiles = lib.mapAttrs (_: profileToml) profiles; }
+          // lib.optionalAttrs (profileName != null) { profile = profileName; };
+      })
+    cfg.settings;
 in
 {
   options.programs.akyuu = {
@@ -107,8 +165,8 @@ in
       description = ''
         The name of the ref that holds the policy of the store: how agents
         use it for memory. `akyuu mcp` tells a client to read it first. With
-        null the server uses `policy/memory`. The value is set as
-        AKYUU_POLICY_REF.
+        null the server uses `policy/memory`. The value goes in the config
+        file as `policy-ref`.
       '';
     };
 
@@ -119,7 +177,26 @@ in
       description = ''
         The name of the ref that holds the manifest of the tiers: which refs
         a session reads at the start (`akyuu context`). With null the
-        default is `policy/tiers`. The value is set as AKYUU_TIERS_REF.
+        default is `policy/tiers`. The value goes in the config file as
+        `tiers-ref`.
+      '';
+    };
+
+    generatedConfig = mkOption {
+      type = types.attrs;
+      internal = true;
+      readOnly = true;
+      default = configToml;
+      description = "What the module writes to config.toml (for the check of the module).";
+    };
+
+    settings = mkOption {
+      type = toml.type;
+      default = { };
+      example = lib.literalExpression ''{ agent = "me"; }'';
+      description = ''
+        More settings for ~/.config/akyuu/config.toml (see akyuu(1)). They
+        go over what the other options write.
       '';
     };
 
@@ -171,7 +248,28 @@ in
     };
 
     embed = {
-      enable = mkEnableOption "search by meaning: a command that makes vectors, set in the environment of akyuu (AKYUU_EMBED_COMMAND)";
+      enable = mkEnableOption "search by meaning with the profile that the options below describe, named \"default\"";
+      profiles = mkOption {
+        type = types.attrsOf profileType;
+        default = { };
+        example = lib.literalExpression ''
+          {
+            gemma = {
+              command = "akyuu-embed-llama";
+              key = "llama:embeddinggemma-2";
+              queryPrefix = "task: search result | query: ";
+              documentPrefix = "title: none | text: ";
+              args.gguf = "/models/embeddinggemma-2.gguf";
+            };
+          }
+        '';
+        description = "More embedding profiles. Pick one with embed.profile, or for one command with akyuu --embed-profile NAME.";
+      };
+      profile = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "The profile in use. The default is \"default\" when embed.enable is set.";
+      };
       local = {
         enable = mkEnableOption "a model that Nix provides, run by llama.cpp from Nix when a search needs it (akyuu-embed-llama), with no other program open. The server starts at the first call and stops when it is idle";
         gguf = mkOption {
@@ -203,7 +301,7 @@ in
       apiModel = mkOption {
         type = types.nullOr types.str;
         default = null;
-        description = "The model name that the server knows (AKYUU_EMBED_API_MODEL), for the default command.";
+        description = "The model name that the server knows (args.api-model), for the default command.";
       };
       url = mkOption {
         type = types.str;
@@ -213,7 +311,7 @@ in
       minScore = mkOption {
         type = types.nullOr types.float;
         default = null;
-        description = "The lowest cosine similarity that counts as near (AKYUU_EMBED_MIN). It depends on the model: find it with akyuu search-eval.";
+        description = "The lowest cosine similarity that counts as near. It depends on the model: find it with akyuu search-eval.";
       };
       queryPrefix = mkOption { type = types.str; default = ""; description = "Text before a search, for models that want one (for example \"search_query: \")."; };
       documentPrefix = mkOption { type = types.str; default = ""; description = "Text before a memory (for example \"search_document: \")."; };
@@ -244,37 +342,15 @@ in
   config = mkIf cfg.enable (mkMerge [
     {
       home.packages = [ cfg.package ] ++ optional cfg.backup.enable backupPackage ++ optional cfg.versioning.enable versionPackage;
-      home.sessionVariables.AKYUU_ROOT = cfg.root;
-      home.sessionVariables.AKYUU_POLICY_REF = mkIf (cfg.policyRef != null) cfg.policyRef;
-      home.sessionVariables.AKYUU_TIERS_REF = mkIf (cfg.tiersRef != null) cfg.tiersRef;
+
+      # The settings are in a file that akyuu reads (see Akyuu.Config), and
+      # not in session variables: a desktop app and a service do not start in
+      # a shell, and they must get the same settings.
+      xdg.configFile."akyuu/config.toml".source = toml.generate "akyuu-config.toml" configToml;
     }
 
-    # The settings are in a file that akyuu reads (see Akyuu.Embed), and not
-    # in session variables: a desktop app and a service do not start in a
-    # shell, and they must get the same settings.
     (mkIf cfg.embed.enable {
       home.packages = if cfg.embed.local.enable then [ embedLlamaPackage ] else [ embedPackage ];
-      xdg.configFile."akyuu/embed.env".text =
-        let
-          vars = {
-            AKYUU_EMBED_COMMAND = cfg.embed.command;
-            AKYUU_EMBED_MODEL = cfg.embed.model;
-            AKYUU_EMBED_QUERY_PREFIX = cfg.embed.queryPrefix;
-            AKYUU_EMBED_DOCUMENT_PREFIX = cfg.embed.documentPrefix;
-          }
-          // lib.optionalAttrs cfg.embed.local.enable {
-            AKYUU_EMBED_GGUF = toString cfg.embed.local.gguf;
-            AKYUU_EMBED_IDLE = toString cfg.embed.local.idleSeconds;
-            # The first start of the model compiles shaders and takes longer.
-            AKYUU_EMBED_TIMEOUT = "60";
-          }
-          // lib.optionalAttrs (!cfg.embed.local.enable) { AKYUU_EMBED_URL = cfg.embed.url; }
-          // lib.optionalAttrs (cfg.embed.apiModel != null) { AKYUU_EMBED_API_MODEL = cfg.embed.apiModel; }
-          // lib.optionalAttrs (cfg.embed.minScore != null) { AKYUU_EMBED_MIN = toString cfg.embed.minScore; };
-        in
-        "# Made by the akyuu module. akyuu reads this file for AKYUU_EMBED_*.\n"
-        + lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "${k}=${v}") vars)
-        + "\n";
     })
 
     {

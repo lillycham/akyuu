@@ -3,15 +3,13 @@
 #
 # The first call starts `llama-server --embeddings` on 127.0.0.1 and waits for
 # it. Each call sends the text to it. The server stops by itself after
-# AKYUU_EMBED_IDLE seconds without a call, so it does not keep memory.
+# AKYUU_EMBED_IDLE seconds without a call, so it does not keep memory. akyuu
+# puts the prefix of the model before the text, so the text goes as it is.
 #
-# Variables:
-#   AKYUU_EMBED_GGUF             the model file (required)
-#   AKYUU_EMBED_LLAMA_PORT       default 8767
-#   AKYUU_EMBED_IDLE             seconds before the server stops (default 120)
-#   AKYUU_EMBED_QUERY_PREFIX     put before the text of a search
-#   AKYUU_EMBED_DOCUMENT_PREFIX  put before the text of a memory
-#   AKYUU_EMBED_ROLE             query or document. akyuu sets it.
+# The args of the profile arrive as variables:
+#   AKYUU_EMBED_GGUF        (args.gguf) the model file (required)
+#   AKYUU_EMBED_LLAMA_PORT  (args.llama-port) default 8767
+#   AKYUU_EMBED_IDLE        (args.idle) seconds before the server stops (default 120)
 
 gguf=${AKYUU_EMBED_GGUF:-}
 [ -f "$gguf" ] || { echo "akyuu-embed-llama: set AKYUU_EMBED_GGUF to a model file." >&2; exit 2; }
@@ -67,10 +65,5 @@ touch "$state/last"
 up || start || exit 1
 touch "$state/last"
 
-case ${AKYUU_EMBED_ROLE:-document} in
-  query) prefix=${AKYUU_EMBED_QUERY_PREFIX:-} ;;
-  *) prefix=${AKYUU_EMBED_DOCUMENT_PREFIX:-} ;;
-esac
-
-jq -Rs --arg p "$prefix" '{input: ($p + .)}' \
+jq -Rs '{input: .}' \
   | curl -sS --fail --max-time 30 -H 'Content-Type: application/json' -d @- "$base/v1/embeddings"
