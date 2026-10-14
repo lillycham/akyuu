@@ -37,6 +37,13 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
 - **The wiki view:** Markdown tables and images.
 - **A shared helper** for `Store.orNotFound` and `Refs.orNoSuchRef` (an API
   decision, see docs/development-log.md).
+- **Records for the tool calls.** Some constructors of `ToolCall` in `Akyuu.MCP`
+  have many fields by position (`CallContext` has five, `CallReview` has two
+  `Text` fields side by side). Records or small argument types would let the
+  compiler catch fields in the wrong order.
+- **The script of the web view in files.** `web/index.html` holds about 2000
+  lines of JavaScript. Keep it in `web/*.js` and join the files at build time,
+  as `Page.hs` does for `web/fonts.css`, so the page stays one file.
 
 ## Not planned
 
