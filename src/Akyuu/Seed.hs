@@ -187,18 +187,18 @@ fill now env = do
         liftIO (modifyIORef' oldOnes ((i, t) :))
         pure i
 
-  -- A preference, superseded twice: claude/lang.
-  l1 <- old (day 0) "preference" "claude" [] "Lilly prefers Haskell for tools."
-  lang <- newRef "claude/lang" l1
-  l2 <- supersedeOld lang l1 (day 3) "preference" "claude" [] "Lilly prefers Haskell for tools, and Nix for every dependency."
-  l3 <- supersedeOld lang l2 (day 10) "preference" "claude" [] "Lilly prefers Haskell for tools, and Nix for every tool and dependency. Never Homebrew."
+  -- A preference, superseded twice: me/lang.
+  l1 <- old (day 0) "preference" "claude" [] "Write scripts in Python."
+  lang <- newRef "me/lang" l1
+  l2 <- supersedeOld lang l1 (day 3) "preference" "claude" [] "Write scripts in Python, with uv for the dependencies."
+  l3 <- supersedeOld lang l2 (day 10) "preference" "claude" [] "Write scripts in Python, with uv for every tool and dependency. Never install packages globally."
 
   -- A fork: claude and codex both supersede e2.
-  e1 <- old (day 1) "fact" "claude" [] "Lilly uses Emacs with evil-mode."
-  editor <- newRef "claude/editor" e1
-  e2 <- supersedeOld editor e1 (day 5) "fact" "claude" [] "Lilly uses Emacs with evil-mode and org-agenda."
-  e3a <- supersedeOld editor e2 (day 12) "fact" "claude" [] "Lilly uses Emacs 30 with evil-mode, org-agenda and eglot."
-  e3b <- old (addUTCTime 3600 (day 12)) "fact" "codex" [Edge Supersedes e2] "Lilly uses Emacs with evil-mode, and tries Zed for Rust."
+  e1 <- old (day 1) "fact" "claude" [] "The editor is Neovim."
+  editor <- newRef "me/editor" e1
+  e2 <- supersedeOld editor e1 (day 5) "fact" "claude" [] "The editor is Neovim, with Telescope."
+  e3a <- supersedeOld editor e2 (day 12) "fact" "claude" [] "The editor is Neovim 0.11, with Telescope and the built-in LSP."
+  e3b <- old (addUTCTime 3600 (day 12)) "fact" "codex" [Edge Supersedes e2] "The editor is Neovim, and Helix for quick edits."
   _ <- newRef "codex/editor" e3b
 
   -- A ref with seven generations. GC keeps the current one and five more.
@@ -210,14 +210,14 @@ fill now env = do
   _ <- foldM (\acc _ -> step acc) (st1, 1 :: Int) [1 .. 6 :: Int]
 
   -- A fact that only a retaining edge keeps, and the note that keeps it.
-  f1 <- old (day 4) "fact" "lilly" [] "The akyuu store lives in ~/.akyuu."
-  n1 <- old (day 11) "note" "claude" [Edge About l3, Edge DerivedFrom f1] "Nix shells pin every tool of akyuu."
-  _ <- newRef "claude/notes" n1
+  f1 <- old (day 4) "fact" "me" [] "The akyuu store lives in ~/.akyuu."
+  n1 <- old (day 11) "note" "claude" [Edge About l3, Edge DerivedFrom f1] "A lock file pins every tool of the project."
+  _ <- newRef "me/notes" n1
   -- A summary that refines the note. Nothing keeps the summary.
-  r1 <- old (day 13) "summary" "claude" [Edge Refines n1] "Summary: build with nix develop, and never with Homebrew."
+  r1 <- old (day 13) "summary" "claude" [Edge Refines n1] "Summary: run the tools from the lock file, never from a global install."
 
   -- A decision that only a pin keeps.
-  p1 <- old (day 6) "decision" "lilly" [] "Decision: the store is plain text. It never uses a binary format."
+  p1 <- old (day 6) "decision" "me" [] "Decision: the store is plain text. It never uses a binary format."
   withExceptT GCFailed (ExceptT (GC.pin s p1))
 
   -- An edge to an object that was never stored.
@@ -226,19 +226,19 @@ fill now env = do
   _ <- newRef "codex/design" d1
 
   -- A draft that GC deletes, and the todo that supersedes it.
-  t0 <- old (day 7) "todo" "lilly" [] "Draft: write the README."
-  t1 <- old (day 8) "todo" "lilly" [Edge Supersedes t0] "Write the README, with the architecture diagram."
-  _ <- newRef "lilly/todo" t1
+  t0 <- old (day 7) "todo" "me" [] "Draft: write the README."
+  t1 <- old (day 8) "todo" "me" [Edge Supersedes t0] "Write the README, with the architecture diagram."
+  _ <- newRef "me/todo" t1
   -- A draft that GC moves to trash.
-  t2 <- old (day 9) "todo" "lilly" [] "Draft: list the open decisions."
+  t2 <- old (day 9) "todo" "me" [] "Draft: list the open decisions."
   -- Old memories that nothing keeps.
   g1 <- old (day 16) "fact" "codex" [] "Old scratch: a test memory."
 
   -- Young memories. Y3 keeps an old fact with an about edge.
-  o1 <- old (day 15) "fact" "claude" [] "Lilly works on mirai, a Mac."
-  y1 <- young (mins 10) "fact" "claude" [] "Lilly is testing the akyuu web UI."
+  o1 <- old (day 15) "fact" "claude" [] "Work happens on a laptop."
+  y1 <- young (mins 10) "fact" "claude" [] "The akyuu web UI is being tested."
   y2 <- young (mins 5) "note" "codex" [Edge About y1] "The web UI is read-only, on 127.0.0.1."
-  y3 <- young (mins 2) "note" "claude" [Edge About o1] "mirai runs the web UI tests."
+  y3 <- young (mins 2) "note" "claude" [Edge About o1] "The laptop runs the web UI tests."
 
   -- Make the old objects old: their file time is their created time.
   olds <- liftIO (readIORef oldOnes)
