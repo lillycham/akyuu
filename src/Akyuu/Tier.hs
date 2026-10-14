@@ -43,6 +43,10 @@ module Akyuu.Tier
     placeRefs,
     placeLog,
     placeLines,
+    defaultPolicyRef,
+    defaultTiersRef,
+    policyRefVar,
+    tiersRefVar,
   )
 where
 
@@ -54,6 +58,23 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
+
+-- | The ref of the policy of a store (how the store is used for memory),
+-- when no option and no variable ('policyRefVar') names another.
+-- @akyuu init@ writes it, and the MCP server tells a client to read it first.
+defaultPolicyRef :: Text
+defaultPolicyRef = "policy/memory"
+
+-- | The ref of the manifest of the tiers, when no option and no variable
+-- ('tiersRefVar') names another.
+defaultTiersRef :: Text
+defaultTiersRef = "policy/tiers"
+
+-- | The environment variables that name other refs for the policy and the
+-- manifest. An empty value is no value.
+policyRefVar, tiersRefVar :: String
+policyRefVar = "AKYUU_POLICY_REF"
+tiersRefVar = "AKYUU_TIERS_REF"
 
 -- | The tiers of a store, with the refs of each one in order.
 data Manifest = Manifest

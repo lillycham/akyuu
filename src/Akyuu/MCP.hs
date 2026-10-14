@@ -52,7 +52,7 @@ import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, ne
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
 import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage)
-import Akyuu.Tier (Place (Place))
+import Akyuu.Tier (Place (Place), defaultPolicyRef, defaultTiersRef)
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (forM_, unless)
 import Control.Monad.Trans.Class (lift)
@@ -731,7 +731,7 @@ data McpConfig = McpConfig
 -- one agent. A store that uses another name sets it with @--policy-ref@ or
 -- @AKYUU_POLICY_REF@.
 defaultMcpConfig :: McpConfig
-defaultMcpConfig = McpConfig "policy/memory" "policy/tiers" "agent" Nothing
+defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing
 
 -- | The result of @initialize@.
 initializeResult :: McpConfig -> Maybe Text -> Value

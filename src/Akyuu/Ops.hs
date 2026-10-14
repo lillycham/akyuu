@@ -70,6 +70,8 @@ module Akyuu.Ops
 
     -- * Init
     initStore,
+    resolvePolicyRef,
+    resolveTiersRef,
 
     -- * Status
     StatusReport (..),
@@ -92,7 +94,7 @@ import Akyuu.Compare qualified as Compare
 import Akyuu.Embed qualified as Embed
 import Akyuu.Episode (Walk)
 import Akyuu.Episode qualified as Episode
-import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
+import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, BadName, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
 import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom, Supersedes), Graph)
@@ -111,7 +113,7 @@ import Akyuu.SearchEval qualified as SearchEval
 import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), openStore)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersede, supersedeFrom)
-import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), parseManifest, placeLines, placeLog, placeRefs, tierNames, tierRefs)
+import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), defaultPolicyRef, defaultTiersRef, parseManifest, placeLines, placeLog, placeRefs, policyRefVar, tierNames, tierRefs, tiersRefVar)
 import Control.Exception (SomeException, displayException, finally, try)
 import Control.Monad (forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
@@ -128,6 +130,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
 import System.Directory (doesDirectoryExist)
+import System.Environment (lookupEnv)
 import System.FilePath ((</>))
 import Text.Read (readMaybe)
 
@@ -1002,3 +1005,26 @@ readLog :: Env -> Name -> Int -> IO (Either AkyuuError Walk)
 readLog env n limit = runExceptT $ do
   ref <- ExceptT (readRef env n)
   liftIO (Episode.walk (envStore env) limit (current ref))
+
+-- The refs of the policy and the manifest ------------------------------------
+
+-- | The ref of the policy of the store: the given name, then the variable
+-- @AKYUU_POLICY_REF@, then @policy/memory@ (see "Akyuu.Tier").
+resolvePolicyRef :: Maybe Name -> IO (Either AkyuuError Name)
+resolvePolicyRef = refFromSetting policyRefVar defaultPolicyRef
+
+-- | The ref of the manifest of the tiers: the given name, then the variable
+-- @AKYUU_TIERS_REF@, then @policy/tiers@.
+resolveTiersRef :: Maybe Name -> IO (Either AkyuuError Name)
+resolveTiersRef = refFromSetting tiersRefVar defaultTiersRef
+
+-- | A ref name from an option, then from an environment variable (an empty
+-- value is no value), then the default.
+refFromSetting :: String -> Text -> Maybe Name -> IO (Either AkyuuError Name)
+refFromSetting _ _ (Just n) = pure (Right n)
+refFromSetting var def Nothing = do
+  fromEnv <- lookupEnv var
+  let t = case fromEnv of
+        Just v | not (null v) -> T.pack v
+        _ -> def
+  pure (first (BadName t) (Refs.mkName t))
