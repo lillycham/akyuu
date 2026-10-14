@@ -21,12 +21,12 @@ module Akyuu.Review
   )
 where
 
-import Akyuu.Fs (atomicWrite, tryWith)
+import Akyuu.Fs (atomicWrite, ifMissing, tryWith)
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Store (Store, storeRoot)
-import Control.Exception (IOException, tryJust)
-import Control.Monad (forM, guard)
+import Control.Exception (IOException)
+import Control.Monad (forM)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes)
@@ -38,7 +38,6 @@ import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, parseTimeM)
 import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
 import System.FilePath ((</>))
-import System.IO.Error (isDoesNotExistError)
 
 -- | An unordered pair of memories, as the lower 'Id' and then the higher one.
 type Pair = (Id, Id)
@@ -100,10 +99,6 @@ prune s present = tryWith id $ do
       pure (Just (a, b))
     _ -> pure Nothing
   pure (catMaybes gone)
-
--- Run an action. A file or directory that is not there gives the default.
-ifMissing :: a -> IO a -> IO a
-ifMissing d act = either (const d) id <$> tryJust (guard . isDoesNotExistError) act
 
 -- The file format ------------------------------------------------------
 
