@@ -13,6 +13,18 @@ of the decisions is in [TODO.md](TODO.md).
 
 ## Later
 
+- **Install without Nix.** The goal is that anyone can install akyuu. Nothing
+  in the code needs Nix; the work is packaging. In order:
+  - A `cabal.project` with a fixed `index-state`, and a CI job that builds and
+    tests with GHCup and no Nix.
+  - Release binaries from CI for macOS (arm64, x86_64) and Linux (static with
+    musl, or glibc). Then maybe Hackage and a Homebrew tap.
+  - Move the helper scripts from `nix/` to `scripts/` and list their tools
+    (rsync, git, curl, jq, llama.cpp). Add example launchd and systemd units in
+    `contrib/` for the daily jobs.
+  - A path without Nix in `docs/install.md` and `docs/agent-install.md`.
+  - Native Windows needs replacements for the uses of `unix` (fsync, process
+    group signals, touchFile). Not planned until someone asks; WSL works.
 - **Automatic supersession.** `check` finds duplicates, forks and stale links,
   and an agent decides. A pass that proposes `supersede` operations by itself,
   with a person approving, is not built.
