@@ -8,6 +8,7 @@ import CLITests (cliTests)
 import CacheTests (cacheTests)
 import CheckTests (checkTests)
 import CompareTests (compareTests)
+import ConfigTests (configTests)
 import Control.Exception (IOException, bracket, try)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -43,9 +44,9 @@ main :: IO ()
 main = do
   -- The tests must not read the settings of the person that runs them: a
   -- real embedding command would change the results and start a model.
-  mapM_ unsetEnv ["AKYUU_EMBED_COMMAND", "AKYUU_EMBED_MODEL", "AKYUU_EMBED_MIN", "AKYUU_EMBED_TIMEOUT", "AKYUU_EMBED_MAX_CHARS", "AKYUU_POLICY_REF", "AKYUU_TIERS_REF", "AKYUU_AGENT"]
+  mapM_ unsetEnv ["AKYUU_EMBED_COMMAND", "AKYUU_EMBED_MODEL", "AKYUU_EMBED_MIN", "AKYUU_EMBED_TIMEOUT", "AKYUU_EMBED_MAX_CHARS", "AKYUU_EMBED_PROFILE", "AKYUU_EMBED_QUERY_PREFIX", "AKYUU_EMBED_DOCUMENT_PREFIX", "AKYUU_POLICY_REF", "AKYUU_TIERS_REF", "AKYUU_AGENT"]
   setEnv "AKYUU_CONFIG" "/nonexistent/akyuu-embed.env"
-  defaultMain $ testGroup "akyuu" [idTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, amendTests, compareTests, reviewTests, tierTests, recallTests, embedTests, episodeTests, opsTests, cliTests, mcpTests, webTests, seedTests]
+  defaultMain $ testGroup "akyuu" [idTests, configTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, amendTests, compareTests, reviewTests, tierTests, recallTests, embedTests, episodeTests, opsTests, cliTests, mcpTests, webTests, seedTests]
 
 idTests :: TestTree
 idTests =

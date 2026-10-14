@@ -340,7 +340,7 @@ errorTextCases =
         describe (RefFailed (Stale n (Just (nid 2))))
           @?= "The ref 'claude/notes' is not at the expected value. It points to " <> render (nid 2) <> " now. Read it again.",
       testCase "NoRoot says how to give a root" $
-        describe NoRoot @?= "No store is given. Use --root DIR, or set AKYUU_ROOT.",
+        describe NoRoot @?= "No store is given. Use --root DIR, set AKYUU_ROOT, or set root in the config file (see akyuu config).",
       testCase "no text is the Show form" $ do
         n <- right (mkName "x")
         let es = [StoreFailed (NotFound (nid 1)), RefFailed (NoSuchRef n), RefFailed Locked, NoRoot, BadField "kind" ""]

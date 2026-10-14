@@ -17,6 +17,7 @@ module Akyuu.Render
     searchLinesWith,
     embedLines,
     statusLines,
+    configLines,
     evalLines,
     heldBy,
     refListLinesWith,
@@ -44,6 +45,7 @@ where
 import Akyuu.Cache (Correction (AddedByMeaning, MeaningUnavailable, PrefixOf, SpelledAs), SyncReport (added, removed), snippetClose, snippetOpen)
 import Akyuu.Check (Finding (findingIds, findingKind, findingRelated, findingSeverity, findingWhy), kindName, severityName)
 import Akyuu.Compare (Comparison (cmpOnlyA, cmpOnlyB, cmpShared), canDropA, canDropB)
+import Akyuu.Config (Config (cfgAgent, cfgEmbed, cfgFile, cfgNotes, cfgPolicyRef, cfgRoot, cfgTiersRef), EmbedSettings (esArgs, esCommand, esDocumentPrefix, esKey, esMaxChars, esMin, esProfile, esQueryPrefix, esSource, esTimeout), Source (Default), Sourced (sSource, sValue), sourceText)
 import Akyuu.Episode (Walk (Walk))
 import Akyuu.Error (describe, describeParse)
 import Akyuu.Error qualified as Error
@@ -51,7 +53,7 @@ import Akyuu.GC (RunReport (swept), SweepReport (deleted, trashed))
 import Akyuu.Graph (Dir (In, Out), EdgeType)
 import Akyuu.Id (Id, render)
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader, renderMemory)
-import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, NoManifest, Present), ContextReport (ContextReport), EmbedReport (already, embedFailed, embedded), EvalRow (evalCase, evalFound), SearchMode (Fused, MeaningOnly, TextOnly), StatusReport (stEmbed, stGit, stManifest, stMemories, stPins, stPolicy, stRefs, stRoot), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
+import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, NoManifest, Present), ContextReport (ContextReport), EmbedReport (already, embedChanged, embedFailed, embedded), EmbedStatus (ebChanged, ebKey, ebProfile, ebVectors), EvalRow (evalCase, evalFound), SearchMode (Fused, MeaningOnly, TextOnly), StatusReport (stConfig, stEmbed, stGit, stManifest, stMemories, stPins, stPolicy, stRefs, stRoot), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, corrections, matches))
 import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Akyuu.Review (Review (reviewAgent, reviewAt, reviewNote))
@@ -208,6 +210,14 @@ embedLines model r =
            <> " had one already"
            <> (if null (embedFailed r) then "" else ", " <> T.pack (show (length (embedFailed r))) <> " failed")
        ]
+    <> [changedWarning model | embedChanged r]
+
+-- | The warning for vectors of one key from two embedders.
+changedWarning :: Text -> Text
+changedWarning key =
+  "warning: the vectors of "
+    <> key
+    <> " were made by another command, other arguments or other prefixes. If the model changed, give the profile a new key, then run akyuu embed."
 
 -- | The result of a set of searches: one line for each case with the mark
 -- of each mode (@ found, @ not), then the number of passes of each mode
@@ -244,11 +254,50 @@ statusLines r =
       (n, True) -> "policy " <> nameText n <> ": present"
       (n, False) -> "policy " <> nameText n <> ": missing (the MCP server tells agents to read it)",
     case stEmbed r of
-      Nothing -> "search by meaning: off (AKYUU_EMBED_COMMAND is not set)"
-      Just (m, Right k) -> "search by meaning: model " <> m <> ", vectors for " <> T.pack (show k) <> " of " <> T.pack (show (stMemories r)) <> " memories" <> (if k < stMemories r then " (run akyuu embed)" else "")
-      Just (m, Left why) -> "search by meaning: model " <> m <> ", the vectors cannot be read: " <> why,
-    "versioning: " <> if stGit r then "the root is a git repository" else "the root is not a git repository (akyuu-version makes one)"
+      Nothing -> "search by meaning: off (no embedding profile is set)"
+      Just e -> case ebVectors e of
+        Right k -> "search by meaning: profile " <> ebProfile e <> ", key " <> ebKey e <> ", vectors for " <> T.pack (show k) <> " of " <> T.pack (show (stMemories r)) <> " memories" <> (if k < stMemories r then " (run akyuu embed)" else "")
+        Left why -> "search by meaning: profile " <> ebProfile e <> ", key " <> ebKey e <> ", the vectors cannot be read: " <> why,
+    "versioning: " <> if stGit r then "the root is a git repository" else "the root is not a git repository (akyuu-version makes one)",
+    case stConfig r of
+      (Nothing, 0) -> "config: no file (see akyuu config)"
+      (Nothing, n) -> "config: no file; " <> count n "note" <> " (run akyuu config)"
+      (Just p, 0) -> "config: " <> T.pack p
+      (Just p, n) -> "config: " <> T.pack p <> "; " <> count n "note" <> " (run akyuu config)"
   ]
+    <> [changedWarning (ebKey e) | Just e <- [stEmbed r], ebChanged e]
+
+-- | The settings in effect (@akyuu config@): each one, and where it came from.
+configLines :: Config -> [Text]
+configLines c =
+  ["file: " <> maybe "none (akyuu looks for $AKYUU_CONFIG, then ~/.config/akyuu/config.toml)" T.pack (cfgFile c)]
+    <> [ setting "root" (maybe ("(not set)", Default) (\s -> (T.pack (sValue s), sSource s)) (cfgRoot c)),
+         sourced "policy-ref" (cfgPolicyRef c),
+         sourced "tiers-ref" (cfgTiersRef c),
+         sourced "agent" (cfgAgent c)
+       ]
+    <> case cfgEmbed c of
+      Nothing -> ["embed: off (no profile)"]
+      Just e ->
+        setting "embed.profile" (esProfile e, esSource e)
+          : map
+            (("  " <>) . pair)
+            ( [ ("command", esCommand e),
+                ("key", esKey e),
+                ("query-prefix", quoted (esQueryPrefix e)),
+                ("document-prefix", quoted (esDocumentPrefix e)),
+                ("min", maybe "(none)" (T.pack . show) (esMin e)),
+                ("timeout", T.pack (show (esTimeout e))),
+                ("max-chars", T.pack (show (esMaxChars e)))
+              ]
+                <> [("args." <> k, v) | (k, v) <- esArgs e]
+            )
+    <> ["note: " <> n | n <- cfgNotes c]
+  where
+    sourced name s = setting name (sValue s, sSource s)
+    setting name (v, src) = name <> " = " <> v <> "  (" <> sourceText src <> ")"
+    pair (k, v) = k <> " = " <> v
+    quoted t = "\"" <> t <> "\""
 
 -- | The refs that hold each memory now, from the list of refs.
 heldBy :: [(Name, Id)] -> Map Id [Name]

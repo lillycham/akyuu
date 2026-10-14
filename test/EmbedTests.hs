@@ -2,9 +2,10 @@
 
 module EmbedTests (embedTests) where
 
-import Akyuu.Embed (Embedder (Embedder, embCommand, embModel, embTimeout), Role (Document, QueryText), chunkText, closeVectors, cosine, decodeVector, embedSettings, encodeVector, fuse, loadVectors, openVectors, parseVector, pruneVectors, putVectors, rankBySimilarity, runEmbedder)
+import Akyuu.Config (Config (cfgEmbed), EmbedSettings (esCommand, esCommandEnv, esKey, esQueryPrefix), loadConfig)
+import Akyuu.Embed (Embedder (Embedder, embArgs, embCommand, embDocumentPrefix, embQueryPrefix, embTimeout), Role (Document, QueryText), chunkText, closeVectors, cosine, decodeVector, encodeVector, fingerprint, fuse, loadVectors, openVectors, parseVector, pruneVectors, putVectors, rankBySimilarity, recordFingerprint, runEmbedder, storedFingerprint)
 import Akyuu.Embed qualified
-import Akyuu.Ops (EmbedReport (embedded), SearchMode (MeaningOnly, TextOnly), addMemory, embedMissing, searchMemoriesMode)
+import Akyuu.Ops (EmbedReport (embedChanged, embedded), SearchMode (MeaningOnly, TextOnly), addMemory, embedMissing, searchMemoriesMode)
 import Akyuu.Query (Match (matchId), SearchResult (corrections, matches), defaultSearchOptions)
 import Akyuu.SearchEval (Case (Case, caseCategory, caseExpect, caseGuess, caseQuery), parseCases, passes)
 import Control.Exception (bracket_)
@@ -15,7 +16,7 @@ import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
 import OpsTests (note, withOpsEnv)
 import Support (nid, right)
-import System.Environment (setEnv, unsetEnv)
+import System.Environment (getEnvironment, setEnv, unsetEnv)
 import System.FilePath ((</>))
 import Test.Tasty (DependencyType (AllFinish), TestTree, dependentTestGroup, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
@@ -80,32 +81,55 @@ evalSetCases =
         passes n ["z"] @?= False
     ]
 
-fake :: Text -> Embedder
-fake c = Embedder c "fake" 5 4000
+-- An embedder for a shell command, with the environment of the tests (the
+-- command needs PATH).
+fake :: Text -> IO Embedder
+fake c = (\env -> Embedder c "fake" 5 4000 "" "" Nothing [] env "test") <$> getEnvironment
+
+-- Run a fake command.
+runFake :: Text -> Role -> Text -> IO (Either Text [Float])
+runFake c role t = fake c >>= \e -> runEmbedder e role t
 
 commandCases :: TestTree
 commandCases =
   testGroup
     "the command"
     [ testCase "the text goes in on stdin, the role goes in the environment" $ do
-        r <- runEmbedder (fake "if [ \"$AKYUU_EMBED_ROLE\" = query ]; then echo '[9]'; else printf '[%s]' $(wc -c); fi") Document "abcd"
+        r <- runFake "if [ \"$AKYUU_EMBED_ROLE\" = query ]; then echo '[9]'; else printf '[%s]' $(wc -c); fi" Document "abcd"
         r @?= Right [4]
-        q <- runEmbedder (fake "if [ \"$AKYUU_EMBED_ROLE\" = query ]; then echo '[9]'; fi") QueryText "x"
+        q <- runFake "if [ \"$AKYUU_EMBED_ROLE\" = query ]; then echo '[9]'; fi" QueryText "x"
         q @?= Right [9],
+      testCase "akyuu puts the prefix of the role before the text" $ do
+        e <- (\x -> x {embQueryPrefix = "q: ", embDocumentPrefix = "document: "}) <$> fake "printf '[%s]' $(wc -c)"
+        d <- runEmbedder e Document "abcd"
+        d @?= Right [14]
+        q <- runEmbedder e QueryText "abcd"
+        q @?= Right [7],
       testCase "a failing command is a Left, not an exception" $ do
-        r <- runEmbedder (fake "exit 3") Document "x"
+        r <- runFake "exit 3" Document "x"
         assertBool "left" (isLeft r)
-        r2 <- runEmbedder (fake "no-such-command-akyuu") Document "x"
+        r2 <- runFake "no-such-command-akyuu" Document "x"
         assertBool "left" (isLeft r2),
       testCase "a timeout stops the children of the command too" $ do
         t0 <- getCurrentTime
-        r <- runEmbedder ((fake "sleep 20 | cat; echo '[1]'") {embTimeout = 1}) Document "x"
+        e <- (\x -> x {embTimeout = 1}) <$> fake "sleep 20 | cat; echo '[1]'"
+        r <- runEmbedder e Document "x"
         t1 <- getCurrentTime
         assertBool "timeout" (isLeft r)
         assertBool "returns soon, not when the child ends" (diffUTCTime t1 t0 < 10),
       testCase "a command that takes too long is a Left" $ do
-        r <- runEmbedder ((fake "sleep 5; echo '[1]'") {embTimeout = 1}) Document "x"
-        assertBool "timeout" (isLeft r)
+        e <- (\x -> x {embTimeout = 1}) <$> fake "sleep 5; echo '[1]'"
+        r <- runEmbedder e Document "x"
+        assertBool "timeout" (isLeft r),
+      testCase "the fingerprint leaves out the hashes of Nix store paths" $ do
+        a <- fake "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-akyuu-embed-llama/bin/akyuu-embed-llama"
+        b <- fake "/nix/store/zyxwvsrqpnmlkjihgfdcba9876543210-akyuu-embed-llama/bin/akyuu-embed-llama"
+        fingerprint a @?= fingerprint b,
+      testCase "the fingerprint changes with a prefix or an argument" $ do
+        a <- fake "akyuu-embed-llama"
+        fingerprint a == fingerprint a {embQueryPrefix = "search_query: "} @?= False
+        fingerprint a == fingerprint a {embArgs = [("gguf", "/models/b.gguf")]} @?= False
+        fingerprint a {embArgs = [("a", "1"), ("b", "2")]} @?= fingerprint a {embArgs = [("b", "2"), ("a", "1")]}
     ]
 
 tableCases :: TestTree
@@ -131,6 +155,18 @@ tableCases =
           n @?= 2
           loadVectors vs "m1" >>= (@?= [(nid 1, [1])])
           loadVectors vs "m2" >>= (@?= [])
+          closeVectors vs,
+      testCase "the first fingerprint of a key stays, and prune keeps only the key in use" $
+        withOpsEnv $ \dir _ -> do
+          vs <- right =<< openVectors (dir </> "embeddings.sqlite")
+          storedFingerprint vs "m1" >>= (@?= Nothing)
+          recordFingerprint vs "m1" "first"
+          recordFingerprint vs "m1" "second"
+          recordFingerprint vs "m2" "other"
+          storedFingerprint vs "m1" >>= (@?= Just "first")
+          _ <- pruneVectors vs "m1" Set.empty
+          storedFingerprint vs "m1" >>= (@?= Just "first")
+          storedFingerprint vs "m2" >>= (@?= Nothing)
           closeVectors vs
     ]
 
@@ -186,19 +222,25 @@ searchCases =
             second <- right =<< embedMissing env e
             pure (embedded first, embedded second)
           rep @?= (2, 0),
-      testCase "settings come from a config file, and the environment wins" $
+      testCase "the older embed.env still works, and the environment wins over it" $
         withOpsEnv $ \dir _ -> do
           let file = dir </> "embed.env"
           writeFile file "# a comment\nexport AKYUU_EMBED_COMMAND=cat\r\nAKYUU_EMBED_QUERY_PREFIX=search_query: \nAKYUU_EMBED_MODEL=from-file\nAKYUU_EMBED_URL=\"http://x\"\n"
           setEnv "AKYUU_CONFIG" file
           setEnv "AKYUU_EMBED_MODEL" "from-env"
-          s <- embedSettings
-          e <- Akyuu.Embed.embedderFromEnv
+          rc <- loadConfig
           setEnv "AKYUU_CONFIG" "/nonexistent/akyuu-embed.env"
           unsetEnv "AKYUU_EMBED_MODEL"
-          lookup "AKYUU_EMBED_QUERY_PREFIX" s @?= Just "search_query: "
-          lookup "AKYUU_EMBED_URL" s @?= Just "http://x"
-          fmap (\x -> (embCommand x, embModel x)) e @?= Just ("cat", "from-env"),
+          es <- either (assertFailure . show) (maybe (assertFailure "no profile") pure . cfgEmbed) rc
+          (esCommand es, esKey es, esQueryPrefix es) @?= ("cat", "from-env", "search_query: ")
+          lookup "AKYUU_EMBED_URL" (esCommandEnv es) @?= Just "http://x",
+      testCase "embed warns when the vectors of a key came from another embedder" $
+        withOpsEnv $ \_ env -> do
+          _ <- right =<< addMemory env (note "one tea" [])
+          e <- withFakeModel (maybe (assertFailure "no embedder") pure =<< embedderNow)
+          first <- right =<< embedMissing env e
+          again <- right =<< embedMissing env e {embQueryPrefix = "search_query: "}
+          (embedChanged first, embedChanged again) @?= (False, True),
       testCase "a command that fails leaves a text search, with a note" $
         withOpsEnv $ \_ env -> do
           _ <- right =<< addMemory env (note "plain text about tea" [])

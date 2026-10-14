@@ -33,8 +33,9 @@ where
 
 import Akyuu.Amend qualified as Amend
 import Akyuu.Check (CheckOptions (CheckOptions, hubDegree, longLog, minWords, nearThreshold), Finding (findingSeverity), FindingKind, Severity (Problem), defaultCheckOptions, filterFindings, kindName, severityName)
+import Akyuu.Config qualified as Config
 import Akyuu.Embed qualified as Embed
-import Akyuu.Error (AkyuuError (BadInput, BadName), describe)
+import Akyuu.Error (AkyuuError (BadConfig, BadInput, BadName), describe)
 import Akyuu.GC (Policy (Policy, gracePeriod, keepGenerations, trashTTL), defaultPolicy)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
@@ -44,7 +45,7 @@ import Akyuu.Memory (renderMemory)
 import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readLogSince, readRef, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareJSON, compareLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
 import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Store qualified as Store
@@ -71,7 +72,7 @@ import Data.Version (showVersion)
 import Options.Applicative (Alternative (many, some, (<|>)), CompletionResult (execCompletion), Parser, ParserInfo, ParserResult (CompletionInvoked, Failure, Success), ReadM, argument, auto, command, defaultPrefs, eitherReader, execParserPure, flag', footer, fullDesc, help, helper, hsubparser, info, infoOption, long, metavar, option, optional, progDesc, readerError, renderFailure, short, showDefault, showDefaultWith, strArgument, strOption, switch, value, (<**>))
 import Paths_akyuu qualified as Pkg
 import System.Directory (createDirectoryIfMissing, getCurrentDirectory)
-import System.Environment (getArgs, getProgName, lookupEnv)
+import System.Environment (getArgs, getProgName, lookupEnv, setEnv)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess), exitWith)
 import System.IO (hFlush, hIsTerminalDevice, hPutStrLn, stderr, stdout)
 
@@ -85,6 +86,8 @@ import System.IO (hFlush, hIsTerminalDevice, hPutStrLn, stderr, stdout)
 data Cli = Cli
   { -- | The @--root@ option, if it was given. See 'resolveRoot'.
     cliRoot :: Maybe FilePath,
+    -- | The @--embed-profile@ option: the profile of the config file to use.
+    cliProfile :: Maybe Text,
     cliCommand :: Command IdSpec
   }
   deriving (Eq, Show)
@@ -196,6 +199,9 @@ data Command i
     Viz
   | -- | Make the demo store (@seed --demo@), in this directory or the root.
     Seed (Maybe FilePath)
+  | -- | Show the settings in effect, and where each came from. It needs no
+    -- store, so it runs before one is opened.
+    ShowConfig
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
 -- Parsing --------------------------------------------------------------
@@ -271,6 +277,7 @@ commandParser =
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
       <> cmd "init" (pure Init) "Start a store: make the root, and write a short policy for agents and a manifest of the tiers. Existing refs are kept."
       <> cmd "status" (pure Status) "Show the setup: the counts, the manifest, the policy, search by meaning and versioning."
+      <> cmd "config" (pure ShowConfig) "Show the settings in effect (the config file, the environment, the defaults), and where each came from."
       <> cmd "embed" (Embed <$> switch (long "prune" <> help "Also remove the vectors of other models and of memories that GC deleted.")) "Give a vector to each memory that has none, with the command in AKYUU_EMBED_COMMAND (search by meaning)."
       <> cmd "search-eval" searchEvalP "Run a set of searches in each mode, and show which ones find the expected memories."
       <> cmd "neighbours" neighboursP "Show the edges of a memory, in both directions."
@@ -427,7 +434,8 @@ commandParser =
 cliParser :: Parser Cli
 cliParser =
   Cli
-    <$> optional (strOption (long "root" <> metavar "DIR" <> help "The directory of the store. The default is $AKYUU_ROOT."))
+    <$> optional (strOption (long "root" <> metavar "DIR" <> help "The directory of the store. The default is $AKYUU_ROOT, then root in the config file."))
+    <*> optional (strOption (long "embed-profile" <> metavar "NAME" <> help "The embedding profile of the config file to use. The default is $AKYUU_EMBED_PROFILE, then embed.profile in the config file."))
     <*> commandParser
 
 -- | The parser with its help text.
@@ -561,7 +569,8 @@ runCommand env c = runExceptT $ case c of
   Note cwd kind agent given text -> do
     mr <- ExceptT (liftIO (resolveTiersRef given))
     place <- liftIO (placeFor cwd)
-    who <- liftIO (maybe (maybe "agent" T.pack <$> lookupEnv "AKYUU_AGENT") pure agent)
+    cfg <- config
+    let who = fromMaybe (Config.sValue (Config.cfgAgent cfg)) agent
     (n, i) <- ExceptT (noteEpisode env mr place NewMemory {newKind = kind, newAgent = who, newEdges = Set.empty, newBody = text})
     pure (ok ["noted in " <> nameText n <> " " <> Id.render i])
   Init -> do
@@ -574,8 +583,8 @@ runCommand env c = runExceptT $ case c of
     pr <- ExceptT (liftIO (resolvePolicyRef Nothing))
     ok . statusLines <$> ExceptT (statusOf env (Store.storeRoot (envStore env)) mr pr)
   Embed prune -> do
-    me <- liftIO Embed.embedderFromEnv
-    e <- maybe (ExceptT (pure (Left (BadInput "AKYUU_EMBED_COMMAND is not set. Set it to a command that reads a text on stdin and prints a vector (see docs/embeddings.md).")))) pure me
+    cfg <- config
+    e <- maybe (ExceptT (pure (Left (BadInput "No embedding profile is set. Add one to the config file (see akyuu config and docs/embeddings.md).")))) pure (Embed.embedderFromConfig cfg)
     removed <- if prune then ExceptT (pruneEmbeddings env e) else pure 0
     ls <- embedLines (Embed.embModel e) <$> ExceptT (embedMissing env e)
     pure (ok (["pruned the vectors of " <> T.pack (show removed) <> " memories or models" | prune] <> ls))
@@ -607,8 +616,12 @@ runCommand env c = runExceptT $ case c of
     policy <- liftIO (resolvePolicyRef givenPolicy)
     tiers <- liftIO (resolveTiersRef givenTiers)
     place <- liftIO (placeFor Nothing)
-    -- Empty: the server takes the name of the client (MCP.clientAgent).
-    agent <- liftIO (maybe "" T.pack <$> lookupEnv "AKYUU_AGENT")
+    -- Empty: the server takes the name of the client (MCP.clientAgent),
+    -- unless the environment or the config file names an agent.
+    cfg <- config
+    let agent = case Config.cfgAgent cfg of
+          Config.Sourced _ Config.Default -> ""
+          s -> Config.sValue s
     mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place)) <$> policy <*> tiers))
     liftIO (MCP.serve mcpConfig env)
     pure (Output BS.empty True False)
@@ -618,9 +631,12 @@ runCommand env c = runExceptT $ case c of
   Viz -> do
     v <- liftIO (Read.readBundle env)
     pure (Output (Page.vizPage v) True False)
-  -- 'main' runs seed before it opens a store, so this case is not used.
+  -- 'main' runs seed and config before it opens a store, so these cases are
+  -- not used.
   Seed _ -> ExceptT (pure (Left (BadInput "seed makes its own store. It does not run on an open one.")))
+  ShowConfig -> ok . configLines <$> config
   where
+    config = ExceptT (first (BadConfig . Config.describeConfigError) <$> Config.loadConfig)
     -- The address goes to stdout alone, so a script can read it.
     announce p = do
       putStrLn ("http://127.0.0.1:" <> show p <> "/")
@@ -637,11 +653,27 @@ main = do
   prog <- getProgName
   case parseCli args of
     Success cli -> do
-      envRoot <- lookupEnv "AKYUU_ROOT"
+      -- The option goes into the environment, so that every part that reads
+      -- the config (and an MCP server, for its whole life) sees it.
+      mapM_ (setEnv "AKYUU_EMBED_PROFILE" . T.unpack) (cliProfile cli)
+      rc <- Config.loadConfig
       let seedRoot = case cliCommand cli of
             Seed r -> r
             _ -> Nothing
-      case resolveRoot (maybe (cliRoot cli) Just seedRoot) envRoot of
+          configRoot = either (const Nothing) (fmap Config.sValue . Config.cfgRoot) rc
+      case (cliCommand cli, rc) of
+        -- config shows the settings, or says what is wrong with the file.
+        (ShowConfig, Left err) -> failWith 2 (BadConfig (Config.describeConfigError err))
+        (ShowConfig, Right c) -> do
+          let fromFlag e = case cliProfile cli of
+                Just _ -> e {Config.esSource = Config.FromFlag}
+                Nothing -> e
+              c' = (Config.withRootOption (cliRoot cli) c) {Config.cfgEmbed = fromFlag <$> Config.cfgEmbed c}
+          BS.putStr (encodeUtf8 (T.unlines (configLines c')))
+          exitWith ExitSuccess
+        (_, Left err) -> failWith 2 (BadConfig (Config.describeConfigError err))
+        _ -> pure ()
+      case resolveRoot (maybe (cliRoot cli) Just seedRoot) configRoot of
         Left e -> failWith 2 e
         Right root -> do
           r <- case cliCommand cli of
