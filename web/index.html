@@ -151,6 +151,16 @@ pre.body { white-space: pre-wrap; word-break: break-word; background: var(--card
 #refs-list .gen.now { color: var(--sora); }
 #refs-list .line { font: 700 15px/1.35 var(--font-display); color: var(--ink); margin-top: 1px; word-break: break-word; }
 #refs-list li.notkept .line { color: var(--ink-muted); font-weight: 400; }
+/* Search: each hit a marked line, its snippet in Mincho with the words in gold. */
+.pill.now { color: var(--sora); border-color: var(--sora); }
+#search-results .hits { margin-top: 6px; }
+#search-results .hits > li { position: relative; padding-left: 22px; margin: 0 0 16px; max-width: 48em; }
+#search-results .hits > li::before { content: ""; position: absolute; left: 2px; top: 5px; width: 9px; height: 9px; transform: rotate(45deg); border: 1.6px solid var(--sora); background: radial-gradient(var(--sora) 30%, var(--bg) 32%); box-shadow: var(--glow-accent); }
+#search-results .hits > li.old::before { border-color: var(--ink-dim); background: var(--bg); box-shadow: none; }
+#search-results .snippet { font: 400 17px/1.6 var(--font-display); color: var(--ink); margin-top: 2px; }
+#search-results li.old .snippet { color: var(--ink-muted); }
+#search-results h3 { font: 500 12px/1.4 var(--font-mono); color: var(--sora); margin: 22px 0 8px; }
+#search-results h3::before { content: "※ "; }
 ol.timeline { list-style: none; margin: 0; padding: 0 0 0 12px; border-left: 1.4px solid var(--wire); }
 ol.timeline li { margin: 0 0 6px; padding-left: 8px; position: relative; }
 ol.timeline li::before { content: ""; position: absolute; left: -18px; top: 5px; width: 9px; height: 9px; transform: rotate(45deg); background: var(--bg); border: 1.6px solid var(--wire); }
@@ -1999,9 +2009,10 @@ const Akyuu = (function () {
     if (!r.matches.length) out.appendChild(el('p', { class: 'muted', text: 'No matches.' }));
     const ul = el('ul', { class: 'plain hits' });
     for (const m of r.matches) {
-      const snip = el('div');
+      const snip = el('div', { class: 'snippet' });
       for (const part of snippetParts(m.snippet)) snip.appendChild(part.mark ? el('mark', { text: part.text }) : document.createTextNode(part.text));
-      const li = el('li', {}, [idLink(m.id), m.supersededBy.length ? el('span', { class: 'pill', text: 'old version' }) : el('span', { class: 'pill good', text: 'current' }), snip]);
+      const li = el('li', {}, [idLink(m.id), m.supersededBy.length ? el('span', { class: 'pill', text: 'old version' }) : el('span', { class: 'pill now', text: 'current' }), snip]);
+      if (m.supersededBy.length) li.setAttribute('class', 'old');
       for (const s of m.supersededBy) li.appendChild(el('div', { class: 'muted' }, ['superseded by ', idLink(s)]));
       ul.appendChild(li);
     }
