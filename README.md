@@ -69,6 +69,7 @@ and `akyuu-version`.
 
 | Topic | Document |
 |---|---|
+| Every command, flag and file, as man pages | `man akyuu`, `man 5 akyuu` ([man/](man/)) |
 | The format on disk, and what is stable | [docs/format.md](docs/format.md) |
 | Install, the home-manager module, backup, versioning | [docs/install.md](docs/install.md) |
 | An install guide for an agent to follow | [docs/agent-install.md](docs/agent-install.md) |

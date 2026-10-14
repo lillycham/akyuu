@@ -21,11 +21,27 @@
       # the Haskell libraries and to GHC, so the closure is the binary and a
       # few system libraries, and not the libraries and docs of every
       # dependency (it was about 3.5 GiB without it).
+      #
+      # The man pages (man/*.scd, see test/check-man.sh) and the shell
+      # completions (from optparse-applicative) go in at install time. The
+      # date of a page is the date of the last commit.
       akyuuFor = pkgs:
         let
           lib = pkgs.haskell.lib;
+          base = lib.justStaticExecutables (lib.dontHaddock (lib.dontCheck (withTests pkgs)));
         in
-        lib.justStaticExecutables (lib.dontHaddock (lib.dontCheck (withTests pkgs)));
+        lib.overrideCabal base (drv: {
+          buildTools = (drv.buildTools or [ ]) ++ [ pkgs.scdoc pkgs.installShellFiles ];
+          postInstall = (drv.postInstall or "") + ''
+            export SOURCE_DATE_EPOCH=${toString (self.lastModified or 1)}
+            for p in man/*.scd; do scdoc < "$p" > "''${p%.scd}"; done
+            installManPage man/akyuu.1 man/akyuu.5
+            installShellCompletion --cmd akyuu \
+              --bash <($out/bin/akyuu --bash-completion-script $out/bin/akyuu) \
+              --zsh <($out/bin/akyuu --zsh-completion-script $out/bin/akyuu) \
+              --fish <($out/bin/akyuu --fish-completion-script $out/bin/akyuu)
+          '';
+        });
 
       backupFor = pkgs:
         pkgs.writeShellApplication {
@@ -112,6 +128,17 @@
           ''
             cd $src
             ormolu --mode check $(find app src test -name '*.hs' | sort)
+            touch $out
+          '';
+        # The man pages name every command and flag of `akyuu --help`, and
+        # render with no mandoc errors.
+        man = pkgs.runCommand "akyuu-man-check"
+          {
+            nativeBuildInputs = [ (akyuuFor pkgs) pkgs.scdoc pkgs.mandoc ];
+            src = ./.;
+          }
+          ''
+            bash $src/test/check-man.sh akyuu $src/man
             touch $out
           '';
         module =
