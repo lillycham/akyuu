@@ -1,7 +1,7 @@
 # Search by meaning
 
-Status: built on a branch, 2026-10-11. It is off until `AKYUU_EMBED_COMMAND` is
-set. Without it, nothing changes.
+Status: built 2026-10-11; settings in profiles of the config file since
+2026-10-14. It is off until a profile is set. Without one, nothing changes.
 
 Text search finds the words of a query. It does not find "her computer is
 running out of room" when the memory says "mirai is short of disk". An
@@ -12,25 +12,54 @@ nearest vectors with the text hits.
 ## The contract
 
 Akyuu runs no model and names none. A command does the work, so any runtime can
-sit behind it (LM Studio, Ollama, llama.cpp, MLX, a script):
+sit behind it (LM Studio, Ollama, llama.cpp, MLX, a script). The command and
+everything that goes with its model are a _profile_ in
+`~/.config/akyuu/config.toml` (see CONFIGURATION in `man akyuu`):
 
-| Variable | Meaning |
+```toml
+[embed]
+profile = "nomic"
+
+[embed.profiles.nomic]
+command = "akyuu-embed-llama"
+key = "llama:nomic-v1.5-q8_0"
+query-prefix = "search_query: "
+document-prefix = "search_document: "
+min = 0.55
+timeout = 60
+args = { gguf = "/models/nomic-embed-text-v1.5.Q8_0.gguf" }
+```
+
+| Key | Meaning |
 |---|---|
-| `AKYUU_EMBED_COMMAND` | The command, run with `sh -c`. It reads a text on stdin and prints a vector. |
-| `AKYUU_EMBED_MODEL` | The key of the vectors (default: the command). Change it when the model **or its runtime or quantisation** changes. Vectors with different keys are never compared. |
-| `AKYUU_EMBED_TIMEOUT` | Seconds for one call (default 10). |
-| `AKYUU_EMBED_MAX_CHARS` | The most characters sent for one memory (default 4000). |
-| `AKYUU_EMBED_MIN` | The lowest cosine similarity that counts as near (default: none). It depends on the model: see below. |
+| `command` | The command, run with `sh -c`. It reads a text on stdin and prints a vector. |
+| `key` | The key of the vectors. Change it when the model **or its runtime or quantisation** changes. Vectors with different keys are never compared. |
+| `query-prefix`, `document-prefix` | Text that akyuu puts before a search and before a memory, for the models that want one. |
+| `min` | The lowest cosine similarity that counts as near (default: none). It depends on the model: see below. |
+| `timeout` | Seconds for one call (default 10). |
+| `max-chars` | The most characters sent in one call (default 4000). |
+| `args` | Arguments for the command. Each key arrives as a variable: `gguf` as `AKYUU_EMBED_GGUF`. Akyuu does not read them. |
 
-The command also gets `AKYUU_EMBED_ROLE=query` or `document`, because some
-models want a different prefix for each.
+The command also gets `AKYUU_EMBED_ROLE=query` or `document`.
 
 Accepted output: a JSON array of numbers, `{"embedding": [...]}`,
 `{"embeddings": [[...]]}` or the OpenAI shape `{"data": [{"embedding": [...]}]}`.
 
-`akyuu-embed-openai` (in this flake) is a command for any server with the
-OpenAI embeddings API. It also takes `AKYUU_EMBED_URL`, `AKYUU_EMBED_API_MODEL`,
-`AKYUU_EMBED_QUERY_PREFIX` and `AKYUU_EMBED_DOCUMENT_PREFIX`.
+The flake has two commands. `akyuu-embed-llama` runs llama.cpp itself (args
+`gguf`, `idle`, `llama-port`). `akyuu-embed-openai` calls any server with the
+OpenAI embeddings API (args `url`, `api-model`).
+
+A profile keeps the parts of one model together, so a change of model is a
+change of one line (`profile`), and `akyuu --embed-profile NAME` tries another
+model for one command. `embeddings.sqlite` keeps a fingerprint of the profile
+that made the vectors of each key (the command, its args and the prefixes).
+When the fingerprint changes but the key does not, `embed` and `status` warn:
+the vectors of two models must not share a key.
+
+The older way, `AKYUU_EMBED_COMMAND` and the other `AKYUU_EMBED_*` variables
+in the environment or in `~/.config/akyuu/embed.env`, still works: it makes a
+profile named `environment`. `AKYUU_EMBED_MIN`, `AKYUU_EMBED_TIMEOUT` and
+`AKYUU_EMBED_MAX_CHARS` change the profile in use for one command.
 
 ## How it works
 
@@ -56,19 +85,23 @@ OpenAI embeddings API. It also takes `AKYUU_EMBED_URL`, `AKYUU_EMBED_API_MODEL`,
    Without a runtime the server says `No LM Runtime found for model format 'gguf'`.
 2. Download a model at **Q8_0**: `lms get https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/blob/main/nomic-embed-text-v1.5.Q8_0.gguf --gguf -y`
    (146 MB).
-3. `lms server start`, then in the environment:
+3. `lms server start`, then add a profile to `~/.config/akyuu/config.toml`:
 
-```sh
-export AKYUU_EMBED_COMMAND=akyuu-embed-openai
-export AKYUU_EMBED_MODEL=lmstudio:nomic-v1.5-q8_0
-export AKYUU_EMBED_API_MODEL=text-embedding-nomic-embed-text-v1.5@q8_0
-export AKYUU_EMBED_QUERY_PREFIX="search_query: "
-export AKYUU_EMBED_DOCUMENT_PREFIX="search_document: "
-export AKYUU_EMBED_MIN=0.55
-akyuu embed          # one time: 80 memories took 8 seconds
+```toml
+[embed.profiles.lmstudio]
+command = "akyuu-embed-openai"
+key = "lmstudio:nomic-v1.5-q8_0"
+query-prefix = "search_query: "
+document-prefix = "search_document: "
+min = 0.55
+args = { api-model = "text-embedding-nomic-embed-text-v1.5@q8_0" }
 ```
 
-With home-manager: `programs.akyuu.embed = { enable = true; model = "..."; apiModel = "..."; ... }`.
+4. `akyuu embed` once (80 memories took 8 seconds), and `akyuu config` to see
+   the profile in use.
+
+With home-manager: `programs.akyuu.embed = { enable = true; model = "..."; apiModel = "..."; ... }`
+makes a profile named `default`; `programs.akyuu.embed.profiles` adds more.
 
 ## Evaluation (2026-10-11)
 
@@ -106,7 +139,7 @@ disappoints: add the line to `policy/embedding-eval`.
 
 ## Long memories, old vectors, the daily job
 
-- A memory longer than `AKYUU_EMBED_MAX_CHARS` is cut into chunks at blank
+- A memory longer than `max-chars` (of the profile) is cut into chunks at blank
   lines, and each chunk gets a vector (at most 8). A search ranks a memory by
   its best chunk. On the eval set this took the paraphrases from 12 to 13 of
   13, because the long memory policy is now embedded whole.
@@ -143,5 +176,7 @@ the same 25 searches.
   235 MB, and a llama.cpp that nixpkgs does not have yet.
 
 Conclusion: no reason to switch now. Try again when nixpkgs has llama.cpp
-b11452 or later, with a bigger set of searches. Then the change is a new model
-file, new prefixes and a new `AKYUU_EMBED_MODEL` key.
+b11452 or later, with a bigger set of searches. Then the change is a second
+profile (a new model file, new prefixes and a new key): compare the two with
+`akyuu --embed-profile gemma search-eval`, and change `embed.profile` if it
+wins.

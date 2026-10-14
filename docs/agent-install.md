@@ -59,8 +59,9 @@ profile. Ask the person how they manage their setup, and where its files are.
 Also ask now which extras of step 6.3 they want, so that one switch does
 everything. Then use the first choice that fits:
 
-1. **home-manager.** Use the module of the flake: it installs the binary, sets
-   `AKYUU_ROOT`, makes the store directory, and has the daily jobs of step 6.3.
+1. **home-manager.** Use the module of the flake: it installs the binary,
+   writes the root to `~/.config/akyuu/config.toml`, makes the store
+   directory, and has the daily jobs of step 6.3.
    **Ask**, then add the input and the module:
 
    ```nix
@@ -130,9 +131,11 @@ akyuu --root ROOT status
 agents (`policy/memory`) and a manifest of the tiers (`policy/tiers`). The
 person can change both later.
 
-For the command line, `AKYUU_ROOT` must be set. A configuration from step 2
-sets it after the switch. With a profile install, **ask** before you add
-`export AKYUU_ROOT=ROOT` to a shell profile.
+Without `--root`, akyuu needs the root from its config file or from
+`AKYUU_ROOT`. The module of step 2.1 writes the file, and the configuration of
+step 2.2 sets the variable after the switch. With a profile install, **ask**
+before you write `root = "ROOT"` to `~/.config/akyuu/config.toml`. Check
+with `akyuu config`: it shows the root and where it came from.
 
 ## 4. Connect the agent
 

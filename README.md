@@ -42,7 +42,8 @@ before it changes your files.
 The intended way to install Akyuu is through Nix with home-manager.
 The home-manager module configures the root, GC, backups and versioning, and
 sets up `launchd` or `systemd` services to run the above automatically.
-The home-manager module of the flake installs the binary, sets `AKYUU_ROOT`,
+It installs the binary, writes the settings to `~/.config/akyuu/config.toml`
+(`akyuu config` shows them), and makes the store directory.
 
 See [docs/install.md](docs/install.md) for both, the daily jobs, `akyuu-backup`
 and `akyuu-version`.
@@ -56,9 +57,9 @@ and `akyuu-version`.
   to agents you trust to see your memories.
 - **Local.** The MCP server speaks on stdio, and the webview only listens on
   localhost.
-- **Commands from settings.** `AKYUU_EMBED_COMMAND` is run with `sh -c`. It
-  comes from the environment or from `~/.config/akyuu/embed.env`: protect that
-  file like a script.
+- **Commands from settings.** The command of an embedding profile is run with
+  `sh -c`. It comes from `~/.config/akyuu/config.toml` or the environment:
+  protect that file like a script.
 - **Forgetting.** Memories that have been superseded will be garbage collected,
   and eventually deleted completely. You can make backups, and `akyuu-version`
   serves to bring memories into Git for versioning and sync.
@@ -83,7 +84,8 @@ and `akyuu-version`.
 ## Usage
 
 ```sh
-export AKYUU_ROOT=~/.local/share/akyuu   # or pass --root DIR
+# Where the store is: root in ~/.config/akyuu/config.toml, or AKYUU_ROOT, or --root DIR
+mkdir -p ~/.config/akyuu && echo 'root = "~/.local/share/akyuu"' >> ~/.config/akyuu/config.toml
 
 akyuu add --kind fact --agent me --body "Nix for every tool."   # prints the id
 akyuu add --ref me/tools --kind fact --agent me --body "..."    # the same, under a new ref
