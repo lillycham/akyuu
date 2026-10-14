@@ -44,6 +44,7 @@ where
 import Akyuu.Amend qualified as Amend
 import Akyuu.Check (CheckOptions (hubDegree, longLog, nearThreshold), FindingKind, Severity, defaultCheckOptions, filterFindings, kindName, severityName)
 import Akyuu.Error (AkyuuError (BadId, BadInput, BadName), describe)
+import Akyuu.Fuzzy qualified as Fuzzy
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
@@ -66,6 +67,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy qualified as BL
 import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
@@ -406,9 +408,52 @@ plainEdges = [("about", About), ("derived_from", DerivedFrom), ("refines", Refin
 --
 -- A name that is not a tool gives 'UnknownTool'. Every other problem gives
 -- 'BadArguments' with a text for the model. An argument that the tool does
--- not know is ignored.
+-- not have is refused ('checkArgNames').
 parseToolCall :: Text -> Args -> Either CallError ToolCall
-parseToolCall n args = case n of
+parseToolCall n args = checkArgNames n args *> parseArgs n args
+
+-- | The names of the arguments of each tool, from the schemas of 'toolList'.
+toolArgNames :: Map.Map Text [Text]
+toolArgNames =
+  Map.fromList
+    [ (n, maybe [] (map K.toText . KM.keys) (props s))
+    | Object t <- toolList,
+      Just (String n) <- [KM.lookup "name" t],
+      Just (Object s) <- [KM.lookup "inputSchema" t]
+    ]
+  where
+    props s = case KM.lookup "properties" s of
+      Just (Object p) -> Just p
+      _ -> Nothing
+
+-- | Refuse an argument that the schema of the tool does not have. The schemas
+-- say @additionalProperties: false@, and an argument that was dropped in
+-- silence could change what a call means: an agent that sends @expect@ in
+-- place of @expected@ would lose the check of the ref. The error names the
+-- nearest argument, if one is near, and all of them.
+checkArgNames :: Text -> Args -> Either CallError ()
+checkArgNames n args = case Map.lookup n toolArgNames of
+  Nothing -> Right () -- 'parseArgs' reports an unknown tool
+  Just known -> case filter (`notElem` known) (map K.toText (KM.keys args)) of
+    [] -> Right ()
+    (bad : _) ->
+      Left . BadArguments $
+        "The tool "
+          <> n
+          <> " has no argument '"
+          <> bad
+          <> "'"
+          <> maybe "" (\s -> " (did you mean '" <> s <> "'?)") (nearest bad known)
+          <> ". Its arguments are: "
+          <> T.intercalate ", " known
+          <> "."
+  where
+    nearest w ks = case sortOn fst [(Fuzzy.editDistance w k, k) | k <- ks] of
+      ((d, k) : _) | d <= 2 -> Just k
+      _ -> Nothing
+
+parseArgs :: Text -> Args -> Either CallError ToolCall
+parseArgs n args = case n of
   "add" -> do
     m <- memoryArg args (plainEdges <> [("supersedes", Supersedes)])
     r <- optional' args "ref" asText "a string" >>= traverse parseName
