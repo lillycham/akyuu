@@ -20,6 +20,17 @@
 - The home-manager module writes `config.toml`, has the options
   `embed.profiles`, `embed.profile` and `settings`, and no longer sets session
   variables or writes `embed.env`.
+- Man pages: `akyuu(1)` for the commands, `akyuu-backup` and `akyuu-version`,
+  and `akyuu(5)` for the files of a store. The package installs them, and
+  completions for bash, zsh and fish. A check of the flake fails when a
+  command or a flag of `akyuu --help` is missing from `akyuu(1)`.
+
+### Fixes
+
+- The MCP server refuses an argument that a tool does not have, with the
+  arguments it has and a "did you mean" hint. Before, it ignored the argument,
+  so a misspelt `expected` made a compare-and-set into a plain write.
+- When the root is missing, the error says to run `akyuu init`.
 
 ### Changes
 
