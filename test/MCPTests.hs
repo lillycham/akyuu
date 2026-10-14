@@ -26,7 +26,7 @@ import Data.Text qualified as T
 import OpsTests (withOpsEnv)
 import Support (nid, right)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?), (@?=))
 
 mcpTests :: TestTree
 mcpTests =
@@ -134,6 +134,32 @@ protocolCases =
       testCase "a missing argument gives a tool error" $
         toolOut (answer (callReq "neighbours" (object [])))
           @?= Just (String "The argument 'id' is missing.", Bool True),
+      testCase "an argument that the tool does not have gives a tool error that names the nearest one" $ do
+        let callArgs = object ["ref" .= ("me/notes" :: Text), "expect" .= render (nid 1), "kind" .= ("fact" :: Text), "agent" .= ("me" :: Text), "body" .= ("x" :: Text)]
+        case toolOut (answer (callReq "supersede" callArgs)) of
+          Just (String t, Bool True) -> do
+            assertBool (T.unpack t) ("has no argument 'expect' (did you mean 'expected'?)" `T.isInfixOf` t)
+            assertBool (T.unpack t) ("Its arguments are: " `T.isInfixOf` t)
+          other -> assertFailure ("no tool error: " <> show other),
+      testCase "an argument that is far from every name gets no guess" $
+        case toolOut (answer (callReq "neighbours" (object ["id" .= render (nid 1), "colour" .= ("blue" :: Text)]))) of
+          Just (String t, Bool True) -> assertBool (T.unpack t) (not ("did you mean" `T.isInfixOf` t))
+          other -> assertFailure ("no tool error: " <> show other),
+      testCase "each tool of tools/list is known to tools/call, with each argument of its schema" $
+        case answer (req (Number 2) "tools/list" (object [])) >>= at ["result", "tools"] of
+          Just (Array ts) ->
+            sequence_
+              [ do
+                  parseToolCall n KM.empty /= Left (UnknownTool n) @? ("tools/call does not know " <> T.unpack n)
+                  case parseToolCall n (KM.singleton (K.fromText k) Null) of
+                    Left (BadArguments e) | "has no argument" `T.isInfixOf` e -> assertFailure (T.unpack e)
+                    _ -> pure ()
+              | t <- foldr (:) [] ts,
+                Just (String n) <- [at ["name"] t],
+                Just (Object ps) <- [at ["inputSchema", "properties"] t],
+                k <- map K.toText (KM.keys ps)
+              ]
+          other -> assertFailure ("no tools: " <> show other),
       testCase "an unknown tool gives -32602" $
         errCode (answer (callReq "nope" (object []))) @?= Just (Number (-32602)),
       testCase "tools/call with no params gives -32602" $
