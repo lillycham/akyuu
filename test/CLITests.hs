@@ -2,7 +2,7 @@
 
 module CLITests (cliTests) where
 
-import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand), Command (Add, Append, CheckStore, Compare, Context, GC, Get, Log, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand, cliProfile), Command (Add, Append, CheckStore, Compare, Context, GC, Get, Log, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
 import Akyuu.Check (FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Check qualified as Check
 import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
@@ -68,7 +68,11 @@ parseCases =
         c
           @?= Cli
             (Just "/s")
+            Nothing
             (Add (MemoryArgs "fact" "claude" [(About, Full (nid 1)), (Refines, Full (nid 2))] (BodyText "hi"))),
+      testCase "--embed-profile is a global option" $ do
+        c <- parses ["--embed-profile", "gemma", "search-eval"]
+        cliProfile c @?= Just "gemma",
       testCase "serve has a default port, and takes --port 0" $ do
         c <- parses ["serve"]
         cliCommand c @?= Serve 7420
@@ -82,7 +86,7 @@ parseCases =
         cliCommand c @?= Viz,
       testCase "add reads stdin by default" $ do
         c <- parses ["add", "--kind", "fact", "--agent", "claude"]
-        c @?= Cli Nothing (Add (MemoryArgs "fact" "claude" [] BodyStdin)),
+        c @?= Cli Nothing Nothing (Add (MemoryArgs "fact" "claude" [] BodyStdin)),
       testCase "add takes --file" $ do
         c <- parses ["add", "--kind", "fact", "--agent", "claude", "-f", "body.txt"]
         cliCommand c @?= Add (MemoryArgs "fact" "claude" [] (BodyFile "body.txt")),
@@ -305,7 +309,8 @@ runCases =
           let ls = T.lines (decodeUtf8 (outBytes o))
           assertBool "count" ("memories: 1, refs: 0, pins: 0" `elem` ls)
           assertBool "policy missing" (any ("policy policy/memory: missing" `T.isPrefixOf`) ls)
-          assertBool "no embedding" ("search by meaning: off (AKYUU_EMBED_COMMAND is not set)" `elem` ls),
+          assertBool "no embedding" ("search by meaning: off (no embedding profile is set)" `elem` ls)
+          assertBool "no config file" ("config: no file (see akyuu config)" `elem` ls),
       testCase "a prefix that no memory has is an error" $
         withOpsEnv $ \_ env -> do
           _ <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "x")))

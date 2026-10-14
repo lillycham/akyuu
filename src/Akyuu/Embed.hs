@@ -4,16 +4,10 @@
 --
 -- Akyuu runs no model and names none. A person sets a command. The command
 -- reads a text on stdin and writes a vector on stdout, so any runtime can sit
--- behind it (LM Studio, Ollama, llama.cpp, MLX, a script). The command and the
--- name of the model come from the environment:
---
--- > AKYUU_EMBED_COMMAND   the command, run with sh -c
--- > AKYUU_EMBED_MODEL     the key of the vectors (default: the command)
--- > AKYUU_EMBED_TIMEOUT   seconds for one call (default 10)
--- > AKYUU_EMBED_MAX_CHARS the most characters sent for one memory (default 4000)
---
--- The command gets @AKYUU_EMBED_ROLE=query@ or @document@, because some models
--- want a different prefix for each.
+-- behind it (LM Studio, Ollama, llama.cpp, MLX, a script). The command, the
+-- key of its vectors and the prefixes of the model come from a profile of the
+-- config (see "Akyuu.Config"). akyuu puts the prefix of the role before the
+-- text. The command also gets @AKYUU_EMBED_ROLE=query@ or @document@.
 --
 -- An embedding is derived data that is keyed by an 'Id', and an 'Id' names
 -- one text, so a vector is never out of date. The vectors are in their own
@@ -38,8 +32,9 @@ module Akyuu.Embed
     -- * The command
     Embedder (..),
     Role (..),
+    embedderFromConfig,
     embedderFromEnv,
-    embedSettings,
+    fingerprint,
     runEmbedder,
     embedText,
 
@@ -52,12 +47,14 @@ module Akyuu.Embed
     loadVectors,
     storedIds,
     pruneVectors,
+    recordFingerprint,
+    storedFingerprint,
   )
 where
 
+import Akyuu.Config (Config (cfgEmbed), EmbedSettings (esArgs, esCommand, esCommandEnv, esDocumentPrefix, esKey, esMaxChars, esMin, esProfile, esQueryPrefix, esTimeout), loadConfig)
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracketOnError, onException, try)
 import Control.Monad (forM_)
 import Data.Aeson (Value (Array, Number, Object))
@@ -68,25 +65,24 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (floatLE, toLazyByteString)
 import Data.ByteString.Lazy qualified as BL
+import Data.Char (isAlphaNum)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Ord (Down (Down))
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding (decodeUtf8', encodeUtf8)
+import Data.Text.Encoding (encodeUtf8)
 import Database.SQLite.Simple (Connection, Only (Only), close, execute, execute_, open, query, query_, withTransaction)
 import GHC.Float (castWord32ToFloat)
-import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.IO (hClose, hSetBinaryMode)
 import System.Posix.Signals (sigTERM, signalProcessGroup)
 import System.Process (CreateProcess (create_group, env, std_err, std_in, std_out), ProcessHandle, StdStream (CreatePipe, NoStream), getPid, shell, waitForProcess, withCreateProcess)
 import System.Timeout (timeout)
-import Text.Read (readMaybe)
 
 -- | A vector of one model.
 type Vector = [Float]
@@ -202,7 +198,8 @@ fuse lists = map fst (sortOn (\(i, s) -> (Down s, firstSeen i)) (Map.toList scor
 
 -- The command ----------------------------------------------------------
 
--- | What the command is, from the environment.
+-- | How to make vectors: a profile of the config ("Akyuu.Config"), with
+-- every default filled in.
 data Embedder = Embedder
   { embCommand :: Text,
     -- | The key of the vectors.
@@ -210,7 +207,19 @@ data Embedder = Embedder
     -- | Seconds for one call.
     embTimeout :: Int,
     -- | The most characters of a text that the command gets.
-    embMaxChars :: Int
+    embMaxChars :: Int,
+    -- | Put before the text of a search.
+    embQueryPrefix :: Text,
+    -- | Put before the text of a memory.
+    embDocumentPrefix :: Text,
+    -- | The lowest cosine similarity that counts as near.
+    embMin :: Maybe Double,
+    -- | The arguments of the profile, for the fingerprint.
+    embArgs :: [(Text, Text)],
+    -- | The environment of the command.
+    embEnv :: [(String, String)],
+    -- | The name of the profile.
+    embProfile :: Text
   }
   deriving (Eq, Show)
 
@@ -218,79 +227,76 @@ data Embedder = Embedder
 data Role = Document | QueryText
   deriving (Eq, Show)
 
--- | The embedder that the environment names, or 'Nothing' if
--- @AKYUU_EMBED_COMMAND@ is not set or is empty.
--- | The environment, with the settings of the config file under it. The
--- file is @$AKYUU_CONFIG@, or @$XDG_CONFIG_HOME/akyuu/embed.env@, or
--- @~/.config/akyuu/embed.env@. A line is @NAME=value@, and the value is
--- everything after the first @=@ (spaces stay). A line that starts with @#@
--- is a comment. A variable of the real environment wins over the file.
---
--- The file is for a client that does not start in a shell with the variables
--- (a desktop app, a service): all of them then read the same settings. A
--- missing or unreadable file is no file.
-embedSettings :: IO [(String, String)]
-embedSettings = do
-  e <- getEnvironment
-  let path =
-        lookup "AKYUU_CONFIG" e
-          <|> ((</> "akyuu" </> "embed.env") <$> lookup "XDG_CONFIG_HOME" e)
-          <|> ((</> ".config" </> "akyuu" </> "embed.env") <$> lookup "HOME" e)
-  r <- maybe (pure (Left ())) (\p -> either (const (Left ())) Right <$> (try (BS.readFile p) :: IO (Either IOException ByteString))) path
-  let fromFile = case r of
-        Right bs | Right t <- decodeUtf8' bs -> mapMaybe entry (T.lines t)
-        _ -> []
-      -- A line may start with export, and may end with a carriage return. A
-      -- value in matching quotes loses them. Nothing else is interpreted.
-      entry raw
-        | T.null (T.strip l) || "#" `T.isPrefixOf` T.stripStart l = Nothing
-        | otherwise = case T.breakOn "=" (dropExport (T.stripStart l)) of
-            (k, v) | not (T.null v) && not (T.null (T.strip k)) -> Just (T.unpack (T.strip k), T.unpack (unquote (T.drop 1 v)))
-            _ -> Nothing
-        where
-          l = fromMaybe raw (T.stripSuffix "\r" raw)
-      dropExport x = maybe x T.stripStart (T.stripPrefix "export " x)
-      unquote v
-        | T.length v >= 2, T.head v == T.last v, T.head v `elem` ['"', '\''] = T.init (T.tail v)
-        | otherwise = v
-  pure (e <> [kv | kv@(k, _) <- fromFile, k `notElem` map fst e])
+-- | The embedder of a config, or 'Nothing' if search by meaning is off.
+embedderFromConfig :: Config -> Maybe Embedder
+embedderFromConfig = fmap fromSettings . cfgEmbed
+  where
+    fromSettings s =
+      Embedder
+        { embCommand = esCommand s,
+          embModel = esKey s,
+          embTimeout = esTimeout s,
+          embMaxChars = esMaxChars s,
+          embQueryPrefix = esQueryPrefix s,
+          embDocumentPrefix = esDocumentPrefix s,
+          embMin = esMin s,
+          embArgs = esArgs s,
+          embEnv = esCommandEnv s,
+          embProfile = esProfile s
+        }
 
+-- | The embedder of the config file and the environment. 'Nothing' if search
+-- by meaning is off, or if the config cannot be read (the commands that need
+-- the config say why).
 embedderFromEnv :: IO (Maybe Embedder)
-embedderFromEnv = do
-  e <- embedSettings
-  let get k = T.pack <$> lookup k e
-      num k d = fromMaybe d (lookup k e >>= readMaybe >>= \n -> if n > 0 then Just n else Nothing)
-  pure $ case get "AKYUU_EMBED_COMMAND" of
-    Just c
-      | not (T.null (T.strip c)) ->
-          Just
-            Embedder
-              { embCommand = c,
-                embModel = fromMaybe c (get "AKYUU_EMBED_MODEL"),
-                -- At most an hour, so that the microseconds cannot overflow.
-                embTimeout = min 3600 (num "AKYUU_EMBED_TIMEOUT" 10),
-                embMaxChars = num "AKYUU_EMBED_MAX_CHARS" 4000
-              }
-    _ -> Nothing
+embedderFromEnv = either (const Nothing) embedderFromConfig <$> loadConfig
 
--- | Run the command on a text and read the vector. A failure of any kind
--- (the command is missing, it exits with an error, it takes too long, its
--- output is not a vector) is a 'Left' with a text, never an exception.
+-- | What makes the vectors of a key what they are: the command, its
+-- arguments and the prefixes. Two embedders with one key and two
+-- fingerprints make vectors that should not be compared. The hashes of Nix
+-- store paths in the command are left out, because a rebuild of the same
+-- script changes them; a model file keeps its path, because its hash is the
+-- hash of the model. This function is pure.
+fingerprint :: Embedder -> Text
+fingerprint e =
+  Id.render . Id.hashBytes . encodeUtf8 . T.intercalate "\0" $
+    [withoutStoreHashes (embCommand e), embQueryPrefix e, embDocumentPrefix e]
+      <> [k <> "=" <> v | (k, v) <- sortOn fst (embArgs e)]
+
+-- | @/nix/store/<32 characters>-name@ becomes @/nix/store/name@.
+withoutStoreHashes :: Text -> Text
+withoutStoreHashes t = case T.breakOn store t of
+  (pre, rest)
+    | T.null rest -> t
+    | otherwise ->
+        let after = T.drop (T.length store) rest
+            (h, r) = T.splitAt 33 after
+         in if T.length h == 33 && T.last h == '-' && T.all isAlphaNum (T.init h)
+              then pre <> store <> withoutStoreHashes r
+              else pre <> store <> withoutStoreHashes after
+  where
+    store = "/nix/store/"
+
+-- | Run the command on a text and read the vector. The prefix of the role
+-- goes before the text. A failure of any kind (the command is missing, it
+-- exits with an error, it takes too long, its output is not a vector) is a
+-- 'Left' with a text, never an exception.
 runEmbedder :: Embedder -> Role -> Text -> IO (Either Text Vector)
 runEmbedder e role t = do
-  base <- embedSettings
-  let role' = case role of Document -> "document"; QueryText -> "query"
+  let (role', prefix) = case role of
+        Document -> ("document", embDocumentPrefix e)
+        QueryText -> ("query", embQueryPrefix e)
       proc' =
         (shell (T.unpack (embCommand e)))
           { std_in = CreatePipe,
             std_out = CreatePipe,
             std_err = NoStream,
-            env = Just (("AKYUU_EMBED_ROLE", role') : filter ((/= "AKYUU_EMBED_ROLE") . fst) base),
+            env = Just (("AKYUU_EMBED_ROLE", role') : filter ((/= "AKYUU_EMBED_ROLE") . fst) (embEnv e)),
             -- Its own process group, so that a timeout stops the children too
             -- (the curl of a script), not only the shell.
             create_group = True
           }
-      input = encodeUtf8 (T.take (embMaxChars e) t)
+      input = encodeUtf8 (prefix <> T.take (embMaxChars e) t)
       go = withCreateProcess proc' $ \mi mo _ ph -> flip onException (stopGroup ph) $ case (mi, mo) of
         (Just hin, Just hout) -> do
           hSetBinaryMode hin True
@@ -336,6 +342,9 @@ openVectors path = do
     execute_ c "PRAGMA busy_timeout = 5000"
     execute_ c "PRAGMA journal_mode = WAL"
     execute_ c "CREATE TABLE IF NOT EXISTS chunks (id TEXT NOT NULL, model TEXT NOT NULL, chunk INTEGER NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL, PRIMARY KEY (id, model, chunk)) WITHOUT ROWID"
+    -- The fingerprint of the embedder that made the first vectors of each key
+    -- (see 'fingerprint').
+    execute_ c "CREATE TABLE IF NOT EXISTS models (key TEXT PRIMARY KEY NOT NULL, fingerprint TEXT NOT NULL) WITHOUT ROWID"
     pure (VectorStore c)
   pure (either (\e -> Left (T.pack (show (e :: SomeException)))) Right r)
 
@@ -359,6 +368,7 @@ pruneVectors (VectorStore c) model live = do
   rows <- query_ c "SELECT DISTINCT id, model FROM chunks" :: IO [(Text, Text)]
   let gone = [(i, m) | (i, m) <- rows, m /= model || either (const True) (`Set.notMember` live) (Id.parse i)]
   withTransaction c $ forM_ gone $ \(i, m) -> execute c "DELETE FROM chunks WHERE id = ? AND model = ?" (i, m)
+  execute c "DELETE FROM models WHERE key <> ?" (Only model)
   pure (length gone)
 
 -- | The vectors of a model. A row that cannot be read is left out.
@@ -377,3 +387,17 @@ stopGroup :: ProcessHandle -> IO ()
 stopGroup ph = do
   mp <- getPid ph
   forM_ mp (\p -> (try (signalProcessGroup sigTERM p) :: IO (Either SomeException ())))
+
+-- | Keep the fingerprint of the embedder that writes vectors of a key, if the
+-- key has none yet. The first one stays: a later embedder with another
+-- fingerprint is what 'storedFingerprint' lets a caller see.
+recordFingerprint :: VectorStore -> Text -> Text -> IO ()
+recordFingerprint (VectorStore c) model fp =
+  execute c "INSERT OR IGNORE INTO models (key, fingerprint) VALUES (?, ?)" (model, fp)
+
+-- | The fingerprint of the embedder that made the vectors of a key, if it is
+-- known. Stores from before 0.3 have none.
+storedFingerprint :: VectorStore -> Text -> IO (Maybe Text)
+storedFingerprint (VectorStore c) model = do
+  rows <- query c "SELECT fingerprint FROM models WHERE key = ?" (Only model) :: IO [Only Text]
+  pure (listToMaybe [f | Only f <- rows])

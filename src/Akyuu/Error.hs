@@ -51,7 +51,11 @@ data AkyuuError
   | -- | The input of a command is not usable, for example a body that is not
     -- UTF-8. The text says why.
     BadInput Text
-  | -- | No store root was given: no @--root@ and no @AKYUU_ROOT@.
+  | -- | The config file cannot be used (see "Akyuu.Config"). The text says
+    -- why.
+    BadConfig Text
+  | -- | No store root was given: no @--root@, no @AKYUU_ROOT@ and no @root@
+    -- in the config file.
     NoRoot
   | -- | The root directory of the store does not exist.
     RootMissing FilePath
@@ -91,7 +95,8 @@ describe err = case err of
       <> quote v
       <> " is not valid. It must be one line of text, not empty, with no space at either end."
   BadInput t -> t
-  NoRoot -> "No store is given. Use --root DIR, or set AKYUU_ROOT."
+  BadConfig t -> t
+  NoRoot -> "No store is given. Use --root DIR, set AKYUU_ROOT, or set root in the config file (see akyuu config)."
   RootMissing p -> "The store directory " <> quote (T.pack p) <> " does not exist. Run akyuu init to make it."
   Pruned i t newer ->
     "The memory "

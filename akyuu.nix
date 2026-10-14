@@ -2,7 +2,8 @@
 , containers, cryptohash-sha256, directory, file-embed, filelock
 , filepath, http-types, lib, network, optparse-applicative, process
 , sqlite-simple, streaming-commons, tasty, tasty-hunit
-, tasty-quickcheck, text, time, transformers, unix, wai, warp
+, tasty-quickcheck, text, time, toml-parser, transformers, unix
+, wai, warp
 }:
 mkDerivation {
   pname = "akyuu";
@@ -14,7 +15,7 @@ mkDerivation {
     aeson base base16-bytestring bytestring containers
     cryptohash-sha256 directory file-embed filelock filepath http-types
     network optparse-applicative process sqlite-simple
-    streaming-commons text time transformers unix wai warp
+    streaming-commons text time toml-parser transformers unix wai warp
   ];
   executableHaskellDepends = [ base ];
   testHaskellDepends = [
@@ -22,7 +23,8 @@ mkDerivation {
     filelock filepath http-types optparse-applicative sqlite-simple
     tasty tasty-hunit tasty-quickcheck text time wai
   ];
-  description = "akyuu";
+  homepage = "https://github.com/lillycham/akyuu";
+  description = "A content-addressed memory store for AI agents";
   license = lib.meta.getLicenseFromSpdxId "MIT";
   mainProgram = "akyuu";
 }

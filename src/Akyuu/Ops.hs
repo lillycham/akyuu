@@ -75,6 +75,7 @@ module Akyuu.Ops
 
     -- * Status
     StatusReport (..),
+    EmbedStatus (..),
     statusOf,
 
     -- * Verify
@@ -91,10 +92,11 @@ import Akyuu.Check (CheckOptions, Finding)
 import Akyuu.Check qualified as Check
 import Akyuu.Compare (Comparison)
 import Akyuu.Compare qualified as Compare
+import Akyuu.Config qualified as Config
 import Akyuu.Embed qualified as Embed
 import Akyuu.Episode (Walk)
 import Akyuu.Episode qualified as Episode
-import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, BadName, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
+import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadConfig, BadField, BadIdSpec, BadInput, BadName, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
 import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom, Supersedes), Graph)
@@ -113,7 +115,7 @@ import Akyuu.SearchEval qualified as SearchEval
 import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), openStore)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersede, supersedeFrom)
-import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), defaultPolicyRef, defaultTiersRef, parseManifest, placeLines, placeLog, placeRefs, policyRefVar, tierNames, tierRefs, tiersRefVar)
+import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), parseManifest, placeLines, placeLog, placeRefs, tierNames, tierRefs)
 import Control.Exception (SomeException, displayException, finally, try)
 import Control.Monad (forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
@@ -130,9 +132,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
 import System.Directory (doesDirectoryExist)
-import System.Environment (lookupEnv)
 import System.FilePath ((</>))
-import Text.Read (readMaybe)
 
 -- The environment ------------------------------------------------------
 
@@ -466,7 +466,8 @@ embedNew env i body = do
     r <- try (Embed.embedText e Embed.Document body) :: IO (Either SomeException (Either Text [Embed.Vector]))
     case r of
       Right (Right vs') -> do
-        _ <- try (withVectors env (\vs -> Embed.putVectors vs (Embed.embModel e) i vs')) :: IO (Either SomeException (Either Text ()))
+        let write vs = Embed.putVectors vs (Embed.embModel e) i vs' >> Embed.recordFingerprint vs (Embed.embModel e) (Embed.fingerprint e)
+        _ <- try (withVectors env write) :: IO (Either SomeException (Either Text ()))
         pure ()
       _ -> pure ()
 
@@ -502,17 +503,18 @@ withVectors env act = do
 -- set and works. The other result is the notes for the person.
 meaningFor :: Env -> Bool -> Text -> IO (Maybe Query.Semantic, [Cache.Correction])
 meaningFor env only q = do
-  me <- Embed.embedderFromEnv
-  case me of
-    Nothing -> pure (Nothing, [Cache.MeaningUnavailable "AKYUU_EMBED_COMMAND is not set." | only])
-    Just e -> do
+  rc <- Config.loadConfig
+  case Embed.embedderFromConfig <$> rc of
+    Left err -> unavailable (Config.describeConfigError err)
+    Right Nothing -> pure (Nothing, [Cache.MeaningUnavailable "No embedding profile is set (see akyuu config)." | only])
+    Right (Just e) -> do
       stored <- withVectors env (\vs -> Embed.loadVectors vs (Embed.embModel e))
       case stored of
         Left why -> unavailable why
         Right [] -> unavailable "No memory has a vector yet. Run: akyuu embed"
         Right vs -> do
           r <- Embed.runEmbedder e Embed.QueryText q
-          minScore <- maybe (-1) id . (>>= readMaybe) . lookup "AKYUU_EMBED_MIN" <$> Embed.embedSettings :: IO Double
+          let minScore = fromMaybe (-1) (Embed.embMin e)
           case r of
             Left why -> unavailable why
             Right v -> do
@@ -528,7 +530,10 @@ data EmbedReport = EmbedReport
     -- | Memories that had one already.
     already :: Int,
     -- | Memories that could not be embedded, with the reason.
-    embedFailed :: [(Id, Text)]
+    embedFailed :: [(Id, Text)],
+    -- | Whether the vectors of the key were made by an embedder with another
+    -- fingerprint: then the model changed, but the key did not.
+    embedChanged :: Bool
   }
   deriving (Eq, Show)
 
@@ -540,6 +545,10 @@ embedMissing env e = runExceptT $ do
   ids <- store (Store.list (envStore env))
   r <- liftIO $ withVectors env $ \vs -> do
     have <- Embed.storedIds vs (Embed.embModel e)
+    known <- Embed.storedFingerprint vs (Embed.embModel e)
+    let fp = Embed.fingerprint e
+        changed = maybe False (/= fp) known
+    Embed.recordFingerprint vs (Embed.embModel e) fp
     let todo = [i | i <- sort ids, i `Set.notMember` have]
         loop n bad _ [] = pure (n, reverse bad)
         loop n bad run (i : is)
@@ -554,7 +563,7 @@ embedMissing env e = runExceptT $ do
                     Right vecs -> Embed.putVectors vs (Embed.embModel e) i vecs >> loop (n + 1) bad 0 is
                     Left why -> loop n ((i, why) : bad) (run + 1) is
     (n, bad) <- loop (0 :: Int) [] 0 todo
-    pure (EmbedReport n (Set.size have) bad)
+    pure (EmbedReport n (Set.size have) bad changed)
   either (throwE . BadInput) pure r
 
 -- | Remove the vectors of other models and of memories that are gone. Returns
@@ -667,11 +676,27 @@ data StatusReport = StatusReport
     stManifest :: (Name, Either Text ([Text], (Int, Int))),
     -- | The ref of the policy and whether it exists.
     stPolicy :: (Name, Bool),
-    -- | The model, and how many memories have vectors for it. 'Nothing' if no
-    -- command is set.
-    stEmbed :: Maybe (Text, Either Text Int),
+    -- | Search by meaning. 'Nothing' if no profile is set.
+    stEmbed :: Maybe EmbedStatus,
     -- | Whether the root is a git repository (akyuu-version).
-    stGit :: Bool
+    stGit :: Bool,
+    -- | The config file, if one was read, and how many notes it has (see
+    -- @akyuu config@).
+    stConfig :: (Maybe FilePath, Int)
+  }
+  deriving (Eq, Show)
+
+-- | The search by meaning of a 'StatusReport'.
+data EmbedStatus = EmbedStatus
+  { -- | The name of the profile.
+    ebProfile :: Text,
+    -- | The key of its vectors.
+    ebKey :: Text,
+    -- | How many memories have vectors for the key, or why that is unknown.
+    ebVectors :: Either Text Int,
+    -- | Whether the vectors of the key were made by an embedder with another
+    -- fingerprint (the model changed, but the key did not).
+    ebChanged :: Bool
   }
   deriving (Eq, Show)
 
@@ -694,14 +719,28 @@ statusOf env root manifestRef policyRef = runExceptT $ do
             Left e -> Left (T.pack (show e))
             Right mf -> Right (tierNames mf, placeLines mf)
   let policyThere = policyRef `elem` map fst rs
-  me <- liftIO Embed.embedderFromEnv
-  emb <- liftIO $ case me of
+  cfg <- ExceptT (first (BadConfig . Config.describeConfigError) <$> Config.loadConfig)
+  emb <- liftIO $ case Embed.embedderFromConfig cfg of
     Nothing -> pure Nothing
     Just e -> do
-      r <- withVectors env (\vs -> Set.size . Set.intersection (Set.fromList ids) <$> Embed.storedIds vs (Embed.embModel e))
-      pure (Just (Embed.embModel e, r))
+      r <- withVectors env $ \vs -> do
+        n <- Set.size . Set.intersection (Set.fromList ids) <$> Embed.storedIds vs (Embed.embModel e)
+        known <- Embed.storedFingerprint vs (Embed.embModel e)
+        pure (n, maybe False (/= Embed.fingerprint e) known)
+      pure (Just (EmbedStatus (Embed.embProfile e) (Embed.embModel e) (fst <$> r) (either (const False) snd r)))
   git <- liftIO (doesDirectoryExist (root </> ".git"))
-  pure StatusReport {stRoot = root, stMemories = length ids, stRefs = length rs, stPins = length pins, stManifest = (manifestRef, manifest), stPolicy = (policyRef, policyThere), stEmbed = emb, stGit = git}
+  pure
+    StatusReport
+      { stRoot = root,
+        stMemories = length ids,
+        stRefs = length rs,
+        stPins = length pins,
+        stManifest = (manifestRef, manifest),
+        stPolicy = (policyRef, policyThere),
+        stEmbed = emb,
+        stGit = git,
+        stConfig = (Config.cfgFile cfg, length (Config.cfgNotes cfg))
+      }
 
 data VerifyReport = VerifyReport
   { -- | How many objects the store has.
@@ -1009,22 +1048,22 @@ readLog env n limit = runExceptT $ do
 -- The refs of the policy and the manifest ------------------------------------
 
 -- | The ref of the policy of the store: the given name, then the variable
--- @AKYUU_POLICY_REF@, then @policy/memory@ (see "Akyuu.Tier").
+-- @AKYUU_POLICY_REF@, then @policy-ref@ of the config file, then
+-- @policy/memory@ (see "Akyuu.Config").
 resolvePolicyRef :: Maybe Name -> IO (Either AkyuuError Name)
-resolvePolicyRef = refFromSetting policyRefVar defaultPolicyRef
+resolvePolicyRef = refFromConfig Config.cfgPolicyRef
 
 -- | The ref of the manifest of the tiers: the given name, then the variable
--- @AKYUU_TIERS_REF@, then @policy/tiers@.
+-- @AKYUU_TIERS_REF@, then @tiers-ref@ of the config file, then
+-- @policy/tiers@.
 resolveTiersRef :: Maybe Name -> IO (Either AkyuuError Name)
-resolveTiersRef = refFromSetting tiersRefVar defaultTiersRef
+resolveTiersRef = refFromConfig Config.cfgTiersRef
 
--- | A ref name from an option, then from an environment variable (an empty
--- value is no value), then the default.
-refFromSetting :: String -> Text -> Maybe Name -> IO (Either AkyuuError Name)
-refFromSetting _ _ (Just n) = pure (Right n)
-refFromSetting var def Nothing = do
-  fromEnv <- lookupEnv var
-  let t = case fromEnv of
-        Just v | not (null v) -> T.pack v
-        _ -> def
-  pure (first (BadName t) (Refs.mkName t))
+-- | A ref name from an option, else from the config.
+refFromConfig :: (Config.Config -> Config.Sourced Text) -> Maybe Name -> IO (Either AkyuuError Name)
+refFromConfig _ (Just n) = pure (Right n)
+refFromConfig get Nothing = do
+  rc <- Config.loadConfig
+  pure $ case rc of
+    Left e -> Left (BadConfig (Config.describeConfigError e))
+    Right c -> let t = Config.sValue (get c) in first (BadName t) (Refs.mkName t)
