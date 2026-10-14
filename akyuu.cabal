@@ -17,7 +17,7 @@ maintainer:         me@lillycham.com
 copyright:          2026 Lilly Cham
 license-file:       LICENSE
 build-type:         Simple
-extra-source-files: web/index.html, web/fonts.css
+extra-source-files: web/index.html, web/fonts.css, man/*.scd
 extra-doc-files:    README.md, CHANGELOG.md
 
 common shared
