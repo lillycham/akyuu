@@ -126,8 +126,7 @@ akyuu --root ROOT init
 akyuu --root ROOT status
 ```
 
-`init` makes `ROOT` if it is not there, and keeps existing refs. (`status` on a
-missing `ROOT` says "Make it first": `init` does that.) It writes a policy for
+`init` makes `ROOT` if it is not there, and keeps existing refs. It writes a policy for
 agents (`policy/memory`) and a manifest of the tiers (`policy/tiers`). The
 person can change both later.
 

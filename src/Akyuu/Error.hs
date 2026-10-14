@@ -92,7 +92,7 @@ describe err = case err of
       <> " is not valid. It must be one line of text, not empty, with no space at either end."
   BadInput t -> t
   NoRoot -> "No store is given. Use --root DIR, or set AKYUU_ROOT."
-  RootMissing p -> "The store directory " <> quote (T.pack p) <> " does not exist. Make it first."
+  RootMissing p -> "The store directory " <> quote (T.pack p) <> " does not exist. Run akyuu init to make it."
   Pruned i t newer ->
     "The memory "
       <> render i
