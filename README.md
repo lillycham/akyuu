@@ -36,6 +36,10 @@ store as a graph, with search, GC, check and health tabs.
 
 ## Quick start
 
+To let an agent do the install, point it at
+[docs/agent-install.md](docs/agent-install.md) from a release tag. It asks you
+before it changes your files. To do it yourself:
+
 ```sh
 nix run github:lillycham/akyuu -- --help      # or: nix profile install github:lillycham/akyuu
 
@@ -85,6 +89,7 @@ name another ref with `--policy-ref` (or `AKYUU_POLICY_REF`).
 |---|---|
 | The format on disk, and what is stable | [docs/format.md](docs/format.md) |
 | Install, the home-manager module, backup, versioning | [docs/install.md](docs/install.md) |
+| An install guide for an agent to follow | [docs/agent-install.md](docs/agent-install.md) |
 | Search by meaning, models, evaluation | [docs/embeddings.md](docs/embeddings.md) |
 | Logs and forgetting | [docs/episodes.md](docs/episodes.md) |
 | Finding duplicates, forks, stale links | [docs/check.md](docs/check.md), [docs/judgement.md](docs/judgement.md) |
