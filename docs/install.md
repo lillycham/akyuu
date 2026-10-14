@@ -24,11 +24,26 @@ programs.akyuu = {
 The three `gc` options are passed to `akyuu gc` as `--keep-generations`, `--grace` and `--trash-ttl`.
 A time is a number and a unit (`s`, `m`, `h` or `d`). The values above are the defaults.
 
-Without home-manager: `nix profile install .#akyuu`, or `nix run .#akyuu -- --help`.
 The daily jobs are launchd agents on macOS, with their logs in `~/Library/Logs`.
 On Linux they are systemd user timers (`systemctl --user list-timers 'akyuu-*'`,
 logs with `journalctl --user -u akyuu-gc`). A timer that was missed, because the
 machine was off, runs at the next start.
+
+On NixOS or nix-darwin without home-manager, add the package. The daily jobs
+are in the home-manager module only, so run `akyuu gc` by hand:
+
+```nix
+inputs.akyuu.url = "github:lillycham/akyuu";
+
+environment.systemPackages = [ inputs.akyuu.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+environment.variables.AKYUU_ROOT = "/home/you/.local/share/akyuu";
+```
+
+The flake also has an overlay (`overlays.default`) that adds `pkgs.akyuu`.
+
+To try akyuu without installing it: `nix run github:lillycham/akyuu -- --help`.
+`nix profile install github:lillycham/akyuu` works too, but it is an imperative
+install, outside your configuration.
 
 Then give an agent the store as in [Quick start](../README.md#quick-start).
 
