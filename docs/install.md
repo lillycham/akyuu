@@ -53,8 +53,9 @@ Then give an agent the store as in [Quick start](../README.md#quick-start).
 `trash`, `tombstones`, `pins`, `reviewed` and `refs`. It does not copy the cache, because
 `akyuu reindex` makes that again. A file that did not change is a hard link to
 the one in the last snapshot, so a snapshot of an unchanged store costs almost
-nothing. The objects are copied first and the refs last, so every ref in a
-snapshot points to an object in it.
+nothing. The refs are copied first and the objects after them. An agent writes a
+memory before it moves a ref to it, so every ref in a snapshot points to an
+object in it.
 
 To restore, copy the directories of a snapshot into an empty root and run
 `akyuu --root ROOT reindex`. Then `akyuu --root ROOT verify` checks the store.
