@@ -41,7 +41,7 @@ To let an agent do the install, point it at
 before it changes your files. To do it yourself:
 
 ```sh
-nix run github:lillycham/akyuu -- --help      # or: nix profile install github:lillycham/akyuu
+nix run github:lillycham/akyuu -- --help      # try it; to install it, see Install below
 
 export AKYUU_ROOT=~/.local/share/akyuu
 akyuu init                                    # makes the root, a policy for agents and a manifest
@@ -131,10 +131,11 @@ akyuu seed --demo --root /tmp/demo  # a demo store, for the web UI
 
 ## Install
 
-Install with `nix profile install github:lillycham/akyuu`, or with the home-manager
-module of the flake, which can also run GC, backups and versioning every day.
-See [docs/install.md](docs/install.md) for the module, the daily jobs,
-`akyuu-backup` and `akyuu-version`.
+Install akyuu in your Nix configuration. The home-manager module of the flake
+installs the binary, sets `AKYUU_ROOT`, and can run GC, backups and versioning
+every day. On NixOS or nix-darwin without home-manager, add the package of the
+flake to `environment.systemPackages`. See [docs/install.md](docs/install.md)
+for both, the daily jobs, `akyuu-backup` and `akyuu-version`.
 
 ## Checks
 
