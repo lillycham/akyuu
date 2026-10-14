@@ -142,6 +142,15 @@ pre.body { white-space: pre-wrap; word-break: break-word; background: var(--card
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; padding: 12px 16px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 0; padding: 12px 14px; min-width: 0; }
 .card h3 { margin: 0 0 6px; font: 700 17px/1.3 var(--font-display); }
+/* Refs: each card is headed by its ref, drawn as a tag, over its generations. */
+#refs-list { align-items: start; }
+#refs-list .card { background: var(--bg); border-color: var(--rule-strong); }
+#refs-list .card h3 { display: inline-block; margin: 0 0 12px; font: 500 12.5px/1.4 var(--font-mono); color: var(--sora); border: 1.4px solid var(--sora); border-radius: 9999px; padding: 2px 12px; box-shadow: var(--glow-accent); word-break: break-all; }
+#refs-list ol.timeline li { margin-bottom: 10px; }
+#refs-list .gen { font-size: 11.5px; color: var(--ink-dim); }
+#refs-list .gen.now { color: var(--sora); }
+#refs-list .line { font: 700 15px/1.35 var(--font-display); color: var(--ink); margin-top: 1px; word-break: break-word; }
+#refs-list li.notkept .line { color: var(--ink-muted); font-weight: 400; }
 ol.timeline { list-style: none; margin: 0; padding: 0 0 0 12px; border-left: 1.4px solid var(--wire); }
 ol.timeline li { margin: 0 0 6px; padding-left: 8px; position: relative; }
 ol.timeline li::before { content: ""; position: absolute; left: -18px; top: 5px; width: 9px; height: 9px; transform: rotate(45deg); background: var(--bg); border: 1.6px solid var(--wire); }
@@ -1348,6 +1357,8 @@ const Akyuu = (function () {
     const d = new Date(t);
     return isNaN(d) ? String(t) : d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
   }
+  // A text cut to at most n characters, with an ellipsis if it was cut.
+  function clip(t, n) { return t.length > n ? t.slice(0, n - 1) + '…' : t; }
   function count(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
   // The fill of a kind: a hue from teal to violet, to sit in the indigo palette.
   function kindFill(kind) {
@@ -1947,9 +1958,9 @@ const Akyuu = (function () {
         const n = nodeInfo(id);
         const kept = gen <= state.refs.kept;
         ol.appendChild(el('li', { class: kept ? '' : 'notkept' }, [
-          el('span', { class: 'muted', text: gen === 0 ? 'current ' : 'generation ' + gen + ' ' }),
+          el('span', { class: 'gen' + (gen === 0 ? ' now' : ''), text: gen === 0 ? 'current ' : 'generation ' + gen + ' ' }),
           idLink(id),
-          n ? el('span', { text: ' ' + (n.line || '').slice(0, 60) }) : null,
+          n ? el('div', { class: 'line', text: clip(n.line || '', 60) }) : null,
           n && n.status !== 'head' && n.status !== 'superseded' ? el('span', { class: 'pill bad', text: n.status }) : null,
           kept ? null : el('span', { class: 'pill', text: 'GC does not keep it' })]));
       });
