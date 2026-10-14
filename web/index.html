@@ -178,6 +178,12 @@ pre.body { white-space: pre-wrap; word-break: break-word; background: var(--card
 #check-list .card.sev-problem { border-color: var(--shu); }
 #check-list .card.sev-info .why { color: var(--ink-muted); }
 #c-summary .pill.good { font-weight: 500; }
+/* Health: the same cards; a problem framed in vermilion, the two summaries in pine when all is well. */
+#health { align-items: start; }
+#health .card { background: var(--bg); border-color: var(--rule-strong); }
+#health .card.sev-problem { border-color: var(--shu); }
+#health .card.sev-ok { border-color: var(--matsu); }
+#health .card > p:not(.muted) { font: 400 15.5px/1.55 var(--font-display); }
 ol.timeline { list-style: none; margin: 0; padding: 0 0 0 12px; border-left: 1.4px solid var(--wire); }
 ol.timeline li { margin: 0 0 6px; padding-left: 8px; position: relative; }
 ol.timeline li::before { content: ""; position: absolute; left: -18px; top: 5px; width: 9px; height: 9px; transform: rotate(45deg); background: var(--bg); border: 1.6px solid var(--wire); }
@@ -2116,7 +2122,7 @@ const Akyuu = (function () {
     $('h-note').textContent = state.src.live ? ' Verified at ' + new Date().toLocaleTimeString() + '.' : ' From the export.';
     box.replaceChildren();
     const list = (title, items, render, emptyText, bad) => {
-      const c = el('div', { class: 'card' }, [el('h3', {}, [title + ' ', el('span', { class: 'pill ' + (items.length ? (bad ? 'bad' : '') : 'good'), text: String(items.length) })])]);
+      const c = el('div', { class: 'card' + (items.length && bad ? ' sev-problem' : '') }, [el('h3', {}, [title + ' ', el('span', { class: 'pill ' + (items.length ? (bad ? 'bad' : '') : 'good'), text: String(items.length) })])]);
       if (!items.length) c.appendChild(el('p', { class: 'muted', text: emptyText }));
       const ul = el('ul', { class: 'plain' });
       for (const x of items.slice(0, 200)) ul.appendChild(el('li', {}, render(x)));
@@ -2126,11 +2132,11 @@ const Akyuu = (function () {
     };
     const s = state.stats || {};
     const num = (x) => (x == null ? '?' : String(x));
-    box.appendChild(el('div', { class: 'card' }, [
+    box.appendChild(el('div', { class: 'card ' + (v.ok ? 'sev-ok' : 'sev-problem') }, [
       el('h3', {}, ['Verify ', el('span', { class: 'pill ' + (v.ok ? 'good' : 'bad'), text: v.ok ? 'ok' : 'problems found' })]),
       el('p', { text: 'Checked ' + v.checked + ' objects. The store has ' + v.counts.stored + ' objects and the cache ' + v.counts.cached + ' memories. Refs: ' + num(s.refs) +
         ', pins: ' + num(s.pins) + ', trash: ' + num(s.trash) + ', tombstones: ' + num(s.tombstones) + '.' })]));
-    box.appendChild(el('div', { class: 'card' }, [
+    box.appendChild(el('div', { class: 'card ' + (v.drift.inSync ? 'sev-ok' : 'sev-problem') }, [
       el('h3', {}, ['Cache and store ', el('span', { class: 'pill ' + (v.drift.inSync ? 'good' : 'bad'), text: v.drift.inSync ? 'in sync' : 'drift' })]),
       el('p', { class: 'muted', text: v.drift.inSync ? 'The cache has exactly the memories of the store.' :
         'The cache does not match the store. akyuu search, gc and reindex bring it up to date. This view does not.' })]));
