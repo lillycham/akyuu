@@ -19,7 +19,7 @@ where
 import Akyuu.Cache (CacheError (CacheIO, CacheLocked, CacheSQL, CacheStore, CorruptCache))
 import Akyuu.GC (GCError (CorruptTombstone, GCCache, GCIO, GCLocked, GCRefs, GCStore), Tombstone (prunedAt), TombstoneParseError (BadTombstone, TombstoneNotUtf8))
 import Akyuu.Id (Id, IdParseError (BadHex, BadLength, BadPrefix), render)
-import Akyuu.Memory (MemoryParseError (BadEncoding, BadHeaderValue, BadLink, DuplicateHeader, MalformedHeader, MissingBlankLine, MissingHeader, NotCanonical, UnknownHeader))
+import Akyuu.Memory (MemoryParseError (BadEncoding, BadHeaderValue, BadLink, BadRefName, DuplicateHeader, MalformedHeader, MissingBlankLine, MissingHeader, NotCanonical, UnknownHeader))
 import Akyuu.Refs (Name, NameError (BadSegment, EmptyName), RefError (CorruptRef, Locked, NameConflict, NoSuchRef, RefIO, Stale), RefParseError (BadRefLine, EmptyRef, NotUtf8), nameText)
 import Akyuu.Store (StoreError (BadMemory, Corrupt, NotFound, StoreIO))
 import Akyuu.Supersede (SupersedeError (SupersedeRef, SupersedeStore))
@@ -188,7 +188,11 @@ describeParse p = case p of
   MalformedHeader l -> "the header line " <> quote l <> " has no ': '."
   BadHeaderValue h v -> "the " <> h <> " header has the bad value " <> quote v <> "."
   BadLink h r -> "the " <> h <> " header is not an id (" <> idReason r <> ")."
-  NotCanonical -> "it is not in the canonical form: the headers must be kind, created, agent, then each edge on its own line, sorted, with no repeated line."
+  BadRefName h e ->
+    "the " <> h <> " header: " <> case e of
+      EmptyName -> "a ref name cannot be empty."
+      BadSegment s -> describeName s e
+  NotCanonical -> "it is not in the canonical form: the headers must be kind, created, agent, then each edge on its own line, then each about-ref, sorted, with no repeated line."
 
 refName :: Name -> Text
 refName = quote . nameText
