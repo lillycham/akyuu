@@ -2,7 +2,7 @@
 
 module CLITests (cliTests) where
 
-import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand, cliProfile), Command (Add, Append, CheckStore, Compare, Context, GC, Get, Log, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand, cliProfile), Command (Add, AddRef, Append, CheckStore, Compare, Context, GC, Get, Log, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
 import Akyuu.Check (FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Check qualified as Check
 import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
@@ -94,7 +94,7 @@ parseCases =
         n <- name "claude/notes"
         a <- parses ["get", i1]
         b <- parses ["get", "--ref", "claude/notes"]
-        (cliCommand a, cliCommand b) @?= (Get (ById (Full (nid 1))), Get (ByRef n)),
+        (cliCommand a, cliCommand b) @?= (Get (ById (Full (nid 1))) False, Get (ByRef n) False),
       testCase "supersede with --expect" $ do
         n <- name "claude/notes"
         c <- parses ["supersede", "claude/notes", "--expect", i1, "--kind", "fact", "--agent", "claude", "--body", "v2"]
@@ -120,7 +120,7 @@ parseCases =
         a <- parses ["get", pre]
         b <- parses ["get", bare]
         c <- parses ["get", map toUpper bare]
-        let want = Get (ById (Prefix (T.pack pre)))
+        let want = Get (ById (Prefix (T.pack pre))) False
         map cliCommand [a, b, c] @?= [want, want, want],
       testCase "a whole id stays a whole id" $ do
         c <- parses ["neighbours", i1]
@@ -266,7 +266,15 @@ runCases =
           let i = T.strip (decodeUtf8 (outBytes o))
           g <- run env ["get", T.unpack i]
           T.isSuffixOf "\n\nbody with no line feed" (decodeUtf8 (terminalBytes False g)) @?= True
-          terminalBytes False g @?= outBytes g,
+          terminalBytes False g @?= outBytes g
+          assertBool "no id line without --with-id" (not ("id: " `T.isPrefixOf` decodeUtf8 (outBytes g))),
+      testCase "get --with-id puts the id of the memory read first, also by ref" $
+        withOpsEnv $ \_ env -> do
+          o <- right =<< runCommand env (AddRef (either (error . show) id (mkName "me/notes")) (MemoryArgs "fact" "claude" [] (BodyText "a note")))
+          let i = T.strip (decodeUtf8 (outBytes o))
+          g <- run env ["get", "--with-id", "--ref", "me/notes"]
+          plain <- run env ["get", "--ref", "me/notes"]
+          T.lines (decodeUtf8 (outBytes g)) @?= ("id: " <> i) : T.lines (decodeUtf8 (outBytes plain)),
       testCase "get ends the output with a line feed on a terminal" $
         withOpsEnv $ \_ env -> do
           o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "body with no line feed")))

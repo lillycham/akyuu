@@ -8,6 +8,7 @@
 -- cut it out.
 module Akyuu.Render
   ( memoryText,
+    idLine,
     refLines,
     refListLines,
     pinLines,
@@ -73,6 +74,11 @@ import Data.Time (defaultTimeLocale, formatTime)
 -- UTF-8, so the decode cannot fail.
 memoryText :: Memory -> Text
 memoryText = decodeUtf8 . renderMemory
+
+-- | The line that names the memory that @get@ read: the value to pass as
+-- @expected@ to supersede or amend. It is not part of the stored file.
+idLine :: Id -> Text
+idLine i = "id: " <> render i
 
 -- | The name of a kind of edge, as in the file format: @supersedes@,
 -- @about@, @derived-from@ or @refines@.
