@@ -6,7 +6,8 @@ import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (About, DerivedFrom, Ref
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, IdParseError (BadLength, BadPrefix), fromDigest, hashBytes)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (memBody, memCreated, memEdges), MemoryError (InvalidField), MemoryParseError (BadEncoding, BadHeaderValue, BadLink, DuplicateHeader, MalformedHeader, MissingBlankLine, MissingHeader, NotCanonical, UnknownHeader), memoryGraph, memoryId, mkMemory, parseMemory, renderMemory, validField)
+import Akyuu.Memory (Memory (memAboutRefs, memBody, memCreated, memEdges), MemoryError (InvalidField), MemoryParseError (BadEncoding, BadHeaderValue, BadLink, BadRefName, DuplicateHeader, MalformedHeader, MissingBlankLine, MissingHeader, NotCanonical, UnknownHeader), memoryGraph, memoryId, mkMemory, parseMemory, renderMemory, validField, withAboutRefs)
+import Akyuu.Refs (Name, NameError (BadSegment), mkName)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Maybe (fromMaybe)
@@ -29,7 +30,67 @@ memoryTests =
       parseTests,
       errorTests,
       identityTests,
+      aboutRefTests,
       properties
+    ]
+
+-- A ref name for the tests. The names are valid, so this cannot fail.
+ref :: Text -> Name
+ref t = either (error . show) id (mkName t)
+
+-- 'fixture' with two links to refs.
+withRefs :: Memory
+withRefs = withAboutRefs (Set.fromList [ref "me/notes", ref "a/b"]) fixture
+
+aboutRefTests :: TestTree
+aboutRefTests =
+  testGroup
+    "about-ref"
+    [ testCase "mkMemory makes a memory with no links to refs" $
+        memAboutRefs fixture @?= Set.empty,
+      testCase "withAboutRefs sets the links, and replaces the old ones" $ do
+        memAboutRefs withRefs @?= Set.fromList [ref "a/b", ref "me/notes"]
+        memAboutRefs (withAboutRefs (Set.singleton (ref "x")) withRefs) @?= Set.singleton (ref "x"),
+      testCase "writes the links after the edges, the names in ascending order" $
+        renderMemory withRefs
+          @?= bytes
+            ( T.unlines
+                [ "kind: fact",
+                  "created: 2026-10-05T12:00:00Z",
+                  "agent: claude",
+                  "supersedes: " <> idText 1,
+                  "about: " <> idText 2,
+                  "about-ref: a/b",
+                  "about-ref: me/notes",
+                  ""
+                ]
+                <> "Lilly prefers worktrees.\n"
+            ),
+      testCase "a memory with no links is written as before, so its Id does not change" $
+        renderMemory (withAboutRefs Set.empty fixture) @?= bytes fixtureFile,
+      testCase "reads back what it writes" $
+        parseMemory (renderMemory withRefs) @?= Right withRefs,
+      testCase "reads a link to a ref, with no edges" $
+        fmap memAboutRefs (parseMemory (file (required ++ ["about-ref: me/notes"])))
+          @?= Right (Set.singleton (ref "me/notes")),
+      testCase "rejects a value that is not a ref name" $
+        parseMemory (file (required ++ ["about-ref: Not A Name"]))
+          @?= Left (BadRefName "about-ref" (BadSegment "Not A Name")),
+      testCase "rejects links that are not in order" $
+        parseMemory (file (required ++ ["about-ref: me/notes", "about-ref: a/b"]))
+          @?= Left NotCanonical,
+      testCase "rejects two equal links, because the canonical form has one" $
+        parseMemory (file (required ++ ["about-ref: a/b", "about-ref: a/b"]))
+          @?= Left NotCanonical,
+      testCase "rejects a link before an edge" $
+        parseMemory (file (required ++ ["about-ref: a/b", "about: " <> idText 1]))
+          @?= Left NotCanonical,
+      testCase "supersedes takes an Id only, never a ref name" $
+        case parseMemory (file (required ++ ["supersedes: me/notes"])) of
+          Left (BadLink "supersedes" _) -> pure ()
+          other -> fail ("expected BadLink for supersedes, got " ++ show other),
+      testCase "the links are not edges of the graph" $
+        memoryGraph withRefs @?= memoryGraph fixture
     ]
 
 -- Six Ids, as in the graph tests, so that edges often share a target.

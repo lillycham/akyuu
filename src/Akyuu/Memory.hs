@@ -20,6 +20,10 @@
 -- * @kind@, @created@ and @agent@ are required. Each one appears once.
 -- * @supersedes@, @about@, @derived-from@ and @refines@ are optional.
 --   Each one can appear many times. Each line holds one 'Id'.
+-- * @about-ref@ is optional and can appear many times. Each line holds one
+--   ref name: the memory is about whatever memory that ref names when it is
+--   read, not about one version. Its lines come after all the edge lines,
+--   with the names in ascending order (by 'nameText').
 -- * A header line is the name, a colon, one space and the value.
 -- * The body is everything after the first blank line. It is not changed.
 -- * The text is UTF-8. Lines end with a line feed only.
@@ -33,9 +37,11 @@
 -- A 'Memory' is made with 'mkMemory', which checks the rules of its fields.
 -- The constructor is not exported.
 module Akyuu.Memory
-  ( Memory (memKind, memCreated, memAgent, memEdges, memBody),
+  ( Memory (memKind, memCreated, memAgent, memEdges, memAboutRefs, memBody),
     MemoryError (..),
     mkMemory,
+    withAboutRefs,
+    aboutRefHeader,
     validField,
     MemoryParseError (..),
     renderMemory,
@@ -51,6 +57,7 @@ import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (About, DerivedFrom, Ref
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, IdParseError, hashBytes)
 import Akyuu.Id qualified as Id
+import Akyuu.Refs (Name, NameError, mkName, nameText)
 import Data.Bifunctor (Bifunctor (first))
 import Data.ByteString (ByteString)
 import Data.Char (isSpace)
@@ -88,6 +95,12 @@ data Memory = Memory
     memAgent :: Text,
     -- | The edges to older memories.
     memEdges :: Set Edge,
+    -- | The refs that this memory is about (the @about-ref@ headers). A ref
+    -- is read when the link is followed, so the link always reaches the
+    -- current memory of the ref and never goes stale. These links are not
+    -- edges of the 'Graph': a ref keeps its own memory alive, so GC needs
+    -- nothing from them.
+    memAboutRefs :: Set Name,
     -- | The text of the memory. It can be empty and it can have many lines.
     memBody :: Text
   }
@@ -112,6 +125,9 @@ data MemoryParseError
   | -- | The value of an edge header is not a valid 'Id'.
     -- The fields are the header name and the reason.
     BadLink Text IdParseError
+  | -- | The value of an @about-ref@ header is not a valid ref name.
+    -- The fields are the header name and the reason.
+    BadRefName Text NameError
   | -- | The file is a valid memory, but it is not in the canonical form that
     -- 'renderMemory' writes: the headers are in another order, an edge line
     -- is repeated or not in order, or the bytes differ in another way.
@@ -152,8 +168,21 @@ mkMemory k t a es b
             memCreated = posixSecondsToUTCTime (fromInteger (floor (utcTimeToPOSIXSeconds t))),
             memAgent = a,
             memEdges = es,
+            memAboutRefs = Set.empty,
             memBody = b
           }
+
+-- | The memory with these refs as its @about-ref@ links, in place of the
+-- ones that it had. A 'Name' is valid by its type, so this cannot fail.
+--
+-- TODO(Lilly): write the body.
+withAboutRefs :: Set Name -> Memory -> Memory
+withAboutRefs = undefined
+
+-- | The name of the header of a link to a ref.
+-- 'renderMemory' writes this name, and 'parseAboutRefs' reads it.
+aboutRefHeader :: Text
+aboutRefHeader = "about-ref"
 
 -- | The name of the header for a kind of edge.
 -- 'renderMemory' writes this name, and 'parseEdges' reads it.
@@ -273,6 +302,17 @@ parseEdges m = Set.fromList . concat <$> traverse forKind [minBound .. maxBound]
 
     parseOne :: EdgeType -> Text -> Either MemoryParseError Edge
     parseOne k v = fmap (Edge k) $ first (BadLink (edgeToHeader k)) $ Id.parse v
+
+-- | Read the @about-ref@ headers of a memory.
+--
+-- Each value must be a valid ref name ('mkName'). A bad value gives
+-- 'BadRefName' with the name of the header. Two equal lines are one link
+-- (the canonical check in 'parseMemory' then refuses the file).
+--
+-- TODO(Lilly): write the body, then call it from 'parseMemory', add
+-- 'aboutRefHeader' to 'known', and write the lines in 'renderMemory'.
+parseAboutRefs :: Map Text [Text] -> Either MemoryParseError (Set Name)
+parseAboutRefs = undefined
 
 -- | Read a memory from the bytes of a file.
 --
