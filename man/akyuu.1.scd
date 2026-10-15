@@ -54,8 +54,11 @@ commands below.
 	(*--from* must occur once) or text added at the end. The copy keeps the
 	kind, the agent (unless *--agent* is given) and the edges.
 
-*get* _id_ | *get* *--ref* _name_
-	Print a memory: its headers, a blank line, and its body.
+*get* [*--with-id*] _id_ | *get* [*--with-id*] *--ref* _name_
+	Print a memory: its headers, a blank line, and its body, exactly as the
+	store holds it. *--with-id* first prints a line *id:* _id_ with the id of the
+	memory read, the value for *--expect*. The MCP tool *get* always starts with
+	that line.
 
 *neighbours* _id_
 	Print the edges of a memory, in both directions.

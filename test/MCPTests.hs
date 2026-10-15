@@ -268,6 +268,10 @@ runToolCases =
           ToolResult _ False <- runTool defaultMcpConfig env =<< either (assertFailure . show) pure (parseToolCall "ref_set" (args [("ref", "claude/notes"), ("id", String i), ("create", Bool True)]))
           ToolResult g False <- runTool defaultMcpConfig env (CallGet (Left n))
           T.isSuffixOf "\n\nLilly prefers Haskell" g @?= True
+          -- The first line is the id that the ref names: the value for expected.
+          take 1 (T.lines g) @?= ["id: " <> i]
+          ToolResult byId False <- runTool defaultMcpConfig env =<< either (assertFailure . show) pure (parseToolCall "get" (args [("id", String i)]))
+          byId @?= g
           ToolResult s False <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "haskell")
           T.isPrefixOf (shortIds i) s @?= True,
       testCase "search text has the same brackets as the CLI" $

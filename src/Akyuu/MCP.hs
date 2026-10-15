@@ -51,7 +51,7 @@ import Akyuu.Id qualified as Id
 import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLog, readLogSince, readRef, resolveId, reviewPair, searchMemoriesMode, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage)
+import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, idLine, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage)
 import Akyuu.Tier (Place (Place), defaultPolicyRef, defaultTiersRef)
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (forM_, unless)
@@ -178,7 +178,7 @@ toolList =
       (objectSchema (memoryProps <> [("supersedes", idsSchema "Memories that this memory replaces. This adds edges only. It moves no ref."), ("ref", stringSchema "A new ref to make for the memory, in the same call (it must not exist). Without it, no ref moves.")]) ["kind", "agent", "body"]),
     tool
       "get"
-      "Read one memory, by id or by the current value of a ref. Give exactly one of id and ref. The result is the stored file: the headers (kind, created, agent, edges), a blank line, then the body."
+      "Read one memory, by id or by the current value of a ref. Give exactly one of id and ref. The result starts with the line 'id: <id>': the id of the memory read, which is the value for expected in supersede and amend. Then comes the stored file: the headers (kind, created, agent, edges), a blank line, and the body."
       (objectSchema [("id", idSchema "The id of the memory."), ("ref", refSchema)] []),
     tool
       "supersede"
@@ -643,7 +643,7 @@ runTool cfg env c = either failed id <$> go
         i <- either (fmap (fmap current) . readRef env) (pure . Right) t
         case i of
           Left e -> pure (Left e)
-          Right x -> fmap (\m -> okText (memoryText m) False) <$> getMemory env x
+          Right x -> fmap (\m -> okText (idLine x <> "\n" <> memoryText m) False) <$> getMemory env x
       CallSupersede n old m -> fmap (\i -> okText (Id.render i) False) <$> supersedeMemory env n old m
       CallSearchMode md o q -> searchWithMode md o q
       CallSearch o q -> searchWithMode Fused o q

@@ -45,7 +45,7 @@ import Akyuu.Memory (renderMemory)
 import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readLogSince, readRef, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
 import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Store qualified as Store
@@ -137,7 +137,8 @@ data Command i
   = Add (MemoryArgs i)
   | -- | Add a memory and make a new ref for it (@add --ref@).
     AddRef Name (MemoryArgs i)
-  | Get (GetTarget i)
+  | -- | The memory, and 'True' for @--with-id@: a first line with its id.
+    Get (GetTarget i) Bool
   | -- | The ref, the 'Id' that the ref must point to now (@--expect@), and
     -- the new memory.
     Supersede Name (Maybe i) (MemoryArgs i)
@@ -301,6 +302,7 @@ commandParser =
         <$> ( (ById <$> argument idReader (metavar "ID"))
                 <|> (ByRef <$> option nameReader (long "ref" <> metavar "NAME" <> help "Print the current memory of this ref."))
             )
+        <*> switch (long "with-id" <> help "Print a first line, id: ID, with the id of the memory read (the value for --expect). Without it, the output is the stored file exactly.")
     supersedeP =
       Supersede
         <$> argument nameReader (metavar "NAME")
@@ -530,12 +532,13 @@ runCommand env c = runExceptT $ case c of
     n <- newMemory a
     i <- ExceptT (addUnderRef env r n)
     pure (ok [Id.render i])
-  Get t -> do
+  Get t withId -> do
     i <- case t of
       ById i -> pure i
       ByRef n -> current <$> ExceptT (readRef env n)
     m <- ExceptT (getMemory env i)
-    pure (Output (renderMemory m) True True)
+    let first = if withId then encodeUtf8 (idLine i <> "\n") else BS.empty
+    pure (Output (first <> renderMemory m) True True)
   Supersede n old a -> do
     m <- newMemory a
     i <- ExceptT (supersedeMemory env n old m)

@@ -4,6 +4,11 @@
 
 ### Added
 
+- `get` tells the id of the memory it read: the MCP tool `get` starts its
+  result with a line `id: ID`, and `akyuu get --with-id` prints the same line.
+  It is the value for `expected` in `supersede` and `amend`, so an agent needs
+  no `ref_get` before an update. Without `--with-id`, `akyuu get` still prints
+  the stored file exactly.
 - A config file, `~/.config/akyuu/config.toml` (or `$AKYUU_CONFIG`), for every
   setting: the root, the refs of the policy and the manifest, the agent, and
   search by meaning. A variable of the environment wins over the file, and an
