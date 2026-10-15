@@ -90,7 +90,9 @@ aboutRefTests =
           Left (BadLink "supersedes" _) -> pure ()
           other -> fail ("expected BadLink for supersedes, got " ++ show other),
       testCase "the links are not edges of the graph" $
-        memoryGraph withRefs @?= memoryGraph fixture
+        -- The links change the bytes, so the Id is not the Id of 'fixture':
+        -- compare with the graph of the same Id and the edges alone.
+        memoryGraph withRefs @?= Graph.singleton (memoryId withRefs) (Set.toList (memEdges withRefs))
     ]
 
 -- Six Ids, as in the graph tests, so that edges often share a target.
