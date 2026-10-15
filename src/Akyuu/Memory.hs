@@ -174,10 +174,8 @@ mkMemory k t a es b
 
 -- | The memory with these refs as its @about-ref@ links, in place of the
 -- ones that it had. A 'Name' is valid by its type, so this cannot fail.
---
--- TODO(Lilly): write the body.
 withAboutRefs :: Set Name -> Memory -> Memory
-withAboutRefs = undefined
+withAboutRefs refs m = m {memAboutRefs = refs}
 
 -- | The name of the header of a link to a ref.
 -- 'renderMemory' writes this name, and 'parseAboutRefs' reads it.
@@ -194,10 +192,11 @@ edgeToHeader Refines = "refines"
 
 -- | Write a memory in its canonical form.
 --
--- The order is: @kind@, @created@, @agent@, then the edge headers, then a
--- blank line, then the body. The edge headers go in the order of the
--- 'Edge' type: @supersedes@, @about@, @derived-from@, @refines@. Inside
--- one header name, the 'Id' values are in ascending order.
+-- The order is: @kind@, @created@, @agent@, then the edge headers, then the
+-- @about-ref@ headers, then a blank line, then the body. The edge headers go
+-- in the order of the 'Edge' type: @supersedes@, @about@, @derived-from@,
+-- @refines@. Inside one header name, the values are in ascending order;
+-- @about-ref@ values are sorted by 'nameText'.
 -- The time has the form @2026-10-05T12:00:00Z@.
 --
 -- The body is written as it is, with no line feed added. The function
@@ -217,7 +216,10 @@ renderMemory m =
         "agent: "
           <> (memAgent m)
       ]
-    headerLines = fixedHeaders <> map edgeLine (Set.toAscList $ memEdges m)
+    headerLines =
+      fixedHeaders
+        <> map edgeLine (Set.toAscList $ memEdges m)
+        <> map (("about-ref: " <>) . nameText) (Set.toAscList $ memAboutRefs m)
     edgeHeader x = (edgeToHeader $ kind x, Id.render $ target x)
     edgeLine x =
       let (e, i) = edgeHeader x
@@ -247,9 +249,9 @@ splitHeader t =
         else Right (hdrs, T.drop 2 rest)
 
 -- | The names of all headers that the format allows. It holds the three
--- required names and one name for each kind of edge.
+-- required names, one name for each kind of edge, and the @about-ref@ name.
 known :: Set Text
-known = Set.fromList (["kind", "created", "agent"] ++ map edgeToHeader [minBound .. maxBound])
+known = Set.fromList (["kind", "created", "agent", aboutRefHeader] ++ map edgeToHeader [minBound .. maxBound])
 
 -- | Check that a header name is in 'known'.
 -- Returns 'UnknownHeader' if it is not.
@@ -308,11 +310,11 @@ parseEdges m = Set.fromList . concat <$> traverse forKind [minBound .. maxBound]
 -- Each value must be a valid ref name ('mkName'). A bad value gives
 -- 'BadRefName' with the name of the header. Two equal lines are one link
 -- (the canonical check in 'parseMemory' then refuses the file).
---
--- TODO(Lilly): write the body, then call it from 'parseMemory', add
--- 'aboutRefHeader' to 'known', and write the lines in 'renderMemory'.
 parseAboutRefs :: Map Text [Text] -> Either MemoryParseError (Set Name)
-parseAboutRefs = undefined
+parseAboutRefs m = Set.fromList <$> traverse parseOne (Map.findWithDefault [] aboutRefHeader m)
+  where
+    parseOne :: Text -> Either MemoryParseError Name
+    parseOne = first (BadRefName aboutRefHeader) . mkName
 
 -- | Read a memory from the bytes of a file.
 --
@@ -334,8 +336,10 @@ parseMemory bs = do
   agent' <- single "agent" groups
   created' <- parseTime createdText
   edges' <- parseEdges groups
+  aboutRefs' <- parseAboutRefs groups
   m <- first (\(InvalidField n v) -> BadHeaderValue n v) (mkMemory kind' created' agent' edges' body)
-  if renderMemory m == bs then Right m else Left NotCanonical
+  let m' = withAboutRefs aboutRefs' m
+  if renderMemory m' == bs then Right m' else Left NotCanonical
 
 -- | The 'Id' of a memory: the hash of its canonical form.
 memoryId :: Memory -> Id
