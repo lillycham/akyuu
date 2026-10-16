@@ -24,6 +24,7 @@ created: 2026-10-05T12:00:00Z
 agent: claude
 supersedes: sha256-...
 about: sha256-...
+about-ref: me/notes
 
 The body is free text. It may have many lines.
 ```
@@ -34,7 +35,8 @@ each and in that order; *kind* and *agent* are one line, not empty, with no
 space at either end; *created* is UTC in whole seconds. The edge headers follow:
 *supersedes*, *about*, *derived-from* and *refines*, in that order, each with
 one id and each repeatable, the ids of one name in ascending order and none
-twice. The body is everything after the first blank line, unchanged. Lines end
+twice. Last come the *about-ref* headers, each with one ref name, repeatable,
+the names in ascending order and none twice. The body is everything after the first blank line, unchanged. Lines end
 with a line feed.
 
 This is the only form. *akyuu* refuses a file in any other form (headers in
@@ -61,6 +63,10 @@ the store. So the graph has no cycles.
 
 *gc* keeps the target of an *about*, *derived-from* or *refines* edge from a
 memory that it keeps. A *supersedes* edge keeps nothing.
+
+*about-ref* _name_ is not an edge: it says that the memory is about the ref
+_name_, whatever memory the ref names when it is read. It does not go stale
+when the ref moves, and *gc* keeps nothing through it.
 
 ## Refs
 

@@ -4,6 +4,14 @@
 
 ### Added
 
+- About-ref links: a memory can be about a ref, not one exact memory, with the
+  header `about-ref: NAME`. The link names whatever memory the ref names when
+  it is read, so it does not go stale when the ref moves. Use `about_refs` in
+  the MCP tools `add`, `supersede`, `append` and `note`, and `--about-ref` on
+  the command line. A ref must exist to be linked. `neighbours`, `search` and
+  the web view resolve the links. akyuu 0.2.0.0 and older refuse a memory with
+  this header.
+- `check` reports `missing-ref`: a link to a ref that does not exist.
 - `get` tells the id of the memory it read: the MCP tool `get` starts its
   result with a line `id: ID`, and `akyuu get --with-id` prints the same line.
   It is the value for `expected` in `supersede` and `amend`, so an agent needs
@@ -39,6 +47,9 @@
 
 ### Changes
 
+- `check` no longer reports a `derived-from` edge to an old version as a stale
+  link: that edge is evidence of one exact text. A stale `about` link names the
+  ref that holds the current memory, so the fix is an about-ref link.
 - akyuu puts the prefix of the model before the text. The commands
   `akyuu-embed-llama` and `akyuu-embed-openai` no longer add it, so a command
   of your own that adds the prefix itself must stop, or the text gets it twice.
