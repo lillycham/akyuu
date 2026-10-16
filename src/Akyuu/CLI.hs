@@ -42,10 +42,10 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readLogSince, readRef, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readLogSince, readRef, refLinksOf, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refLinkLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
 import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Store qualified as Store
@@ -108,6 +108,8 @@ data MemoryArgs i = MemoryArgs
   { argKind :: Text,
     argAgent :: Text,
     argEdges :: [(EdgeType, i)],
+    -- | The refs of the @about-ref@ links (@--about-ref@).
+    argAboutRefs :: [Name],
     argBody :: BodySource
   }
   deriving (Eq, Show, Functor, Foldable, Traversable)
@@ -164,8 +166,8 @@ data Command i
     Context (Maybe Text) [Name] (Maybe Name) (Maybe Text) (Maybe Int) (Maybe Int)
   | -- | A note for the log of a directory: the directory ('Nothing' for the
     -- current one), the kind, the agent ('Nothing' for $AKYUU_AGENT), the
-    -- ref of the manifest, and the text.
-    Note (Maybe Text) Text (Maybe Text) (Maybe Name) Text
+    -- ref of the manifest, the refs of the about-ref links, and the text.
+    Note (Maybe Text) Text (Maybe Text) (Maybe Name) [Name] Text
   | -- | Append an episode to the log that a ref names.
     Append Name (MemoryArgs i)
   | -- | Read a log: the ref, the most episodes ('Nothing' for the default),
@@ -242,6 +244,7 @@ memoryArgs =
     <$> field "kind" "The kind of memory, for example fact or preference."
     <*> field "agent" "The name of the agent that writes the memory."
     <*> edges
+    <*> many (option nameReader (long "about-ref" <> metavar "NAME" <> help "The new memory is about the ref NAME, whatever memory it names. Repeat for more."))
     <*> body
   where
     field n h = option (via (checkField n)) (long (T.unpack n) <> metavar "TEXT" <> help h)
@@ -373,6 +376,7 @@ commandParser =
         <*> strOption (long "kind" <> metavar "TEXT" <> value "note" <> showDefault <> help "The kind of the note.")
         <*> optional (option (via (checkField "agent")) (long "agent" <> metavar "TEXT" <> help "The agent that writes the note. The default is $AKYUU_AGENT, then agent."))
         <*> optional (option nameReader (long "manifest" <> metavar "NAME" <> help "The ref of the manifest. The default is $AKYUU_TIERS_REF, then policy/tiers."))
+        <*> many (option nameReader (long "about-ref" <> metavar "NAME" <> help "The note is about the ref NAME. Repeat for more."))
         <*> (T.unwords <$> some (strArgument (metavar "TEXT...")))
     reviewP =
       Review
@@ -504,7 +508,8 @@ newMemory a = do
       { newKind = argKind a,
         newAgent = argAgent a,
         newEdges = Set.fromList [Edge k i | (k, i) <- argEdges a],
-        newBody = b
+        newBody = b,
+        newAboutRefs = Set.fromList (argAboutRefs a)
       }
 
 -- | Find the whole 'Id' for each id that a person gave. See 'resolveId'.
@@ -537,8 +542,8 @@ runCommand env c = runExceptT $ case c of
       ById i -> pure i
       ByRef n -> current <$> ExceptT (readRef env n)
     m <- ExceptT (getMemory env i)
-    let first = if withId then encodeUtf8 (idLine i <> "\n") else BS.empty
-    pure (Output (first <> renderMemory m) True True)
+    let header = if withId then encodeUtf8 (idLine i <> "\n") else BS.empty
+    pure (Output (header <> renderMemory m) True True)
   Supersede n old a -> do
     m <- newMemory a
     i <- ExceptT (supersedeMemory env n old m)
@@ -569,12 +574,12 @@ runCommand env c = runExceptT $ case c of
     pure . ok $ case (budget, page) of
       (Nothing, Nothing) -> tierLinesWithin Nothing r
       _ -> tierPage (fromMaybe 9500 budget) (fromMaybe 1 page) r
-  Note cwd kind agent given text -> do
+  Note cwd kind agent given about text -> do
     mr <- ExceptT (liftIO (resolveTiersRef given))
     place <- liftIO (placeFor cwd)
     cfg <- config
     let who = fromMaybe (Config.sValue (Config.cfgAgent cfg)) agent
-    (n, i) <- ExceptT (noteEpisode env mr place NewMemory {newKind = kind, newAgent = who, newEdges = Set.empty, newBody = text})
+    (n, i) <- ExceptT (noteEpisode env mr place NewMemory {newKind = kind, newAgent = who, newEdges = Set.empty, newBody = text, newAboutRefs = Set.fromList about})
     pure (ok ["noted in " <> nameText n <> " " <> Id.render i])
   Init -> do
     mr <- ExceptT (liftIO (resolveTiersRef Nothing))
@@ -598,7 +603,10 @@ runCommand env c = runExceptT $ case c of
     r <- ExceptT (searchMemoriesMode env mode o q)
     held <- either (const Map.empty) heldBy <$> liftIO (listRefValues env)
     pure (ok (searchLinesWith held r))
-  Neighbours i -> ok . neighbourLines <$> ExceptT (neighboursOf env i)
+  Neighbours i -> do
+    ns <- ExceptT (neighboursOf env i)
+    ls <- ExceptT (refLinksOf env i)
+    pure (ok (neighbourLines ns <> refLinkLines ls))
   Compare a b j -> do
     r <- ExceptT (compareMemories env a b)
     pure (if j then Output (BL.toStrict (encode (compareJSON r)) <> "\n") True False else ok (compareLines r))

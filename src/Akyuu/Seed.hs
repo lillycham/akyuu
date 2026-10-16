@@ -6,6 +6,7 @@
 -- * supersede chains, and a ref with more generations than GC keeps;
 -- * a fork: two memories that supersede one;
 -- * an edge to an object that was never stored (a missing target);
+-- * an about-ref link from a memory to a ref;
 -- * a memory that GC deleted, with a tombstone, and one that is in trash;
 -- * a pin, a memory that a retaining edge keeps, and young memories;
 -- * several kinds and agents, and refs with history.
@@ -164,7 +165,9 @@ fill now env = do
       base = addUTCTime (-30 * nominalDay) now
       day d = addUTCTime (d * nominalDay) base
       mins m = addUTCTime (negate (m * 60)) now
-      memAt t kind agent es body = except (buildMemory t (NewMemory kind agent (Set.fromList es) body))
+      memAt t kind agent es body = except (buildMemory t (NewMemory kind agent (Set.fromList es) body Set.empty))
+      -- A memory with about-ref links to refs.
+      linkedAt t kind agent ns body = except (buildMemory t (NewMemory kind agent Set.empty body (Set.fromList ns)))
       -- An old memory: its created time and its file time are in the past.
       old t kind agent es body = do
         m <- memAt t kind agent es body
@@ -192,6 +195,12 @@ fill now env = do
   lang <- newRef "me/lang" l1
   l2 <- supersedeOld lang l1 (day 3) "preference" "claude" [] "Write scripts in Python, with uv for the dependencies."
   l3 <- supersedeOld lang l2 (day 10) "preference" "claude" [] "Write scripts in Python, with uv for every tool and dependency. Never install packages globally."
+
+  -- A memory about the ref me/lang, not one version of it.
+  k1 <- linkedAt (day 11) "fact" "claude" [lang] "The build scripts follow the language preference."
+  k1i <- withExceptT StoreFailed (ExceptT (Store.add s k1))
+  liftIO (modifyIORef' oldOnes ((k1i, day 11) :))
+  _ <- newRef "me/build" k1i
 
   -- A fork: claude and codex both supersede e2.
   e1 <- old (day 1) "fact" "claude" [] "The editor is Neovim."

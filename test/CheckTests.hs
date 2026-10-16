@@ -2,13 +2,15 @@
 
 module CheckTests (checkTests) where
 
-import Akyuu.Check (CheckOptions (hubDegree, longLog), Finding (findingIds, findingKind, findingRelated, findingSeverity), FindingKind (DuplicateBody, Fork, Hub, LongLog, NearDuplicate, StaleLink, Unreferenced), Inputs (Inputs), Severity (Info, Problem), check, defaultCheckOptions, jaccard, normalise, shingles)
+import Akyuu.Check (CheckOptions (hubDegree, longLog), Finding (findingIds, findingKind, findingRelated, findingSeverity), FindingKind (DuplicateBody, Fork, Hub, LongLog, MissingRef, NearDuplicate, StaleLink, Unreferenced), Inputs (Inputs), Severity (Info, Problem), check, defaultCheckOptions, findingWhy, jaccard, normalise, shingles)
 import Akyuu.GC (Roots (Roots, rootPins, rootRefs, rootTemps))
-import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Supersedes), Graph, singleton)
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, singleton)
 import Akyuu.Id (Id)
+import Akyuu.Refs (Name, mkName)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as T
 import Support (nid)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
@@ -25,6 +27,7 @@ checkTests =
       unreferencedCases,
       hubCases,
       longLogCases,
+      aboutRefCases,
       reviewedCases,
       helperCases,
       properties
@@ -46,8 +49,12 @@ build = foldMap (\(i, es) -> singleton i [Edge k t | (k, t) <- es])
 held :: [Id] -> Roots
 held is = Roots {rootRefs = Set.fromList is, rootPins = Set.empty, rootTemps = Set.empty}
 
+-- | The inputs of a check with no about-ref links and no refs by name.
+inputs :: Graph -> Map.Map Id Text -> Roots -> Set.Set (Id, Id) -> Inputs
+inputs g bs r v = Inputs g bs r v Map.empty Map.empty
+
 run :: Graph -> [(Id, Text)] -> [Id] -> [(FindingKind, [Id])]
-run g bs hs = [(findingKind x, findingIds x) | x <- check defaultCheckOptions (Inputs g (Map.fromList bs) (held hs) Set.empty)]
+run g bs hs = [(findingKind x, findingIds x) | x <- check defaultCheckOptions (inputs g (Map.fromList bs) (held hs) Set.empty)]
 
 kinds :: Graph -> [(Id, Text)] -> [Id] -> [FindingKind]
 kinds g bs hs = map fst (run g bs hs)
@@ -66,7 +73,7 @@ staleLinkCases =
     [ testCase "a head with a link to an old version is a problem, and names the new one" $ do
         -- b supersedes a. c is about a.
         let g = build [(a, []), (b, [(Supersedes, a)]), (c, [(About, a)])]
-            fs = check defaultCheckOptions (Inputs g Map.empty (held [b, c]) Set.empty)
+            fs = check defaultCheckOptions (inputs g Map.empty (held [b, c]) Set.empty)
         [(findingKind x, findingSeverity x, findingIds x, findingRelated x) | x <- fs]
           @?= [(StaleLink, Problem, [c, a], [b])],
       testCase "a link to a current memory is fine" $
@@ -83,13 +90,44 @@ staleLinkCases =
         kinds (build [(a, []), (b, [(Supersedes, a)]), (c, [(About, a)]), (d, [(Supersedes, c), (About, b)])]) [] [b, d] @?= []
     ]
 
+aboutRefCases :: TestTree
+aboutRefCases =
+  testGroup
+    "about-ref"
+    [ testCase "a derived-from edge to an old version is evidence, not a stale link" $
+        kinds (build [(a, []), (b, [(Supersedes, a)]), (c, [(DerivedFrom, a)])]) [] [b, c] @?= [],
+      testCase "a refines edge to an old version is a stale link" $
+        kinds (build [(a, []), (b, [(Supersedes, a)]), (c, [(Refines, a)])]) [] [b, c] @?= [StaleLink],
+      testCase "a stale link names the ref that holds the current memory" $ do
+        let g = build [(a, []), (b, [(Supersedes, a)]), (c, [(About, a)])]
+            fs = check defaultCheckOptions (Inputs g Map.empty (held [b, c]) Set.empty Map.empty (Map.fromList [(ref "me/topic", b), (ref "me/linker", c)]))
+        map (T.isInfixOf "about-ref me/topic" . findingWhy) fs @?= [True],
+      testCase "a stale link to a memory that no ref holds names no ref" $ do
+        let g = build [(a, []), (b, [(Supersedes, a)]), (c, [(About, a)])]
+            fs = check defaultCheckOptions (Inputs g Map.empty (held [b, c]) Set.empty Map.empty Map.empty)
+        map (T.isInfixOf "about-ref" . findingWhy) fs @?= [False],
+      testCase "a link to a ref that does not exist is a problem" $ do
+        let g = build [(a, [])]
+            fs = check defaultCheckOptions (Inputs g Map.empty (held [a]) Set.empty (Map.singleton a (Set.fromList [ref "me/gone", ref "me/here"])) (Map.singleton (ref "me/here") a))
+        [(findingKind x, findingSeverity x, findingIds x) | x <- fs] @?= [(MissingRef, Problem, [a])]
+        map (T.isInfixOf "me/gone" . findingWhy) fs @?= [True],
+      testCase "a link to a ref that exists is fine" $
+        check defaultCheckOptions (Inputs (build [(a, []), (b, [])]) Map.empty (held [a, b]) Set.empty (Map.singleton a (Set.singleton (ref "me/b"))) (Map.singleton (ref "me/b") b)) @?= [],
+      testCase "an old version with a missing ref is not reported" $ do
+        let g = build [(a, []), (b, [(Supersedes, a)])]
+        map findingKind (check defaultCheckOptions (Inputs g Map.empty (held [b]) Set.empty (Map.singleton a (Set.singleton (ref "me/gone"))) Map.empty)) @?= []
+    ]
+  where
+    ref :: Text -> Name
+    ref t = either (error . show) id (mkName t)
+
 forkCases :: TestTree
 forkCases =
   testGroup
     "Fork"
     [ testCase "two heads that supersede one memory are a fork" $ do
         let g = build [(a, []), (b, [(Supersedes, a)]), (c, [(Supersedes, a)])]
-            fs = check defaultCheckOptions (Inputs g Map.empty (held [b, c]) Set.empty)
+            fs = check defaultCheckOptions (inputs g Map.empty (held [b, c]) Set.empty)
         [(findingKind x, findingIds x, findingRelated x) | x <- fs] @?= [(Fork, [a], [b, c])],
       testCase "a chain is not a fork" $
         kinds (build [(a, []), (b, [(Supersedes, a)]), (c, [(Supersedes, b)])]) [] [c] @?= [],
@@ -164,7 +202,7 @@ unreferencedCases =
       testCase "a head that a live memory links to is kept" $
         kinds (build [(a, []), (b, [(DerivedFrom, a)])]) [] [b] @?= [],
       testCase "a pin keeps a head" $
-        check defaultCheckOptions (Inputs (build [(a, [])]) Map.empty (held []) {rootPins = Set.singleton a} Set.empty) @?= [],
+        check defaultCheckOptions (inputs (build [(a, [])]) Map.empty (held []) {rootPins = Set.singleton a} Set.empty) @?= [],
       testCase "an old version is not reported: GC reports it" $
         kinds (build [(a, []), (b, [(Supersedes, a)])]) [] [b] @?= []
     ]
@@ -176,7 +214,7 @@ hubCases =
     [ testCase "a memory with more links than the limit is a hub" $ do
         let ms = [nid n | n <- [10 .. 16]]
             g = build ((a, []) : [(m, [(About, a)]) | m <- ms])
-            fs = check defaultCheckOptions (Inputs g Map.empty (held (a : ms)) Set.empty)
+            fs = check defaultCheckOptions (inputs g Map.empty (held (a : ms)) Set.empty)
         [(findingKind x, findingSeverity x, findingIds x) | x <- fs] @?= [(Hub, Info, [a])],
       testCase "a memory at the limit is not" $ do
         let ms = [nid n | n <- [10 .. 14]]
@@ -184,7 +222,7 @@ hubCases =
         kinds g [] (a : ms) @?= [],
       testCase "the limit is an option" $ do
         let g = build [(a, []), (b, [(About, a)]), (c, [(About, a)])]
-            fs = check defaultCheckOptions {hubDegree = 1} (Inputs g Map.empty (held [a, b, c]) Set.empty)
+            fs = check defaultCheckOptions {hubDegree = 1} (inputs g Map.empty (held [a, b, c]) Set.empty)
         map findingKind fs @?= [Hub]
     ]
 
@@ -194,17 +232,17 @@ longLogCases =
     "LongLog"
     [ testCase "a chain longer than the limit is a long log, named by its newest episode" $ do
         let g = build [(a, []), (b, [(DerivedFrom, a)]), (c, [(DerivedFrom, b)]), (d, [(DerivedFrom, c)])]
-            fs = check defaultCheckOptions {longLog = 3} (Inputs g Map.empty (held [d]) Set.empty)
+            fs = check defaultCheckOptions {longLog = 3} (inputs g Map.empty (held [d]) Set.empty)
         [(findingKind x, findingIds x) | x <- fs] @?= [(LongLog, [d])],
       testCase "a chain at the limit is not long, and an older value of the ref is not counted again" $ do
         let g = build [(a, []), (b, [(DerivedFrom, a)]), (c, [(DerivedFrom, b)])]
-        check defaultCheckOptions {longLog = 3} (Inputs g Map.empty (held [c, b]) Set.empty) @?= []
-        map findingKind (check defaultCheckOptions {longLog = 2} (Inputs g Map.empty (held [c, b]) Set.empty)) @?= [LongLog]
+        check defaultCheckOptions {longLog = 3} (inputs g Map.empty (held [c, b]) Set.empty) @?= []
+        map findingKind (check defaultCheckOptions {longLog = 2} (inputs g Map.empty (held [c, b]) Set.empty)) @?= [LongLog]
     ]
 
 -- | Findings with a set of reviewed pairs.
 runReviewed :: Graph -> [(Id, Text)] -> [(Id, Id)] -> [FindingKind]
-runReviewed g bs rs = [findingKind x | x <- check defaultCheckOptions (Inputs g (Map.fromList bs) (held [a, b, c, d]) (Set.fromList rs))]
+runReviewed g bs rs = [findingKind x | x <- check defaultCheckOptions (inputs g (Map.fromList bs) (held [a, b, c, d]) (Set.fromList rs))]
 
 reviewedCases :: TestTree
 reviewedCases =
@@ -258,6 +296,6 @@ properties =
         let ids = [nid (n `mod` 8) | n <- xs :: [Int]]
             g = foldMap (\i -> build [(i, [(About, nid ((fromEnum (show i /= "")) + 1))])]) ids
             bodies = Map.fromList [(i, sentence) | i <- ids]
-         in check defaultCheckOptions (Inputs g bodies (held ids) Set.empty)
-              === check defaultCheckOptions (Inputs g bodies (held (reverse ids)) Set.empty)
+         in check defaultCheckOptions (inputs g bodies (held ids) Set.empty)
+              === check defaultCheckOptions (inputs g bodies (held (reverse ids)) Set.empty)
     ]

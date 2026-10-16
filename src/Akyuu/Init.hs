@@ -29,7 +29,7 @@ defaultPolicy =
       "- For a new topic, call add with a ref, such as me/projects/<name> or me/<topic>.",
       "- For something that happened (a decision, a conversation, a small fact), call note: it goes to the log of the directory, with no ref to choose.",
       "- One topic for each memory. Short, plain sentences. Date what can go stale (\"as of 2026-10-13\").",
-      "- Link related memories with about. Name a ref, not an id, when you mean \"the current version\".",
+      "- Link related memories. For a topic with a ref, use about_refs with the ref: the link follows the ref. Use about with an id for one exact memory.",
       "",
       "Keeping it tidy:",
       "- The tool check lists duplicates, forks, stale links and long logs. It changes nothing; decide, then use supersede, review or a summary.",

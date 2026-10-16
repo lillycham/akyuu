@@ -35,10 +35,11 @@ module Akyuu.Check
 where
 
 import Akyuu.GC (Roots (rootRefs), allRoots, retains)
-import Akyuu.Graph (Dir (In, Out), EdgeType (DerivedFrom, Supersedes), Graph)
+import Akyuu.Graph (Dir (In, Out), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, render)
 import Akyuu.Query (resolve)
+import Akyuu.Refs (Name, nameText)
 import Data.List (sortOn, tails)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -62,8 +63,9 @@ data Severity
 
 -- | What a finding is about.
 data FindingKind
-  = -- | A live memory points at an old version. 'findingRelated' holds the
-    -- current memories.
+  = -- | A live memory points at an old version with an @about@ or @refines@
+    -- edge. 'findingRelated' holds the current memories. A @derived-from@
+    -- edge is evidence of one exact text, so an old target is right there.
     StaleLink
   | -- | Two or more heads supersede the same memory.
     Fork
@@ -78,6 +80,8 @@ data FindingKind
   | -- | A log (a chain of episodes under a ref) with many episodes. It
     -- is time to replace it with a summary.
     LongLog
+  | -- | A live memory has an @about-ref@ link to a ref that does not exist.
+    MissingRef
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | One thing that 'check' found. This is plain data.
@@ -127,7 +131,11 @@ data Inputs = Inputs
     inRoots :: Roots,
     -- | The pairs that a person or an agent judged to be different. A
     -- finding about only these memories is left out. See 'Akyuu.Review'.
-    inReviewed :: Set (Id, Id)
+    inReviewed :: Set (Id, Id),
+    -- | The @about-ref@ links of each memory. A memory with no entry has none.
+    inAboutRefs :: Map Id (Set Name),
+    -- | The current value of each ref.
+    inRefValues :: Map Name Id
   }
 
 -- | Every finding, sorted by severity, then kind, then ids. This function is
@@ -136,7 +144,8 @@ check :: CheckOptions -> Inputs -> [Finding]
 check o i =
   sortOn
     (\f -> (findingSeverity f, findingKind f, findingIds f, findingRelated f))
-    ( staleLinks g kept
+    ( staleLinks g kept heldBy
+        <> missingRefs kept (inAboutRefs i) (inRefValues i)
         <> filter (not . judged) (forks g)
         <> filter (not . judged) (duplicates g hs bodies)
         <> filter (not . judged) (nearDuplicates o g hs bodies)
@@ -148,6 +157,7 @@ check o i =
     g = inGraph i
     hs = Graph.heads g
     bodies = inBodies i
+    heldBy = Map.fromListWith (<>) [(v, [n]) | (n, v) <- Map.toAscList (inRefValues i)]
     -- A finding is left out when every pair of the memories in it is judged.
     judged f =
       let is = if findingKind f == Fork then findingRelated f else findingIds f
@@ -159,9 +169,11 @@ check o i =
 
 -- Detectors ------------------------------------------------------------
 
--- | A retaining edge from a head to a memory that something replaced.
-staleLinks :: Graph -> Set Id -> [Finding]
-staleLinks g hs =
+-- | An @about@ or @refines@ edge from a head to a memory that something
+-- replaced. If a ref holds a current memory, the text names it: an
+-- @about-ref@ link to that ref follows it and does not go stale.
+staleLinks :: Graph -> Set Id -> Map Id [Name] -> [Finding]
+staleLinks g hs heldBy =
   [ Finding
       { findingKind = StaleLink,
         findingSeverity = Problem,
@@ -172,12 +184,34 @@ staleLinks g hs =
             <> " has a link to "
             <> render t
             <> ", which a newer memory replaces."
+            <> useRef now
       }
   | m <- Set.toAscList hs,
     (k, t) <- outs m g,
-    retains k,
+    k `elem` [About, Refines],
     let now = resolve t g `Set.difference` Set.singleton t,
     not (Set.null now)
+  ]
+  where
+    useRef now = case concat [Map.findWithDefault [] h heldBy | h <- Set.toAscList now] of
+      [] -> ""
+      ns -> " To follow the topic, link to the ref with about-ref " <> T.intercalate " or " (map nameText ns) <> " instead."
+
+-- | An @about-ref@ link from a head to a ref that does not exist. A link
+-- resolves to nothing then: the ref was deleted or renamed.
+missingRefs :: Set Id -> Map Id (Set Name) -> Map Name Id -> [Finding]
+missingRefs hs links values =
+  [ Finding
+      { findingKind = MissingRef,
+        findingSeverity = Problem,
+        findingIds = [m],
+        findingRelated = [],
+        findingWhy = render m <> " has an about-ref link to " <> nameText n <> ", which is not a ref. Supersede it with a link to the right ref."
+      }
+  | (m, ns) <- Map.toAscList links,
+    m `Set.member` hs,
+    n <- Set.toAscList ns,
+    n `Map.notMember` values
   ]
 
 -- | Two or more heads that replace the same memory.
@@ -369,7 +403,8 @@ jaccard a b
     u = Set.size (a `Set.union` b)
 
 -- | The name of a kind, as the command line and the JSON write it:
--- @stale-link@, @fork@, @duplicate-body@, @near-duplicate@, @unreferenced@, @hub@.
+-- @stale-link@, @fork@, @duplicate-body@, @near-duplicate@, @unreferenced@, @hub@,
+-- @long-log@, @missing-ref@.
 kindName :: FindingKind -> Text
 kindName StaleLink = "stale-link"
 kindName Fork = "fork"
@@ -378,6 +413,7 @@ kindName NearDuplicate = "near-duplicate"
 kindName Unreferenced = "unreferenced"
 kindName Hub = "hub"
 kindName LongLog = "long-log"
+kindName MissingRef = "missing-ref"
 
 -- | The name of a severity: @problem@, @suggestion@ or @info@.
 severityName :: Severity -> Text

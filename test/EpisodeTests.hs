@@ -7,7 +7,7 @@ import Akyuu.Error (AkyuuError (BadInput))
 import Akyuu.GC (Policy (gracePeriod, keepGenerations), defaultPolicy)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom))
 import Akyuu.Memory (Memory (memBody, memEdges))
-import Akyuu.Ops (NewMemory (NewMemory), addMemory, appendEpisode, dryRunGC, readLog, supersedeMemory)
+import Akyuu.Ops (NewMemory, addMemory, appendEpisode, dryRunGC, readLog, supersedeMemory)
 import Akyuu.Refs (mkName)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
@@ -16,7 +16,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import OpsTests (withOpsEnv)
-import Support (right)
+import Support (newMem, right)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
@@ -49,8 +49,8 @@ episodeTests =
         withOpsEnv $ \_ env -> do
           n <- right (mkName "agent/episodes")
           topic <- right =<< addMemory env (note "a topic")
-          _ <- right =<< appendEpisode env n (NewMemory "episode" "claude" (Set.singleton (Edge About topic)) "it was about the topic")
-          r <- appendEpisode env n (NewMemory "episode" "claude" (Set.singleton (Edge DerivedFrom topic)) "x")
+          _ <- right =<< appendEpisode env n (newMem "episode" "claude" (Set.singleton (Edge About topic)) "it was about the topic")
+          r <- appendEpisode env n (newMem "episode" "claude" (Set.singleton (Edge DerivedFrom topic)) "x")
           case r of
             Left (BadInput _) -> pure ()
             other -> error ("expected BadInput, got " <> show other),
@@ -65,7 +65,7 @@ episodeTests =
         withOpsEnv $ \_ env -> do
           n <- right (mkName "agent/episodes")
           ids <- forM ["a", "b", "c"] $ \t -> right =<< appendEpisode env n (note t)
-          s <- right =<< supersedeMemory env n Nothing (NewMemory "summary" "claude" Set.empty "a, b and c happened")
+          s <- right =<< supersedeMemory env n Nothing (newMem "summary" "claude" Set.empty "a, b and c happened")
           -- With one older generation, the ref still names the newest episode, so
           -- the chain is kept. With none, the summary is the only root.
           kept <- right =<< dryRunGC env now
@@ -87,5 +87,5 @@ episodeTests =
     ]
   where
     note :: Text -> NewMemory
-    note = NewMemory "episode" "claude" Set.empty
+    note = newMem "episode" "claude" Set.empty
     now = defaultPolicy {gracePeriod = 0, keepGenerations = 1}

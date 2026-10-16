@@ -32,6 +32,8 @@ module Akyuu.Query
     Neighbour (..),
     neighbourList,
     neighbours,
+    RefLink (..),
+    refLinkList,
 
     -- * Resolve
     resolve,
@@ -41,9 +43,10 @@ where
 import Akyuu.Cache (Cache, CacheError, Correction (AddedByMeaning), Hit (Hit, hitId, hitSnippet))
 import Akyuu.Cache qualified as Cache
 import Akyuu.Embed (fuse)
-import Akyuu.Graph (Dir, EdgeType (Supersedes), Graph)
+import Akyuu.Graph (Dir (In, Out), EdgeType (Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
+import Akyuu.Refs (Name)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT)
 import Data.List (partition, sortOn)
 import Data.Map.Strict (Map)
@@ -286,6 +289,37 @@ neighbourList i g =
 -- | 'neighbourList' over the graph of the cache.
 neighbours :: Cache -> Id -> IO (Either CacheError [Neighbour])
 neighbours c i = fmap (neighbourList i) <$> Cache.loadGraph c
+
+-- | One @about-ref@ link of a memory, as seen from that memory. The links
+-- are not edges of the graph: a link names a ref, and it reaches the memory
+-- that the ref names now.
+data RefLink = RefLink
+  { -- | 'Graph.Out' if the memory has the link, 'Graph.In' if the other
+    -- memory has a link to a ref that names this memory now.
+    linkDir :: Dir,
+    -- | The ref of the link.
+    linkRef :: Name,
+    -- | For 'Graph.Out', the memory that the ref names now, or 'Nothing' if
+    -- the ref does not exist. For 'Graph.In', the memory with the link.
+    linkId :: Maybe Id
+  }
+  deriving (Eq, Ord, Show)
+
+-- | Every about-ref link of a memory, in both directions, from the links of
+-- all memories and the current values of the refs. This function is pure.
+--
+-- The list is sorted: the 'Graph.Out' links first, then by ref and 'Id'. A
+-- link in reaches only the current value of a ref, not an older one.
+refLinkList :: Id -> Map Id (Set Name) -> Map Name Id -> [RefLink]
+refLinkList i links values =
+  Set.toAscList . Set.fromList $
+    [RefLink Out n (Map.lookup n values) | n <- Set.toAscList (Map.findWithDefault Set.empty i links)]
+      <> [ RefLink In n (Just m)
+         | (n, v) <- Map.toAscList values,
+           v == i,
+           (m, ns) <- Map.toAscList links,
+           n `Set.member` ns
+         ]
 
 -- Resolve --------------------------------------------------------------
 

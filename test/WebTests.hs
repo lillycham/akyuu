@@ -9,7 +9,7 @@ import Akyuu.GC (Tombstone (Tombstone))
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, singleton)
 import Akyuu.Id (Id, IdParseError (BadLength), hashBytes, render)
-import Akyuu.Ops (Env (envCache, envStore), IdSpec (Full, Prefix), NewMemory (NewMemory), addMemory, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env (envCache, envStore), IdSpec (Full, Prefix), addMemory, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBeAbsent), mkName)
 import Akyuu.Store (StoreError (NotFound))
@@ -40,7 +40,7 @@ import Network.HTTP.Types (statusCode)
 import Network.Wai qualified as Wai
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import OpsTests (note, withOpsEnv)
-import Support (nid, right, testMemory)
+import Support (newMem, nid, right, testMemory)
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
@@ -487,7 +487,7 @@ storeCases =
           (render about `elem` strings (at ["context"] v)) @?= True,
       testCase "search gives a snippet with marks that a bracket of the body cannot copy" $
         withOpsEnv $ \_ env -> do
-          _ <- right =<< addMemory env (NewMemory "fact" "claude" Set.empty "see [x] and Haskell")
+          _ <- right =<< addMemory env (newMem "fact" "claude" Set.empty "see [x] and Haskell")
           _ <- right =<< Cache.sync (envCache env) (envStore env)
           (s, v) <- call env ["api", "search"] [("q", Just "haskell")]
           s @?= 200

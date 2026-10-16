@@ -1996,6 +1996,19 @@ const Akyuu = (function () {
         n && (n.status === 'missing' || n.status === 'pruned') ? el('span', { class: 'pill bad', text: n.status }) : null]));
     }
     q.appendChild(ul);
+    const links = m.links || [];
+    if (links.length) {
+      q.appendChild(el('h2', { text: 'Links to refs' }));
+      const lu = el('ul', { class: 'plain' });
+      for (const l of links) {
+        const ref = el('a', { class: 'link', href: '#wiki/' + l.ref, text: l.ref });
+        lu.appendChild(el('li', {}, l.dir === 'out'
+          ? [el('span', { class: 'muted', text: 'this is about ' }), ref, el('span', { class: 'muted', text: ', now ' }),
+             l.id ? idLink(l.id) : el('span', { class: 'pill bad', text: 'no such ref' })]
+          : [idLink(l.id), el('span', { class: 'muted', text: ' is about ' }), ref, el('span', { class: 'muted', text: ', which names this' })]));
+      }
+      q.appendChild(lu);
+    }
   }
 
   function actions(id) {
@@ -2431,17 +2444,22 @@ const Akyuu = (function () {
     };
     if (m) {
       const outs = m.edges.filter(e => e.dir === 'out' && e.kind !== 'supersedes');
-      if (outs.length) {
+      const refOuts = (m.links || []).filter(l => l.dir === 'out');
+      if (outs.length || refOuts.length) {
         side.appendChild(el('h2', { text: 'Links to' }));
-        side.appendChild(el('ul', { class: 'plain' }, outs.map(e => el('li', {}, [el('span', { class: 'muted', text: e.kind + ' ' }), label(e.id)]))));
+        side.appendChild(el('ul', { class: 'plain' }, refOuts.map(l => el('li', {}, [el('span', { class: 'muted', text: 'about ' }), el('a', { class: 'link', href: '#wiki/' + l.ref, text: l.ref }),
+          l.id ? null : el('span', { class: 'pill bad', text: 'no such ref' })])).concat(
+          outs.map(e => el('li', {}, [el('span', { class: 'muted', text: e.kind + ' ' }), label(e.id)])))));
       }
     }
     const ins = m ? m.edges.filter(e => e.dir === 'in' && e.kind !== 'supersedes') : [];
+    const refIns = m ? (m.links || []).filter(l => l.dir === 'in') : [];
     const texts = textBacklinks(state.pages, name);
     side.appendChild(el('h2', { text: 'Linked from' }));
-    if (!ins.length && !texts.length) side.appendChild(el('p', { class: 'muted', text: 'Nothing links here.' }));
+    if (!ins.length && !refIns.length && !texts.length) side.appendChild(el('p', { class: 'muted', text: 'Nothing links here.' }));
     else {
       const ul = el('ul', { class: 'plain' });
+      for (const l of refIns) ul.appendChild(el('li', {}, [label(l.id), el('span', { class: 'muted', text: ' (about-ref)' })]));
       for (const e of ins) ul.appendChild(el('li', {}, [label(e.id), el('span', { class: 'muted', text: ' (' + e.kind + ')' })]));
       for (const t of texts) ul.appendChild(el('li', {}, [el('a', { class: 'link', href: '#wiki/' + t, text: t }), el('span', { class: 'muted', text: ' (names it)' })]));
       side.appendChild(ul);
