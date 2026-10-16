@@ -49,6 +49,8 @@ module Akyuu.Ops
     evalSearch,
     searchTuning,
     neighboursOf,
+    aboutRefLinks,
+    refLinksOf,
     parseDuration,
     dryRunGC,
     runGC,
@@ -99,13 +101,13 @@ import Akyuu.Episode qualified as Episode
 import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadConfig, BadField, BadIdSpec, BadInput, BadName, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
 import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
-import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom, Supersedes), Graph)
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Init qualified as Init
-import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memEdges, memKind), MemoryError (InvalidField), MemoryParseError, mkMemory, validField)
-import Akyuu.Query (Neighbour, SearchOptions, SearchResult)
+import Akyuu.Memory (Memory (memAboutRefs, memAgent, memBody, memCreated, memEdges, memKind), MemoryError (InvalidField), MemoryParseError, mkMemory, validField, withAboutRefs)
+import Akyuu.Query (Neighbour, RefLink, SearchOptions, SearchResult)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (Expected, Name, Ref (current), RefError, Refs, openRefs)
 import Akyuu.Refs qualified as Refs
@@ -125,7 +127,7 @@ import Data.Char (isDigit, isHexDigit)
 import Data.Either (partitionEithers)
 import Data.List (sort, sortOn)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -182,7 +184,10 @@ data NewMemory = NewMemory
   { newKind :: Text,
     newAgent :: Text,
     newEdges :: Set Edge,
-    newBody :: Text
+    newBody :: Text,
+    -- | The refs that the memory is about (@about-ref@ headers). Each one
+    -- must exist when the memory is written.
+    newAboutRefs :: Set Name
   }
   deriving (Eq, Show)
 
@@ -207,7 +212,7 @@ checkField header v
 -- back.
 buildMemory :: UTCTime -> NewMemory -> Either AkyuuError Memory
 buildMemory t n =
-  first (\(InvalidField h v) -> BadField h v) (mkMemory (newKind n) t (newAgent n) (newEdges n) (newBody n))
+  withAboutRefs (newAboutRefs n) <$> first (\(InvalidField h v) -> BadField h v) (mkMemory (newKind n) t (newAgent n) (newEdges n) (newBody n))
 
 -- | 'buildMemory' at the time now.
 buildNow :: NewMemory -> ExceptT AkyuuError IO Memory
@@ -235,6 +240,7 @@ gc = withExceptT GCFailed . ExceptT
 -- that, so this function does not check it.
 addMemory :: Env -> NewMemory -> IO (Either AkyuuError Id)
 addMemory env n = runExceptT $ do
+  linkable env n
   m <- buildNow n
   i <- store (Store.add (envStore env) m)
   liftIO (embedNew env i (newBody n))
@@ -288,6 +294,13 @@ getMemory env i = runExceptT $ do
 -- ('Akyuu.Supersede.supersede').
 supersedeMemory :: Env -> Name -> Maybe Id -> NewMemory -> IO (Either AkyuuError Id)
 supersedeMemory env n old new = runExceptT $ do
+  linkable env new
+  ExceptT (supersedeUnchecked env n old new)
+
+-- | 'supersedeMemory' without the check of the about-ref links. 'amendMemory'
+-- uses it: the links of the old memory stay, also if a ref is gone since.
+supersedeUnchecked :: Env -> Name -> Maybe Id -> NewMemory -> IO (Either AkyuuError Id)
+supersedeUnchecked env n old new = runExceptT $ do
   m <- buildNow new
   i <- withExceptT fromSupersede . ExceptT $ case old of
     Just o -> supersedeFrom (envStore env) (envRefs env) n o m
@@ -312,9 +325,20 @@ amendMemory env n expected agent es = runExceptT $ do
           { newKind = memKind m,
             newAgent = fromMaybe (memAgent m) agent,
             newEdges = Set.filter (\(Edge t _) -> t /= Supersedes) (memEdges m),
-            newBody = body
+            newBody = body,
+            newAboutRefs = memAboutRefs m
           }
-  ExceptT (supersedeMemory env n (Just cur) new)
+  ExceptT (supersedeUnchecked env n (Just cur) new)
+
+-- | Check that each ref of the about-ref links of a new memory exists. A
+-- link to a ref that does not exist resolves to nothing, so a typo would be
+-- lost without a word.
+linkable :: Env -> NewMemory -> ExceptT AkyuuError IO ()
+linkable env n = forM_ (Set.toAscList (newAboutRefs n)) $ \r -> do
+  there <- liftIO (readRef env r)
+  case there of
+    Right _ -> pure ()
+    Left _ -> throwE (BadInput ("The ref " <> Refs.nameText r <> " does not exist. An about-ref link names a ref that exists."))
 
 -- | Read a ref.
 readRef :: Env -> Name -> IO (Either AkyuuError Ref)
@@ -485,7 +509,21 @@ searchMemoriesMode env mode o q = runExceptT $ do
   t <- liftIO (searchTuning env)
   (sem, notes) <- liftIO (if mode == TextOnly then pure (Nothing, []) else meaningFor env (mode == MeaningOnly) q)
   r <- cache (Query.searchWith (envCache env) t {Query.tuneSemantic = sem} o q)
-  pure r {Query.corrections = Query.corrections r <> notes}
+  linked <- if Query.searchHops o >= 1 && About `Set.member` Query.searchFollow o then linkedFrom env (map Query.matchId (Query.matches r)) else pure Set.empty
+  let hits = Set.fromList (map Query.matchId (Query.matches r))
+  pure r {Query.corrections = Query.corrections r <> notes, Query.context = Query.context r <> (linked `Set.difference` hits)}
+
+-- | The memories that the about-ref links of these memories reach now: the
+-- current value of each ref. A ref that does not exist reaches nothing.
+linkedFrom :: Env -> [Id] -> ExceptT AkyuuError IO (Set Id)
+linkedFrom env is = do
+  ms <- liftIO (traverse (Store.get (envStore env)) is)
+  let names = Set.unions [memAboutRefs m | Right m <- ms]
+  if Set.null names
+    then pure Set.empty
+    else do
+      values <- Map.fromList <$> ExceptT (listRefValues env)
+      pure (Set.fromList (mapMaybe (`Map.lookup` values) (Set.toList names)))
 
 -- | Open the table of vectors of this store for an action.
 withVectors :: Env -> (Embed.VectorStore -> IO a) -> IO (Either Text a)
@@ -625,6 +663,25 @@ neighboursOf env i = runExceptT $ do
     then missing env i
     else pure ns
 
+-- | The about-ref links of every memory in the store, after a sync of the
+-- cache. A memory with no links has no entry. It reads each memory, because
+-- the cache does not keep the links.
+aboutRefLinks :: Env -> IO (Either AkyuuError (Map.Map Id (Set Name)))
+aboutRefLinks env = runExceptT $ do
+  synced env
+  g <- cache (Cache.loadGraph (envCache env))
+  ms <- liftIO (traverse (\i -> fmap ((,) i) <$> Store.get (envStore env) i) (Set.toAscList (Graph.nodes g)))
+  pure (Map.fromList [(i, memAboutRefs m) | Right (i, m) <- ms, not (Set.null (memAboutRefs m))])
+
+-- | The about-ref links of a memory, in both directions
+-- ('Akyuu.Query.refLinkList'). An 'Id' that is not a memory has none: call
+-- 'neighboursOf' first for the error.
+refLinksOf :: Env -> Id -> IO (Either AkyuuError [RefLink])
+refLinksOf env i = runExceptT $ do
+  links <- ExceptT (aboutRefLinks env)
+  values <- ExceptT (listRefValues env)
+  pure (Query.refLinkList i links (Map.fromList values))
+
 -- | The plan of a GC run now, with this policy. This writes nothing.
 dryRunGC :: Env -> Policy -> IO (Either AkyuuError (Set Id))
 dryRunGC env p = runExceptT (gc (GC.dryRun (envCache env) (envStore env) (envRefs env) p Set.empty))
@@ -657,7 +714,7 @@ initStore env policyRef manifestRef = runExceptT $ do
         case there of
           Right _ -> pure ("kept " <> Refs.nameText n <> " (it exists)")
           Left _ -> do
-            i <- ExceptT (addUnderRef env n NewMemory {newKind = kind, newAgent = "akyuu", newEdges = Set.empty, newBody = body})
+            i <- ExceptT (addUnderRef env n NewMemory {newKind = kind, newAgent = "akyuu", newEdges = Set.empty, newBody = body, newAboutRefs = Set.empty})
             pure ("made " <> Refs.nameText n <> " " <> Id.render i)
   a <- one policyRef Init.defaultPolicy "instruction"
   b <- one manifestRef (Init.defaultManifest (Refs.nameText policyRef) (Refs.nameText logRef)) "instruction"
@@ -835,14 +892,20 @@ verifyStore env = runExceptT $ do
 -- bodies come from the store. An object that cannot be read is left out of
 -- the bodies, so no text check sees it: 'verifyStore' reports it. The roots
 -- are the refs and pins, with the default number of generations.
+-- The about-ref links come from the same reads, and the refs from their
+-- current values.
 checkStore :: Env -> CheckOptions -> IO (Either AkyuuError [Finding])
 checkStore env o = runExceptT $ do
   let s = envStore env
   (g, _) <- gc (GC.snapshot (envCache env) s)
   roots <- gc (GC.readRoots GC.defaultPolicy (envRefs env) s)
   judged <- either (const []) (map fst) <$> liftIO (Review.listReviews s)
-  bodies <- liftIO (traverse (\i -> fmap ((,) i . memBody) . either (const Nothing) Just <$> Store.get s i) (Set.toAscList (Graph.nodes g)))
-  pure (Check.check o (Check.Inputs g (Map.fromList (catMaybes bodies)) roots (Set.fromList judged)))
+  ms <- liftIO (traverse (\i -> fmap ((,) i) . either (const Nothing) Just <$> Store.get s i) (Set.toAscList (Graph.nodes g)))
+  values <- ExceptT (listRefValues env)
+  let read' = catMaybes ms
+      bodies = Map.fromList [(i, memBody m) | (i, m) <- read']
+      links = Map.fromList [(i, memAboutRefs m) | (i, m) <- read', not (Set.null (memAboutRefs m))]
+  pure (Check.check o (Check.Inputs g bodies roots (Set.fromList judged) links (Map.fromList values)))
 
 -- Compare --------------------------------------------------------------
 
@@ -1022,6 +1085,7 @@ appendEpisode :: Env -> Name -> NewMemory -> IO (Either AkyuuError Id)
 appendEpisode env n nm = runExceptT $ do
   let linked = [() | Edge k _ <- Set.toList (newEdges nm), k == DerivedFrom]
   unless (null linked) (throwE (BadInput "An episode links to the one before it with derived_from, and append adds that edge. Use about or refines for other links."))
+  linkable env nm
   m <- buildNow nm
   i <- withExceptT fromSupersede (ExceptT (Episode.append (envStore env) (envRefs env) n m))
   liftIO (embedNew env i (newBody nm))

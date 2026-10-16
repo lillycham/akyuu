@@ -10,8 +10,9 @@ import Akyuu.GC (Tombstone, defaultPolicy)
 import Akyuu.GC qualified as GC
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, render)
-import Akyuu.Ops (Env (envCache, envRefs, envStore), VerifyReport (corruptObjects, missingTargets, prunedTargets), verifyStore, withEnv)
-import Akyuu.Refs (openRefs)
+import Akyuu.Memory (Memory (memAboutRefs))
+import Akyuu.Ops (Env (envCache, envRefs, envStore), VerifyReport (corruptObjects, missingTargets, prunedTargets), getMemory, verifyStore, withEnv)
+import Akyuu.Refs (nameText, openRefs)
 import Akyuu.Seed (Demo (demoFork, demoGarbage, demoMissing, demoPinned, demoPruned, demoRefs, demoRetained, demoStored, demoTrashed, demoYoung), checkEmptyRoot, seedDemo)
 import Akyuu.Store (openStore)
 import Akyuu.Store qualified as Store
@@ -159,7 +160,12 @@ demoCases =
       testCase "seven generations of codex/status, and several agents and kinds" $
         withDemo $ \_ d _ -> do
           fmap length (lookup "codex/status" (demoRefs d)) @?= Just 7
-          length (demoRefs d) @?= 7
+          length (demoRefs d) @?= 8,
+      testCase "me/build has an about-ref link to me/lang" $
+        withDemo $ \_ d env -> do
+          Just (i : _) <- pure (lookup "me/build" (demoRefs d))
+          m <- right =<< getMemory env i
+          map nameText (Set.toList (memAboutRefs m)) @?= ["me/lang" :: Text]
     ]
 
 -- The GC and health views on the demo ------------------------------------

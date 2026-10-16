@@ -25,6 +25,7 @@ module Akyuu.Render
     shortIds,
     snippetText,
     neighbourLines,
+    refLinkLines,
     planLines,
     runLines,
     syncLines,
@@ -55,7 +56,7 @@ import Akyuu.Graph (Dir (In, Out), EdgeType)
 import Akyuu.Id (Id, render)
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader, renderMemory)
 import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, NoManifest, Present), ContextReport (ContextReport), EmbedReport (already, embedChanged, embedFailed, embedded), EmbedStatus (ebChanged, ebKey, ebProfile, ebVectors), EvalRow (evalCase, evalFound), SearchMode (Fused, MeaningOnly, TextOnly), StatusReport (stConfig, stEmbed, stGit, stManifest, stMemories, stPins, stPolicy, stRefs, stRoot), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
-import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, corrections, matches))
+import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), RefLink (linkDir, linkId, linkRef), SearchResult (context, corrections, matches))
 import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Akyuu.Review (Review (reviewAgent, reviewAt, reviewNote))
 import Akyuu.SearchEval (Case (caseCategory, caseGuess, caseQuery), passes)
@@ -147,6 +148,14 @@ neighbourLines :: [Neighbour] -> [Text]
 neighbourLines = map line
   where
     line n = T.unwords [dirName (neighbourDir n), edgeName (neighbourKind n), render (neighbourId n)]
+
+-- | The about-ref links of a memory, one line each: @out about-ref NAME ID@
+-- (the memory that the ref names now, or @(no such ref)@), or
+-- @in about-ref NAME ID@ (the memory with the link).
+refLinkLines :: [RefLink] -> [Text]
+refLinkLines = map line
+  where
+    line l = T.unwords [dirName (linkDir l), "about-ref", nameText (linkRef l), maybe "(no such ref)" render (linkId l)]
 
 -- | The plan of a dry run: the 'Id' values that a run would move to trash,
 -- then a count.

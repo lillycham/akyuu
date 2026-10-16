@@ -1,15 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Helpers that more than one test module uses.
-module Support (withTempDir, right, nid, testMemory) where
+module Support (withTempDir, right, nid, testMemory, newMem) where
 
 import Akyuu.Graph (Edge)
 import Akyuu.Id (Id, fromDigest)
 import Akyuu.Memory (Memory, mkMemory)
+import Akyuu.Ops (NewMemory (NewMemory))
 import Control.Exception (bracket)
 import Data.ByteString qualified as BS
 import Data.Maybe (fromMaybe)
 import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import System.Directory
@@ -45,3 +47,7 @@ nid n = fromMaybe (error "nid: not 32 bytes") (fromDigest (BS.replicate 32 (from
 -- valid, so a test never builds a memory that the store would refuse.
 testMemory :: Text -> UTCTime -> Text -> Set Edge -> Text -> Memory
 testMemory k t a es b = either (error . ("testMemory: " ++) . show) id (mkMemory k t a es b)
+
+-- | A new memory with no about-ref links: kind, agent, edges and body.
+newMem :: Text -> Text -> Set Edge -> Text -> NewMemory
+newMem k a es b = NewMemory k a es b Set.empty

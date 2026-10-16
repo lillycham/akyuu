@@ -2,16 +2,17 @@
 
 module OpsTests (opsTests, withOpsEnv, note) where
 
-import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
+import Akyuu.Amend (Edit (Append))
+import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
 import Akyuu.GC (Policy (gracePeriod, trashTTL), Tombstone (Tombstone), defaultPolicy)
 import Akyuu.GC qualified as GC
-import Akyuu.Graph (Dir (In), Edge (Edge), EdgeType (About, Refines, Supersedes))
+import Akyuu.Graph (Dir (In, Out), Edge (Edge), EdgeType (About, Refines, Supersedes))
 import Akyuu.Id (Id, render)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (memBody, memCreated, memEdges, memKind), parseMemory, renderMemory)
-import Akyuu.Ops (Env (envCache, envStore), IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets), addMemory, buildMemory, checkField, dryRunGC, getMemory, listRefNames, listRefValues, neighboursOf, parseDuration, parseIdSpec, readRef, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, verifyOk, verifyStore, withEnv)
-import Akyuu.Query (Match (matchId), Neighbour (Neighbour), SearchResult (context, matches), defaultSearchOptions)
-import Akyuu.Refs (Expected (MustBeAbsent, Unchecked), Ref (Ref), RefError (Locked, NoSuchRef, Stale), mkName)
+import Akyuu.Memory (Memory (memAboutRefs, memBody, memCreated, memEdges, memKind), parseMemory, renderMemory)
+import Akyuu.Ops (Env (envCache, envStore), IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets), addMemory, addUnderRef, amendMemory, buildMemory, checkField, dryRunGC, getMemory, listRefNames, listRefValues, neighboursOf, parseDuration, parseIdSpec, readRef, refLinksOf, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, verifyOk, verifyStore, withEnv)
+import Akyuu.Query (Match (matchId), Neighbour (Neighbour), RefLink (RefLink), SearchResult (context, matches), defaultSearchOptions)
+import Akyuu.Refs (Expected (MustBeAbsent, Unchecked), Name, Ref (Ref), RefError (Locked, NoSuchRef, Stale), mkName)
 import Akyuu.Store (StoreError (NotFound), objectPath)
 import Akyuu.Supersede (SupersedeError (SupersedeRef, SupersedeStore))
 import Data.ByteString qualified as BS
@@ -38,6 +39,7 @@ opsTests =
       envCases,
       opCases,
       verifyCases,
+      aboutRefCases,
       errorTextCases
     ]
 
@@ -51,7 +53,7 @@ withOpsEnv act = withTempDir $ \dir -> do
 
 -- A new memory with this body and these edges.
 note :: Text -> [Edge] -> NewMemory
-note body es = NewMemory {newKind = "fact", newAgent = "claude", newEdges = Set.fromList es, newBody = body}
+note body es = NewMemory {newKind = "fact", newAgent = "claude", newEdges = Set.fromList es, newBody = body, newAboutRefs = Set.empty}
 
 -- Make an empty file with the name of the object of an 'Id', so that
 -- 'Akyuu.Store.list' sees it.
@@ -60,6 +62,51 @@ plant env i = do
   let p = objectPath (envStore env) i
   createDirectoryIfMissing True (takeDirectory p)
   BS.writeFile p BS.empty
+
+-- About-ref links -----------------------------------------------------
+
+aboutRefCases :: TestTree
+aboutRefCases =
+  testGroup
+    "about-ref links"
+    [ testCase "a link to a ref that does not exist is refused, and nothing is added" $
+        withOpsEnv $ \_ env -> do
+          r <- addMemory env (linked "x" [topic])
+          case r of
+            Left (BadInput t) -> assertBool (T.unpack t) ("me/topic" `T.isInfixOf` t)
+            other -> assertFailure (show other)
+          listRefNames env >>= (@?= Right []),
+      testCase "a memory keeps its links, and amend keeps them too" $
+        withOpsEnv $ \_ env -> do
+          _ <- right =<< addUnderRef env topic (note "the topic" [])
+          i <- right =<< addUnderRef env notes (linked "about the topic" [topic])
+          m <- right =<< getMemory env i
+          memAboutRefs m @?= Set.singleton topic
+          j <- right =<< amendMemory env notes (Just i) Nothing [Append "more"]
+          m' <- right =<< getMemory env j
+          memAboutRefs m' @?= Set.singleton topic,
+      testCase "the links resolve in both directions, to the current value of the ref" $
+        withOpsEnv $ \_ env -> do
+          _ <- right =<< addUnderRef env topic (note "topic one" [])
+          i <- right =<< addMemory env (linked "about the topic" [topic])
+          t2 <- right =<< supersedeMemory env topic Nothing (note "topic two" [])
+          refLinksOf env i >>= (@?= Right [RefLink Out topic (Just t2)])
+          refLinksOf env t2 >>= (@?= Right [RefLink In topic (Just i)]),
+      testCase "search puts the current memory of a linked ref in the context" $
+        withOpsEnv $ \_ env -> do
+          _ <- right =<< addUnderRef env topic (note "first text" [])
+          t2 <- right =<< supersedeMemory env topic Nothing (note "second text" [])
+          i <- right =<< addMemory env (linked "a lighthouse keeper" [topic])
+          r <- right =<< searchMemories env defaultSearchOptions "lighthouse"
+          map matchId (matches r) @?= [i]
+          assertBool "the current memory of the ref is in the context" (t2 `Set.member` context r)
+    ]
+  where
+    topic = name "me/topic"
+    notes = name "me/notes"
+    name t = either (error . show) id (mkName t)
+    linked :: Text -> [Name] -> NewMemory
+    linked body ns = (note body []) {newAboutRefs = Set.fromList ns}
 
 -- Pure part ------------------------------------------------------------
 
@@ -111,7 +158,7 @@ properties =
   testGroup
     "properties"
     [ testProperty "a memory that buildMemory accepts reads back the same" $
-        \k a b -> case buildMemory (posixSecondsToUTCTime 1791201600) (NewMemory (T.pack k) (T.pack a) Set.empty (T.pack b)) of
+        \k a b -> case buildMemory (posixSecondsToUTCTime 1791201600) (NewMemory (T.pack k) (T.pack a) Set.empty (T.pack b) Set.empty) of
           Left _ -> property True
           Right m -> parseMemory (renderMemory m) === Right m
     ]

@@ -57,7 +57,7 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader)
 import Akyuu.Ops (VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
-import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), SearchResult (context, corrections, matches))
+import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), RefLink (linkDir, linkId, linkRef), SearchResult (context, corrections, matches))
 import Akyuu.Refs (Name, Ref (current, history), RefError, nameText)
 import Data.Aeson (KeyValue ((.=)), Value (String), object)
 import Data.Aeson qualified as A
@@ -358,8 +358,6 @@ statsJSON s =
 
 -- Other views ------------------------------------------------------------
 
--- | The JSON of one memory: its headers, its body, its edges in both
--- directions, the refs that hold it, and its status in the graph.
 -- | One page of the wiki view: a ref and its current memory.
 pageJSON :: Name -> Ref -> Memory -> Value
 pageJSON n r m =
@@ -373,8 +371,11 @@ pageJSON n r m =
       "body" .= memBody m
     ]
 
-memoryJSON :: Id -> Memory -> [Neighbour] -> [(Name, Int)] -> NodeStatus -> Maybe UTCTime -> Value
-memoryJSON i m ns holds st stored =
+-- | The JSON of one memory: its headers, its body, its edges and its
+-- about-ref links in both directions, the refs that hold it, and its status
+-- in the graph. The @id@ of an out link is null if its ref does not exist.
+memoryJSON :: Id -> Memory -> [Neighbour] -> [RefLink] -> [(Name, Int)] -> NodeStatus -> Maybe UTCTime -> Value
+memoryJSON i m ns ls holds st stored =
   object
     [ "id" .= idJSON i,
       "kind" .= memKind m,
@@ -390,6 +391,14 @@ memoryJSON i m ns holds st stored =
                  "id" .= idJSON (neighbourId n)
                ]
            | n <- ns
+           ],
+      "links"
+        .= [ object
+               [ "dir" .= (case linkDir l of Out -> "out" :: Text; In -> "in"),
+                 "ref" .= nameText (linkRef l),
+                 "id" .= fmap idJSON (linkId l)
+               ]
+           | l <- ls
            ],
       "refs" .= [object ["name" .= nameText n, "generation" .= gen] | (n, gen) <- holds]
     ]

@@ -38,15 +38,15 @@ import Akyuu.Check (defaultCheckOptions)
 import Akyuu.Error (AkyuuError (BadInput, CacheFailed, GCFailed, RefFailed, StoreFailed), describe)
 import Akyuu.GC (Observed (Observed), Policy (keepGenerations), defaultPolicy)
 import Akyuu.GC qualified as GC
-import Akyuu.Graph (EdgeType (Supersedes))
+import Akyuu.Graph (EdgeType (Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind))
+import Akyuu.Memory (Memory (memAboutRefs, memAgent, memBody, memCreated, memKind))
 import Akyuu.Ops (Env (envCache, envRefs, envStore), IdSpec, checkStore, getMemory, listRefValues, meaningFor, missing, readRef, resolveId, resolveTiersRef, searchTuning, verifyStore)
 import Akyuu.Query (SearchOptions)
 import Akyuu.Query qualified as Query
-import Akyuu.Refs (RefError, nameText)
+import Akyuu.Refs (Name, RefError, nameText)
 import Akyuu.Refs qualified as Refs
 import Akyuu.Render (findingJSON)
 import Akyuu.Store (StoreError (NotFound))
@@ -64,6 +64,7 @@ import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes)
+import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -221,8 +222,22 @@ readMemory env spec = runExceptT $ do
   es <- liftIO (readRefEntries env)
   holds <- either throwE (pure . (`refHolds` i)) es
   stored <- io (orMissing Nothing (Just <$> getModificationTime (Store.objectPath (envStore env) i)))
+  links <- liftIO (linksIn env g)
   let st = if Set.null (Graph.predecessors Supersedes i g) then HeadNode else SupersededNode
-  pure (memoryJSON i m (Query.neighbourList i g) holds st stored)
+      values = either (const Map.empty) refValues es
+  pure (memoryJSON i m (Query.neighbourList i g) (Query.refLinkList i links values) holds st stored)
+
+-- | The about-ref links of every memory of a graph, from the store. It writes
+-- nothing: the cache does not keep the links. A memory that cannot be read
+-- has no links here.
+linksIn :: Env -> Graph -> IO (Map Id (Set Name))
+linksIn env g = do
+  ms <- traverse (\i -> fmap ((,) i) <$> Store.get (envStore env) i) (Set.toAscList (Graph.nodes g))
+  pure (Map.fromList [(i, memAboutRefs m) | Right (i, m) <- ms, not (Set.null (memAboutRefs m))])
+
+-- | The current value of each ref that can be read.
+refValues :: [RefEntry] -> Map Name Id
+refValues es = Map.fromList [(reName e, Refs.current r) | e <- es, Right r <- [reValue e]]
 
 -- Refs ---------------------------------------------------------------------
 
@@ -396,14 +411,15 @@ readBundle env = do
       let g = gdGraph d
           o = Observed t ages
           whys = GC.explainAll webPolicy o r g
-      ms <- forM (Set.toAscList (gdStore d)) $ \i -> do
-        m <- liftIO (getMemory env i)
-        pure $ case m of
-          Left _ -> Nothing
-          Right x ->
-            let st = if Set.null (Graph.predecessors Supersedes i g) then HeadNode else SupersededNode
-             in Just (K.fromText (Id.render i) .= memoryJSON i x (Query.neighbourList i g) (refHolds es i) st (Map.lookup i ages))
+      read' <- forM (Set.toAscList (gdStore d)) $ \i -> (,) i <$> liftIO (getMemory env i)
+      let links = Map.fromList [(i, memAboutRefs x) | (i, Right x) <- read', not (Set.null (memAboutRefs x))]
+          values = refValues es
+          ms =
+            [ K.fromText (Id.render i) .= memoryJSON i x (Query.neighbourList i g) (Query.refLinkList i links values) (refHolds es i) st (Map.lookup i ages)
+            | (i, Right x) <- read',
+              let st = if Set.null (Graph.predecessors Supersedes i g) then HeadNode else SupersededNode
+            ]
       pure
-        ( object (catMaybes ms),
+        ( object ms,
           object [K.fromText (Id.render i) .= whyJSON webPolicy o i w (refHolds es i) | (i, w) <- Map.toAscList whys]
         )

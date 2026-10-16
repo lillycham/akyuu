@@ -48,10 +48,10 @@ import Akyuu.Fuzzy qualified as Fuzzy
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLog, readLogSince, readRef, resolveId, reviewPair, searchMemoriesMode, setRefTo, supersedeMemory)
+import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLog, readLogSince, readRef, refLinksOf, resolveId, reviewPair, searchMemoriesMode, setRefTo, supersedeMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, idLine, logLines, memoryText, neighbourLines, refLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage)
+import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, idLine, logLines, memoryText, neighbourLines, refLines, refLinkLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage)
 import Akyuu.Tier (Place (Place), defaultPolicyRef, defaultTiersRef)
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (forM_, unless)
@@ -165,6 +165,7 @@ memoryProps =
     ("agent", stringSchema "The name of the agent that writes the memory. One line, no space at either end."),
     ("body", stringSchema "The text of the memory. It can have many lines."),
     ("about", idsSchema "Memories that this memory is about."),
+    ("about_refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("Refs that this memory is about. The link follows the ref: it names whatever memory the ref names now, so it does not go stale. Use it for a topic with a ref, and about for one exact memory. Each ref must exist." :: Text)]),
     ("derived_from", idsSchema "Memories that this memory comes from."),
     ("refines", idsSchema "Memories that this memory adds detail to.")
   ]
@@ -178,7 +179,7 @@ toolList =
       (objectSchema (memoryProps <> [("supersedes", idsSchema "Memories that this memory replaces. This adds edges only. It moves no ref."), ("ref", stringSchema "A new ref to make for the memory, in the same call (it must not exist). Without it, no ref moves.")]) ["kind", "agent", "body"]),
     tool
       "get"
-      "Read one memory, by id or by the current value of a ref. Give exactly one of id and ref. The result starts with the line 'id: <id>': the id of the memory read, which is the value for expected in supersede and amend. Then comes the stored file: the headers (kind, created, agent, edges), a blank line, and the body."
+      "Read one memory, by id or by the current value of a ref. Give exactly one of id and ref. The result starts with the line 'id: <id>': the id of the memory read, which is the value for expected in supersede and amend. Then comes the stored file: the headers (kind, created, agent, edges, about-ref links), a blank line, and the body."
       (objectSchema [("id", idSchema "The id of the memory."), ("ref", refSchema)] []),
     tool
       "supersede"
@@ -201,7 +202,7 @@ toolList =
       ),
     tool
       "search"
-      "Search the bodies of the memories for words. Each hit is a line with its id and a snippet, best first. Square brackets mark the matching words. A square bracket with a backslash before it is part of the text. 'held by NAME' under a hit means that a ref names it, so it is a current memory. 'superseded by ID' under a hit means that a newer memory replaces it: read the newer one. After 'context:' come the memories near the hits in the graph."
+      "Search the bodies of the memories for words. Each hit is a line with its id and a snippet, best first. Square brackets mark the matching words. A square bracket with a backslash before it is part of the text. 'held by NAME' under a hit means that a ref names it, so it is a current memory. 'superseded by ID' under a hit means that a newer memory replaces it: read the newer one. After 'context:' come the memories near the hits in the graph, and the current memories of the refs that the hits have about-ref links to."
       ( objectSchema
           [ ("query", stringSchema "The words to find. A memory matches if it has all of them."),
             ("limit", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "default" .= searchLimit defaultSearchOptions, "description" .= ("The most hits to return." :: Text)]),
@@ -241,6 +242,7 @@ toolList =
             ("agent", stringSchema "The name of the agent that writes the episode. One line, no space at either end."),
             ("body", stringSchema "The text of the episode."),
             ("about", idsSchema "Memories that this episode is about."),
+            ("about_refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("Refs that this episode is about. The link follows the ref: it names whatever memory the ref names now, so it does not go stale. Use it for a topic with a ref, and about for one exact memory. Each ref must exist." :: Text)]),
             ("refines", idsSchema "Memories that this episode adds detail to.")
           ]
           ["ref", "kind", "agent", "body"]
@@ -277,13 +279,14 @@ toolList =
             ("agent", stringSchema "The name of the agent that writes the note. The default is the name that the server was given."),
             ("cwd", stringSchema "The directory that you work in. The default is the directory of the server."),
             ("about", idsSchema "Memories that this note is about."),
+            ("about_refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("Refs that this note is about. The link follows the ref: it names whatever memory the ref names now, so it does not go stale. Use it for a topic with a ref, and about for one exact memory. Each ref must exist." :: Text)]),
             ("refines", idsSchema "Memories that this note adds detail to.")
           ]
           ["body"]
       ),
     tool
       "neighbours"
-      "List the edges of a memory, in both directions. 'out KIND ID' means that this memory points at ID. 'in KIND ID' means that ID points at this memory."
+      "List the edges and the about-ref links of a memory, in both directions. 'out KIND ID' means that this memory points at ID. 'in KIND ID' means that ID points at this memory. 'out about-ref NAME ID' means that this memory is about the ref NAME, which names ID now. 'in about-ref NAME ID' means that ID is about the ref NAME, which names this memory now."
       (objectSchema [("id", idSchema "The id of the memory.")] ["id"]),
     tool
       "ref_get"
@@ -393,13 +396,20 @@ edgesArg args kinds = Set.fromList . concat <$> traverse one kinds
       ts <- maybe [] id <$> optional' args k (asList asText) "a list of id strings"
       map (Edge kind) <$> traverse parseId ts
 
+-- | The refs of the about-ref links of a new memory.
+aboutRefsArg :: Args -> Either CallError (Set.Set Name)
+aboutRefsArg args = do
+  ts <- maybe [] id <$> optional' args "about_refs" (asList asText) "a list of ref names"
+  Set.fromList <$> traverse parseName ts
+
 memoryArg :: Args -> [(Text, EdgeType)] -> Either CallError NewMemory
 memoryArg args kinds = do
   k <- required args "kind" asText "a string" >>= check . checkField "kind"
   a <- required args "agent" asText "a string" >>= check . checkField "agent"
   b <- required args "body" asText "a string"
   es <- edgesArg args kinds
-  pure NewMemory {newKind = k, newAgent = a, newEdges = es, newBody = b}
+  rs <- aboutRefsArg args
+  pure NewMemory {newKind = k, newAgent = a, newEdges = es, newBody = b, newAboutRefs = rs}
 
 plainEdges :: [(Text, EdgeType)]
 plainEdges = [("about", About), ("derived_from", DerivedFrom), ("refines", Refines)]
@@ -530,7 +540,8 @@ parseArgs n args = case n of
     ag <- optional' args "agent" asText "a string" >>= traverse (check . checkField "agent")
     b <- required args "body" asText "a string"
     es <- edgesArg args [("about", About), ("refines", Refines)]
-    pure (CallNote c ag NewMemory {newKind = k, newAgent = "", newEdges = es, newBody = b})
+    rs <- aboutRefsArg args
+    pure (CallNote c ag NewMemory {newKind = k, newAgent = "", newEdges = es, newBody = b, newAboutRefs = rs})
   "check" -> do
     ks <- maybe [] id <$> optional' args "kinds" (asList asText) "a list of strings"
     s <- optional' args "severity" asText "a string"
@@ -647,7 +658,10 @@ runTool cfg env c = either failed id <$> go
       CallSupersede n old m -> fmap (\i -> okText (Id.render i) False) <$> supersedeMemory env n old m
       CallSearchMode md o q -> searchWithMode md o q
       CallSearch o q -> searchWithMode Fused o q
-      CallNeighbours i -> fmap (shorten . lines' "This memory has no edges." . neighbourLines) <$> neighboursOf env i
+      CallNeighbours i -> runExceptT $ do
+        ns <- ExceptT (neighboursOf env i)
+        ls <- ExceptT (refLinksOf env i)
+        pure (shorten (lines' "This memory has no edges or links." (neighbourLines ns <> refLinkLines ls)))
       CallCompare a b -> fmap (\r -> okText (T.intercalate "\n" (compareLines r)) False) <$> compareMemories env a b
       CallReview a b ag n -> fmap (const (okText ("reviewed " <> Id.render a <> " " <> Id.render b) False)) <$> reviewPair env a b ag n
       CallAmend n e a es -> fmap (\i -> okText (Id.render i) False) <$> amendMemory env n e a es

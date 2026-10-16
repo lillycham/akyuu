@@ -6,9 +6,11 @@ import Akyuu.Cache (Hit (Hit, hitId), closeCache, index, openCache)
 import Akyuu.Graph (Dir (In, Out), Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, predecessors, singleton, successors, withinHops)
 import Akyuu.Id (Id)
 import Akyuu.Memory (Memory)
-import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (Neighbour, neighbourDir, neighbourId, neighbourKind), SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), SearchResult (SearchResult, context, matches), defaultSearchOptions, headsFirst, neighbourList, neighbours, resolve, search, searchResult)
+import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (Neighbour, neighbourDir, neighbourId, neighbourKind), RefLink (RefLink), SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), SearchResult (SearchResult, context, matches), defaultSearchOptions, headsFirst, neighbourList, neighbours, refLinkList, resolve, search, searchResult)
+import Akyuu.Refs (mkName)
 import Akyuu.Store (add, openStore)
 import Control.Exception (bracket)
+import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -25,6 +27,7 @@ queryTests =
     [ searchResultCases,
       headsFirstCases,
       neighbourCases,
+      refLinkCases,
       resolveCases,
       properties,
       ioCases
@@ -123,6 +126,29 @@ neighbourCases =
       testCase "a dangling target shows the edges that point at it" $
         neighbourList x (build [(a, [(Refines, x)])]) @?= [Neighbour In Refines a]
     ]
+
+-- refLinkList ---------------------------------------------------------
+
+refLinkCases :: TestTree
+refLinkCases =
+  testGroup
+    "refLinkList"
+    [ testCase "an out link reaches the current value of its ref" $
+        refLinkList a links values @?= [RefLink Out gone Nothing, RefLink Out topic (Just b)],
+      testCase "an in link comes from each memory with a link to a ref that names this one" $
+        refLinkList b links values @?= [RefLink In topic (Just a), RefLink In topic (Just c)],
+      testCase "an older value of the ref gets no in link" $
+        refLinkList d links values @?= [],
+      testCase "a memory with no links and no ref has none" $
+        refLinkList x links values @?= []
+    ]
+  where
+    topic = name "me/topic"
+    gone = name "me/gone"
+    name t = either (error . show) id (mkName t)
+    -- a and c are about me/topic, which names b now (and named d before).
+    links = Map.fromList [(a, Set.fromList [topic, gone]), (c, Set.singleton topic)]
+    values = Map.fromList [(topic, b)]
 
 -- Properties -----------------------------------------------------------
 

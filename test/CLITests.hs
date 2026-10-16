@@ -2,7 +2,7 @@
 
 module CLITests (cliTests) where
 
-import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand, cliProfile), Command (Add, AddRef, Append, CheckStore, Compare, Context, GC, Get, Log, Mcp, Neighbours, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand, cliProfile), Command (Add, AddRef, Append, CheckStore, Compare, Context, GC, Get, Log, Mcp, Neighbours, Note, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
 import Akyuu.Check (FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Check qualified as Check
 import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
@@ -63,13 +63,22 @@ parseCases :: TestTree
 parseCases =
   testGroup
     "parseCli"
-    [ testCase "add with edges and a body" $ do
+    [ testCase "add with about-ref links" $ do
+        c <- parses ["add", "--kind", "fact", "--agent", "claude", "--about-ref", "me/topic", "--about-ref", "me/notes", "--body", "hi"]
+        t <- name "me/topic"
+        n <- name "me/notes"
+        cliCommand c @?= Add (MemoryArgs "fact" "claude" [] [t, n] (BodyText "hi")),
+      testCase "note with an about-ref link" $ do
+        c <- parses ["note", "--about-ref", "me/topic", "hello", "there"]
+        t <- name "me/topic"
+        cliCommand c @?= Note Nothing "note" Nothing Nothing [t] "hello there",
+      testCase "add with edges and a body" $ do
         c <- parses ["--root", "/s", "add", "--kind", "fact", "--agent", "claude", "--about", i1, "--refines", i2, "--body", "hi"]
         c
           @?= Cli
             (Just "/s")
             Nothing
-            (Add (MemoryArgs "fact" "claude" [(About, Full (nid 1)), (Refines, Full (nid 2))] (BodyText "hi"))),
+            (Add (MemoryArgs "fact" "claude" [(About, Full (nid 1)), (Refines, Full (nid 2))] [] (BodyText "hi"))),
       testCase "--embed-profile is a global option" $ do
         c <- parses ["--embed-profile", "gemma", "search-eval"]
         cliProfile c @?= Just "gemma",
@@ -86,10 +95,10 @@ parseCases =
         cliCommand c @?= Viz,
       testCase "add reads stdin by default" $ do
         c <- parses ["add", "--kind", "fact", "--agent", "claude"]
-        c @?= Cli Nothing Nothing (Add (MemoryArgs "fact" "claude" [] BodyStdin)),
+        c @?= Cli Nothing Nothing (Add (MemoryArgs "fact" "claude" [] [] BodyStdin)),
       testCase "add takes --file" $ do
         c <- parses ["add", "--kind", "fact", "--agent", "claude", "-f", "body.txt"]
-        cliCommand c @?= Add (MemoryArgs "fact" "claude" [] (BodyFile "body.txt")),
+        cliCommand c @?= Add (MemoryArgs "fact" "claude" [] [] (BodyFile "body.txt")),
       testCase "get by id and by ref" $ do
         n <- name "claude/notes"
         a <- parses ["get", i1]
@@ -98,7 +107,7 @@ parseCases =
       testCase "supersede with --expect" $ do
         n <- name "claude/notes"
         c <- parses ["supersede", "claude/notes", "--expect", i1, "--kind", "fact", "--agent", "claude", "--body", "v2"]
-        cliCommand c @?= Supersede n (Just (Full (nid 1))) (MemoryArgs "fact" "claude" [] (BodyText "v2")),
+        cliCommand c @?= Supersede n (Just (Full (nid 1))) (MemoryArgs "fact" "claude" [] [] (BodyText "v2")),
       testCase "ref set: unchecked, --new and --expect" $ do
         n <- name "a"
         cs <- traverse parses [["ref", "set", "a", i1], ["ref", "set", "a", i1, "--new"], ["ref", "set", "a", i1, "--expect", i2]]
@@ -127,7 +136,7 @@ parseCases =
         cliCommand c @?= Neighbours (Full (nid 1)),
       testCase "an edge option takes a prefix too" $ do
         c <- parses ["add", "--kind", "fact", "--agent", "claude", "--about", take 11 i1, "--body", "x"]
-        cliCommand c @?= Add (MemoryArgs "fact" "claude" [(About, Prefix (T.pack (take 11 i1)))] (BodyText "x")),
+        cliCommand c @?= Add (MemoryArgs "fact" "claude" [(About, Prefix (T.pack (take 11 i1)))] [] (BodyText "x")),
       testCase "mcp takes a policy ref, and the default is none" $ do
         n <- name "team/how-we-remember"
         a <- parses ["mcp", "--policy-ref", "team/how-we-remember"]
@@ -162,7 +171,7 @@ parseCases =
       testCase "append takes a ref and the fields of add, and log a ref, a limit and --full" $ do
         n <- name "agent/episodes"
         a <- parses ["append", "agent/episodes", "--kind", "episode", "--agent", "claude", "--body", "x"]
-        cliCommand a @?= Append n (MemoryArgs "episode" "claude" [] (BodyText "x"))
+        cliCommand a @?= Append n (MemoryArgs "episode" "claude" [] [] (BodyText "x"))
         l <- parses ["log", "agent/episodes", "-n", "5", "--full"]
         cliCommand l @?= Log n (Just 5) True Nothing
         d <- parses ["log", "agent/episodes"]
@@ -255,14 +264,14 @@ runCases =
     "runCommand"
     [ testCase "add prints the id and nothing else" $
         withOpsEnv $ \_ env -> do
-          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "hi")))
+          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] [] (BodyText "hi")))
           let out = decodeUtf8 (outBytes o)
           T.isPrefixOf "sha256-" out @?= True
           T.lines out @?= [T.strip out]
           outOk o @?= True,
       testCase "get gives the stored file exactly, to a pipe" $
         withOpsEnv $ \_ env -> do
-          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "body with no line feed")))
+          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] [] (BodyText "body with no line feed")))
           let i = T.strip (decodeUtf8 (outBytes o))
           g <- run env ["get", T.unpack i]
           T.isSuffixOf "\n\nbody with no line feed" (decodeUtf8 (terminalBytes False g)) @?= True
@@ -270,31 +279,31 @@ runCases =
           assertBool "no id line without --with-id" (not ("id: " `T.isPrefixOf` decodeUtf8 (outBytes g))),
       testCase "get --with-id puts the id of the memory read first, also by ref" $
         withOpsEnv $ \_ env -> do
-          o <- right =<< runCommand env (AddRef (either (error . show) id (mkName "me/notes")) (MemoryArgs "fact" "claude" [] (BodyText "a note")))
+          o <- right =<< runCommand env (AddRef (either (error . show) id (mkName "me/notes")) (MemoryArgs "fact" "claude" [] [] (BodyText "a note")))
           let i = T.strip (decodeUtf8 (outBytes o))
           g <- run env ["get", "--with-id", "--ref", "me/notes"]
           plain <- run env ["get", "--ref", "me/notes"]
           T.lines (decodeUtf8 (outBytes g)) @?= ("id: " <> i) : T.lines (decodeUtf8 (outBytes plain)),
       testCase "get ends the output with a line feed on a terminal" $
         withOpsEnv $ \_ env -> do
-          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "body with no line feed")))
+          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] [] (BodyText "body with no line feed")))
           let i = T.strip (decodeUtf8 (outBytes o))
           g <- run env ["get", T.unpack i]
           T.isSuffixOf "\n\nbody with no line feed\n" (decodeUtf8 (terminalBytes True g)) @?= True,
       testCase "get does not add a second line feed on a terminal" $
         withOpsEnv $ \_ env -> do
-          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "ends with one\n")))
+          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] [] (BodyText "ends with one\n")))
           let i = T.strip (decodeUtf8 (outBytes o))
           g <- run env ["get", T.unpack i]
           T.isSuffixOf "\n\nends with one\n" (decodeUtf8 (terminalBytes True g)) @?= True,
       testCase "only get asks for the line feed" $
         withOpsEnv $ \_ env -> do
-          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "v")))
+          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] [] (BodyText "v")))
           l <- run env ["ref", "list"]
           (outEndLine o, outEndLine l) @?= (False, False),
       testCase "get finds a memory by a prefix of its id" $
         withOpsEnv $ \_ env -> do
-          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "find me")))
+          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] [] (BodyText "find me")))
           let i = T.strip (decodeUtf8 (outBytes o))
           g <- run env ["get", T.unpack (T.take 12 i)]
           T.isInfixOf "find me" (decodeUtf8 (outBytes g)) @?= True,
@@ -312,7 +321,7 @@ runCases =
           assertBool "note works with the default manifest" ("noted in me/log" `T.isPrefixOf` decodeUtf8 (outBytes n)),
       testCase "status counts the memories and says what is missing" $
         withOpsEnv $ \_ env -> do
-          _ <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "x")))
+          _ <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] [] (BodyText "x")))
           o <- run env ["status"]
           let ls = T.lines (decodeUtf8 (outBytes o))
           assertBool "count" ("memories: 1, refs: 0, pins: 0" `elem` ls)
@@ -321,13 +330,13 @@ runCases =
           assertBool "no config file" ("config: no file (see akyuu config)" `elem` ls),
       testCase "a prefix that no memory has is an error" $
         withOpsEnv $ \_ env -> do
-          _ <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "x")))
+          _ <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] [] (BodyText "x")))
           c <- parses ["get", "ffffffff"]
           r <- resolveCommand env (cliCommand c)
           r @?= Left (NoSuchPrefix "sha256-ffffffff"),
       testCase "ref list shows the name and the id of each ref" $
         withOpsEnv $ \_ env -> do
-          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "v")))
+          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] [] (BodyText "v")))
           let i = T.strip (decodeUtf8 (outBytes o))
           _ <- run env ["ref", "set", "b/x", T.unpack i, "--new"]
           _ <- run env ["ref", "set", "a", T.unpack i, "--new"]
@@ -426,7 +435,7 @@ runCases =
           assertBool "says where the log goes on" (any (T.isPrefixOf "more: ") fs),
       testCase "pin, pins and unpin" $
         withOpsEnv $ \_ env -> do
-          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "keep me")))
+          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] [] (BodyText "keep me")))
           let i = T.strip (decodeUtf8 (outBytes o))
           none <- run env ["pins"]
           outBytes none @?= ""
@@ -446,7 +455,7 @@ runCases =
           r @?= Left (StoreFailed (NotFound (nid 1))),
       testCase "search marks a match with brackets, and a bracket of the body has a backslash" $
         withOpsEnv $ \_ env -> do
-          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] (BodyText "see [x] and Haskell [y]")))
+          o <- right =<< runCommand env (Add (MemoryArgs "fact" "claude" [] [] (BodyText "see [x] and Haskell [y]")))
           let i = T.strip (decodeUtf8 (outBytes o))
           s <- run env ["search", "haskell"]
           T.lines (decodeUtf8 (outBytes s)) @?= [i <> "  see \\[x\\] and [Haskell] \\[y\\]"],

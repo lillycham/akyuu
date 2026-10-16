@@ -7,9 +7,9 @@ import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
 import Akyuu.Id (IdParseError (BadHex), parse, render)
 import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (mcpAgent, mcpPlace, mcpPolicyRef), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallNote, CallRefList, CallRefSet, CallReview, CallSearch, CallSearchMode), ToolResult (ToolResult), clientAgent, defaultMcpConfig, expandCall, handleLine, handleMessage, parseToolCall, resolvePrefix, runTool, supportedVersions)
-import Akyuu.Ops (NewMemory (NewMemory), SearchMode (TextOnly))
+import Akyuu.Ops (NewMemory (newAboutRefs), SearchMode (TextOnly))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
-import Akyuu.Refs (Expected (MustBe, MustBeAbsent), mkName)
+import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, mkName)
 import Akyuu.Render (shortIds)
 import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Tier (Place (Place))
@@ -24,7 +24,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import OpsTests (withOpsEnv)
-import Support (nid, right)
+import Support (newMem, nid, right)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?), (@?=))
 
@@ -190,13 +190,25 @@ protocolCases =
 args :: [(Text, Value)] -> KM.KeyMap Value
 args kvs = KM.fromList [(K.fromText k, v) | (k, v) <- kvs]
 
+ref :: Text -> Name
+ref t = either (error . show) id (mkName t)
+
 toolCallCases :: TestTree
 toolCallCases =
   testGroup
     "parseToolCall"
     [ testCase "add with edges" $
         parseToolCall "add" (args [("kind", "fact"), ("agent", "claude"), ("body", "hi"), ("about", A.toJSON [render (nid 1)]), ("supersedes", A.toJSON [render (nid 2)])])
-          @?= Right (CallAdd (NewMemory "fact" "claude" (Set.fromList [Edge About (nid 1), Edge Supersedes (nid 2)]) "hi")),
+          @?= Right (CallAdd (newMem "fact" "claude" (Set.fromList [Edge About (nid 1), Edge Supersedes (nid 2)]) "hi")),
+      testCase "add with about_refs" $
+        parseToolCall "add" (args [("kind", "fact"), ("agent", "claude"), ("body", "hi"), ("about_refs", A.toJSON ["me/topic" :: Text, "me/notes"])])
+          @?= Right (CallAdd ((newMem "fact" "claude" Set.empty "hi") {newAboutRefs = Set.fromList [ref "me/topic", ref "me/notes"]})),
+      testCase "note with about_refs" $
+        fmap (\c -> case c of CallNote _ _ m -> newAboutRefs m; _ -> Set.empty) (parseToolCall "note" (args [("body", "hi"), ("about_refs", A.toJSON ["me/topic" :: Text])]))
+          @?= Right (Set.singleton (ref "me/topic")),
+      testCase "about_refs refuses a bad ref name" $
+        either (const True) (const False) (parseToolCall "add" (args [("kind", "fact"), ("agent", "claude"), ("body", "hi"), ("about_refs", A.toJSON ["Bad Name" :: Text])]))
+          @?= True,
       testCase "add checks the kind" $
         parseToolCall "add" (args [("kind", "a\nb"), ("agent", "claude"), ("body", "hi")])
           @?= Left (BadArguments (describe (BadField "kind" "a\nb"))),
@@ -243,7 +255,7 @@ toolCallCases =
       testCase "append and log read their arguments" $ do
         n <- right (mkName "agent/episodes")
         parseToolCall "append" (args [("ref", "agent/episodes"), ("kind", "episode"), ("agent", "claude"), ("body", "x")])
-          @?= Right (CallAppend n (NewMemory "episode" "claude" Set.empty "x"))
+          @?= Right (CallAppend n (newMem "episode" "claude" Set.empty "x"))
         parseToolCall "log" (args [("ref", "agent/episodes"), ("limit", Number 3), ("full", Bool True)])
           @?= Right (CallLog n (Just 3) True Nothing),
       testCase "context reads the tier and the refs" $ do
@@ -263,7 +275,7 @@ runToolCases =
     "runTool"
     [ testCase "add, ref_set, get by ref and search" $
         withOpsEnv $ \_ env -> do
-          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "Lilly prefers Haskell"))
+          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" Set.empty "Lilly prefers Haskell"))
           n <- right (mkName "claude/notes")
           ToolResult _ False <- runTool defaultMcpConfig env =<< either (assertFailure . show) pure (parseToolCall "ref_set" (args [("ref", "claude/notes"), ("id", String i), ("create", Bool True)]))
           ToolResult g False <- runTool defaultMcpConfig env (CallGet (Left n))
@@ -276,7 +288,7 @@ runToolCases =
           T.isPrefixOf (shortIds i) s @?= True,
       testCase "search text has the same brackets as the CLI" $
         withOpsEnv $ \_ env -> do
-          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "see [x] and Haskell"))
+          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" Set.empty "see [x] and Haskell"))
           ToolResult s False <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "haskell")
           s @?= shortIds i <> "  see \\[x\\] and [Haskell]",
       testCase "a failed operation is a tool error with the CLI text" $
@@ -287,17 +299,17 @@ runToolCases =
         withOpsEnv $ \_ env -> do
           ToolResult none False <- runTool defaultMcpConfig env (CallCheck defaultCheckOptions [] Nothing)
           none @?= "No findings."
-          ToolResult old False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "the old text"))
+          ToolResult old False <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" Set.empty "the old text"))
           let oldId = either (error . show) id (parse old)
               sup = Set.singleton (Edge Supersedes oldId)
-          _ <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" sup "new one"))
-          _ <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" sup "new two"))
+          _ <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" sup "new one"))
+          _ <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" sup "new two"))
           ToolResult r False <- runTool defaultMcpConfig env (CallCheck defaultCheckOptions [Fork] (Just Problem))
           T.isPrefixOf "[problem] fork:" r @?= True,
       testCase "compare says what each memory has alone" $
         withOpsEnv $ \_ env -> do
-          ToolResult a False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "Shared one. Mine."))
-          ToolResult b False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "Shared one. Yours."))
+          ToolResult a False <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" Set.empty "Shared one. Mine."))
+          ToolResult b False <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" Set.empty "Shared one. Yours."))
           let ida = either (error . show) id (parse a)
               idb = either (error . show) id (parse b)
           ToolResult r False <- runTool defaultMcpConfig env (CallCompare ida idb)
@@ -306,7 +318,7 @@ runToolCases =
           assertBool "B alone" ("  - Yours." `elem` ls),
       testCase "search names the refs that hold a hit, and ref_list shows the first line" $
         withOpsEnv $ \_ env -> do
-          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "Lilly likes tea\nand more"))
+          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" Set.empty "Lilly likes tea\nand more"))
           n <- right (mkName "claude/tea")
           _ <- runTool defaultMcpConfig env (CallRefSet n MustBeAbsent (either (error . show) id (parse i)))
           ToolResult s False <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "tea")
@@ -315,7 +327,7 @@ runToolCases =
           l @?= "claude/tea  " <> shortIds i <> "  Lilly likes tea",
       testCase "a prefix of 8 digits names the memory, and a shared prefix is an error" $
         withOpsEnv $ \_ env -> do
-          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "one"))
+          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" Set.empty "one"))
           let short = T.take (7 + 8) i
               call = BL.toStrict (A.encode (callReq "get" (object ["id" .= short])))
           Right out <- expandCall (resolvePrefix env) call
@@ -343,9 +355,9 @@ runToolCases =
         shortIds ("x " <> full <> " y sha256-abc") @?= "x sha256-" <> T.replicate 12 "a" <> " y sha256-abc",
       testCase "amend changes one passage, keeps the edges and moves the ref" $
         withOpsEnv $ \_ env -> do
-          ToolResult t False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" Set.empty "target"))
+          ToolResult t False <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" Set.empty "target"))
           let tid = either (error . show) id (parse t)
-          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (NewMemory "fact" "claude" (Set.singleton (Edge About tid)) "Lilly likes tea."))
+          ToolResult i False <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" (Set.singleton (Edge About tid)) "Lilly likes tea."))
           n <- right (mkName "claude/tea")
           _ <- runTool defaultMcpConfig env (CallRefSet n MustBeAbsent (either (error . show) id (parse i)))
           call <- either (assertFailure . show) pure (parseToolCall "amend" (args [("ref", "claude/tea"), ("replace", Array (pure (object ["from" .= ("tea" :: Text), "to" .= ("coffee" :: Text)])))]))
@@ -364,7 +376,7 @@ runToolCases =
         withOpsEnv $ \_ env -> do
           let cfg = defaultMcpConfig {mcpPlace = Just (Place "/h" "/h/devel/p/src"), mcpAgent = "me"}
               addRef r t = do
-                ToolResult i False <- runTool cfg env (CallAdd (NewMemory "fact" "claude" Set.empty t))
+                ToolResult i False <- runTool cfg env (CallAdd (newMem "fact" "claude" Set.empty t))
                 n <- right (mkName r)
                 _ <- runTool cfg env (CallRefSet n MustBeAbsent (either (error . show) id (parse i)))
                 pure ()
@@ -387,11 +399,11 @@ runToolCases =
           c5 @?= ""
           assertBool "short memory still in full" ("profile text" `T.isInfixOf` c3)
           assertBool "no project elsewhere" (not ("project text" `T.isInfixOf` c2))
-          ToolResult r False <- runTool cfg env (CallNote Nothing Nothing (NewMemory "note" "" Set.empty "a small thing"))
+          ToolResult r False <- runTool cfg env (CallNote Nothing Nothing (newMem "note" "" Set.empty "a small thing"))
           assertBool "named log" ("noted in claude/log/p " `T.isPrefixOf` r)
           ToolResult l False <- runTool cfg env =<< either (assertFailure . show) pure (parseToolCall "log" (args [("ref", "claude/log/p")]))
           assertBool "agent and text" ("me  note  a small thing" `T.isInfixOf` l)
-          ToolResult r2 False <- runTool cfg env (CallNote (Just "/tmp") (Just "x") (NewMemory "note" "" Set.empty "other"))
+          ToolResult r2 False <- runTool cfg env (CallNote (Just "/tmp") (Just "x") (newMem "note" "" Set.empty "other"))
           assertBool "default log" ("noted in claude/log/general " `T.isPrefixOf` r2),
       testCase "add with a ref makes the ref, and refuses a ref that exists" $
         withOpsEnv $ \_ env -> do
