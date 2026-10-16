@@ -42,6 +42,8 @@ commands below.
 	each with an _id_, each repeatable: the new memory is about the target,
 	comes from it, adds detail to it, or replaces it. With *--ref*, also make the
 	new ref _name_ for it; the ref must not exist.
+	*--about-ref* _name_, repeatable, says that the memory is about the ref
+	_name_: whatever memory the ref names when it is read. The ref must exist.
 
 *supersede* _name_ [*--expect* _id_] *--kind* _text_ *--agent* _text_ [_edges_] [_body_]
 	Write a memory that replaces the current memory of the ref _name_, and move
@@ -52,7 +54,8 @@ commands below.
 *amend* _name_ [*--expect* _id_] [*--agent* _text_] (*--from* _text_ *--to* _text_ | *--append* _text_)
 	Supersede the memory of _name_ with a copy that has one passage replaced
 	(*--from* must occur once) or text added at the end. The copy keeps the
-	kind, the agent (unless *--agent* is given) and the edges.
+	kind, the agent (unless *--agent* is given), the edges and the about-ref
+	links.
 
 *get* [*--with-id*] _id_ | *get* [*--with-id*] *--ref* _name_
 	Print a memory: its headers, a blank line, and its body, exactly as the
@@ -61,7 +64,10 @@ commands below.
 	that line.
 
 *neighbours* _id_
-	Print the edges of a memory, in both directions.
+	Print the edges of a memory, in both directions, then its about-ref links:
+	*out about-ref* _name_ _id_ for a link of this memory and the memory that
+	the ref names now, and *in about-ref* _name_ _id_ for a memory with a link
+	to a ref that names this one.
 
 *compare* [*--json*] _id_ _id_
 	Print what each of two memories says that the other lacks.
@@ -90,10 +96,11 @@ before it, so the log keeps its whole history.
 *append* _ref_ *--kind* _text_ *--agent* _text_ [_edges_] [_body_]
 	Add an episode to the log _ref_, and move the ref to it.
 
-*note* [*--cwd* _dir_] [*--kind* _text_] [*--agent* _text_] [*--manifest* _name_] _text_ ...
+*note* [*--cwd* _dir_] [*--kind* _text_] [*--agent* _text_] [*--manifest* _name_] [*--about-ref* _name_] _text_ ...
 	Append a note (kind *note*) to the log that the manifest names for the
 	current directory, or _dir_. The agent is *--agent*, then *$AKYUU_AGENT*,
 	then *agent* in the config file, then *agent*.
+	*--about-ref* links the note to a ref, as for *add*.
 
 *log* _ref_ [*-n* _n_ | *--limit* _n_] [*--full*] [*--since* _duration_]
 	Print the episodes of a log, newest first: 20 of them, or _n_, or those of
@@ -164,8 +171,9 @@ be *\**, and *~* is the home directory).
 	Pin a memory so that *gc* keeps it, remove a pin, list the pins.
 
 *check* [*--kind* _kind_] [*--severity* _level_] [*--strict*] [*--json*] [*--near-threshold* _x_] [*--hub-degree* _n_] [*--min-words* _n_] [*--long-log* _n_]
-	Print the memories that need attention: stale links (to a memory that is
-	superseded), forks (two memories that supersede the same one), duplicates
+	Print the memories that need attention: stale links (an *about* or
+	*refines* edge to a memory that is superseded), about-ref links to a ref
+	that does not exist, forks (two memories that supersede the same one), duplicates
 	and near duplicates (sharing more than _x_ of their text, 0.8, if they have
 	_n_ words or more, 5), two memories under different refs whose first
 	lines name the same path, hubs (more than _n_ links, 5), long logs (more than

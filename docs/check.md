@@ -66,7 +66,7 @@ sorted by severity, then kind, then ids.
 
 | # | Kind | Severity | What it flags |
 |---|------|----------|---------------|
-| 1 | `StaleLink` | Problem | A live memory has an `about`, `derived_from` or `refines` edge to a memory that is superseded (a node with a `Supersedes` predecessor), or to a dangling target that has a successor (`Query.resolve` is not empty). The finding names the current head. |
+| 1 | `StaleLink` | Problem | A live memory has an `about` or `refines` edge to a memory that is superseded (a node with a `Supersedes` predecessor), or to a dangling target that has a successor (`Query.resolve` is not empty). The finding names the current head, and the ref that holds it: an `about-ref` link to that ref does not go stale. A `derived_from` edge is evidence of one exact text, so it is not reported (changed with `about-ref`). |
 | 2 | `Fork` | Problem | Two or more live heads that supersede the same memory. Today the UI shows both and chooses neither. |
 | 3 | `DuplicateBody` | Suggestion | Two or more memories whose normalised bodies are equal, and that are not in one `supersedes` chain. |
 | 4 | `NearDuplicate` | Suggestion | Two heads whose bodies share most of their word shingles (see below), and that are not in one `supersedes` chain. |
@@ -74,6 +74,7 @@ sorted by severity, then kind, then ids.
 | 6 | `SameProject` | Suggestion | Two heads under different refs whose first line names the same path (`~/devel/akyuu`). Weak: a heuristic on the text. |
 | 7 | `Hub` | Info | A memory with more than N (default 5) incoming retaining edges. It is a sign that links should be a tier (see "Weighted connections" in the TODO). |
 | 8 | `LongLog` | Info | A log (the value of a ref that no episode follows) with more than N (default 30) episodes in its `derived_from` chain. Replace it with a summary. |
+| 9 | `MissingRef` | Problem | A live memory has an `about-ref` link to a ref that does not exist. The link resolves to nothing. |
 
 Notes on each:
 

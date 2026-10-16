@@ -38,6 +38,7 @@ supersedes: sha256-<64 hex digits>
 about: sha256-<64 hex digits>
 derived-from: sha256-<64 hex digits>
 refines: sha256-<64 hex digits>
+about-ref: me/notes
 
 The body is free text. It may have many lines.
 ```
@@ -50,6 +51,9 @@ Rules:
 - The edge headers are optional and may repeat, one id on each line. Their
   order is `supersedes`, `about`, `derived-from`, `refines`, and inside one
   name the ids are in ascending order. A repeated edge is not allowed.
+- The `about-ref` header is optional and may repeat, one ref name on each
+  line. It comes after all the edge headers, the names in ascending order. A
+  repeated name is not allowed.
 - A header line is the name, a colon, one space, and the value.
 - The body is everything after the first blank line. It is not changed or
   trimmed. Lines end with a line feed only.
@@ -71,6 +75,22 @@ the store: a dangling target is allowed).
 
 The graph is acyclic, because an edge points at a memory that existed when the
 new one was made.
+
+## Links to refs
+
+`about-ref: NAME` says that the memory is about the ref `NAME`: about whatever
+memory the ref names now, not one exact text. Use it for a topic that changes,
+such as a project. Use `about` with an id for one exact memory, and
+`derived-from` for evidence.
+
+A link is not an edge of the graph. It is resolved when it is read
+(`neighbours`, `search`, the web view), so it does not go stale when the ref
+moves. GC keeps nothing through a link: the ref keeps its own memory. A link
+to a ref that does not exist is a `missing-ref` finding of `check`, and `add`,
+`supersede`, `append` and `note` refuse one.
+
+akyuu 0.2.0.0 and older do not know this header, so they refuse a memory
+that has one.
 
 ## Refs
 
