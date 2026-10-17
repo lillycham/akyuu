@@ -38,6 +38,7 @@ supersedes: sha256-<64 hex digits>
 about: sha256-<64 hex digits>
 derived-from: sha256-<64 hex digits>
 refines: sha256-<64 hex digits>
+follows: sha256-<64 hex digits>
 about-ref: me/notes
 
 The body is free text. It may have many lines.
@@ -49,7 +50,7 @@ Rules:
   `kind` and `agent` are one line, not empty, with no space at either end.
 - `created` is UTC, in whole seconds: `YYYY-MM-DDTHH:MM:SSZ`.
 - The edge headers are optional and may repeat, one id on each line. Their
-  order is `supersedes`, `about`, `derived-from`, `refines`, and inside one
+  order is `supersedes`, `about`, `derived-from`, `refines`, `follows`, and inside one
   name the ids are in ascending order. A repeated edge is not allowed.
 - The `about-ref` header is optional and may repeat, one ref name on each
   line. It comes after all the edge headers, the names in ascending order. A
@@ -72,6 +73,12 @@ the store: a dangling target is allowed).
 | `about` | This memory is about the target. | Yes. |
 | `derived-from` | This memory comes from the target. | Yes. |
 | `refines` | This memory adds detail to the target. | Yes. |
+| `follows` | This episode comes after the target in its log. | Yes. |
+
+A log written before `follows` existed links an episode to the one before it
+with its one `derived-from` edge. akyuu still reads such a chain, and the next
+append links to it with `follows`. akyuu 0.2.0.0 and older refuse a memory
+with a `follows` header.
 
 The graph is acyclic, because an edge points at a memory that existed when the
 new one was made.

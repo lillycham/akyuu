@@ -90,8 +90,9 @@ A ref keeps its older values as _generations_, for *gc* and for the history.
 ## Logs and notes
 
 A _log_ is a ref whose memories are episodes: things that happened, as opposed
-to things that are true. Each episode has a *derived-from* edge to the one
-before it, so the log keeps its whole history.
+to things that are true. Each episode has a *follows* edge to the one before
+it, so the log keeps its whole history. (A log from before *follows* links
+episodes with one *derived-from* edge; it is still read.)
 
 *append* _ref_ *--kind* _text_ *--agent* _text_ [_edges_] [_body_]
 	Add an episode to the log _ref_, and move the ref to it.
