@@ -2,10 +2,11 @@
 
 module CacheTests (cacheTests) where
 
-import Akyuu.Cache (Cache, CacheError (CacheSQL), Hit (hitId, hitSnippet), Summary (Summary, sumFirstLine, sumId), SyncReport (SyncReport, added, removed), cachePath, cachedIds, closeCache, firstLine, forget, ftsQuery, index, indexedBody, loadGraph, openCache, reindex, search, snippetClose, snippetOpen, summaries, sync)
+import Akyuu.Cache (Cache, CacheError (CacheSQL), Hit (hitId, hitSnippet), Summary (Summary, sumFirstLine, sumId), SyncReport (SyncReport, added, removed), cachePath, cachedIds, closeCache, firstLine, forget, ftsQuery, index, indexedBody, loadAboutRefs, loadGraph, openCache, reindex, search, snippetClose, snippetOpen, summaries, sync)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, dangling, nodes)
 import Akyuu.Id (Id)
-import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), memoryGraph, memoryId)
+import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), memoryGraph, memoryId, withAboutRefs)
+import Akyuu.Refs (mkName)
 import Akyuu.Store (Store, add, objectPath, openStore, trash)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
@@ -42,7 +43,24 @@ cacheTests =
       summaryTests,
       searchTests,
       properties,
-      sqliteTests
+      sqliteTests,
+      aboutRefTests
+    ]
+
+aboutRefTests :: TestTree
+aboutRefTests =
+  testGroup
+    "about-ref links"
+    [ testCase "index keeps the links of a memory, and forget removes them" $
+        withEnv $ \_ c _ -> do
+          n <- right (mkName "me/notes")
+          let m = withAboutRefs (Set.singleton n) (memWith "linked" [])
+              i = memoryId m
+          right =<< index c i m
+          right =<< index c (memoryId (memWith "plain" [])) (memWith "plain" [])
+          loadAboutRefs c >>= (@?= Right (Map.singleton i (Set.singleton n)))
+          right =<< forget c i
+          loadAboutRefs c >>= (@?= Right Map.empty)
     ]
 
 -- Test helpers ---------------------------------------------------------

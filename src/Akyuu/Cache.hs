@@ -20,6 +20,8 @@
 -- >           PRIMARY KEY (src, kind, dst)) WITHOUT ROWID
 -- > bodies   USING fts5(body, tokenize = 'porter unicode61')
 -- > bodies_vocab USING fts5vocab(bodies, 'row')   (the terms of the index)
+-- > about_refs (src TEXT NOT NULL, ref TEXT NOT NULL,
+-- >             PRIMARY KEY (src, ref)) WITHOUT ROWID
 --
 -- * @memories.id@ and @edges.src@ and @edges.dst@ hold the text form of an
 --   'Id'. @edges.kind@ holds the header name of the kind, from
@@ -28,6 +30,8 @@
 --   in the store. The graph allows such a /dangling/ target.
 -- * A memory without edges has a @memories@ row and no @edges@ rows. The
 --   graph needs the row, to keep the memory as a node.
+-- * @about_refs@ holds the about-ref links of a memory: one row for each ref
+--   name. They are not edges: a link names a ref, and a reader resolves it.
 -- * @bodies.rowid@ is @memories.rowid@. The table holds a copy of the body.
 --   The copy has U+FFFD in place of each @\\x01@ and @\\x02@, because 'search'
 --   uses these two characters as the marks of a snippet (see 'snippetOpen').
@@ -68,6 +72,7 @@ module Akyuu.Cache
 
     -- * Queries
     loadGraph,
+    loadAboutRefs,
     Summary (..),
     summaries,
     firstLine,
@@ -88,7 +93,8 @@ import Akyuu.Fuzzy qualified as Fuzzy
 import Akyuu.Graph (Edge (Edge, kind, target), EdgeType, Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, parse, render)
-import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memEdges, memKind), edgeToHeader)
+import Akyuu.Memory (Memory (memAboutRefs, memAgent, memBody, memCreated, memEdges, memKind), edgeToHeader)
+import Akyuu.Refs (Name, mkName, nameText)
 import Akyuu.Store (Store, StoreError (BadMemory, NotFound))
 import Akyuu.Store qualified as Store
 import Control.Concurrent (threadDelay)
@@ -150,7 +156,7 @@ data CacheError
 -- this number whenever a table changes. The next 'openCache' then deletes
 -- the old file and starts again.
 schemaVersion :: Int
-schemaVersion = 3
+schemaVersion = 4
 
 -- | The path of the cache file for a store: @\<root\>/cache.sqlite@.
 -- The root is the directory that 'Akyuu.Store.openStore' gets.
@@ -161,7 +167,7 @@ cachePath root = root </> "cache.sqlite"
 
 -- | Make the tables of the cache, and set the options of the connection.
 --
--- The tables are @memories@, @edges@ and @bodies@. The header of this module
+-- The tables are @memories@, @edges@, @bodies@ and @about_refs@. The header of this module
 -- shows their columns. Each @CREATE@ has @IF NOT EXISTS@, so it is safe to
 -- call this function on a database that has them already.
 --
@@ -176,6 +182,7 @@ createSchema c = do
   execute_ c "CREATE TABLE IF NOT EXISTS memories (rowid INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, created TEXT NOT NULL, agent TEXT NOT NULL)"
   execute_ c "CREATE VIRTUAL TABLE IF NOT EXISTS bodies USING fts5(body, tokenize = 'porter unicode61')"
   execute_ c "CREATE VIRTUAL TABLE IF NOT EXISTS bodies_vocab USING fts5vocab(bodies, 'row')"
+  execute_ c "CREATE TABLE IF NOT EXISTS about_refs (src TEXT NOT NULL, ref TEXT NOT NULL, PRIMARY KEY (src, ref)) WITHOUT ROWID"
   execute_ c "PRAGMA journal_mode = WAL"
   execute_ c (Query $ T.pack ("PRAGMA user_version =" ++ show schemaVersion))
 
@@ -290,8 +297,8 @@ closeCache (Cache conn) = close conn
 index :: Cache -> Id -> Memory -> IO (Either CacheError ())
 index (Cache c) i m = tryAs CacheSQL $ withImmediateTransaction c $ insertMemory c i m
 
--- | Write the three kinds of rows of a memory: the @memories@ row, one
--- @edges@ row for each edge, and the @bodies@ row. If the 'Id' is already in
+-- | Write the rows of a memory: the @memories@ row, one @edges@ row for each
+-- edge, the @bodies@ row, and one @about_refs@ row for each about-ref link. If the 'Id' is already in
 -- @memories@, write nothing.
 --
 -- This function does not start a transaction. 'index' and 'sync' put it in
@@ -312,6 +319,8 @@ insertMemory c i m = do
         "INSERT INTO edges (src, kind, dst) VALUES (?,?,?)"
         (render i, edgeToHeader (kind e), render (target e))
     execute c "INSERT INTO bodies (rowid, body) VALUES (?,?)" (rowid, indexedBody (memBody m))
+    forM_ (Set.toList (memAboutRefs m)) $ \r ->
+      execute c "INSERT INTO about_refs (src, ref) VALUES (?,?)" (render i, nameText r)
 
 -- | The text that goes in the full-text index: the body, with U+FFFD in place
 -- of the two characters that mark a snippet. Then a mark in a snippet always
@@ -320,8 +329,8 @@ insertMemory c i m = do
 indexedBody :: Text -> Text
 indexedBody = T.map (\c -> if c == snippetOpen || c == snippetClose then '\xFFFD' else c)
 
--- | Delete the three kinds of rows of a memory: its body, the edges that start
--- at it, and its @memories@ row.
+-- | Delete the rows of a memory: its body, the edges and the about-ref links
+-- that start at it, and its @memories@ row.
 --
 -- The order matters. The body is found through the @memories@ row, so that
 -- row goes last. Edges of other memories that point to this 'Id' stay. If the
@@ -333,6 +342,7 @@ deleteMemory :: Connection -> Id -> IO ()
 deleteMemory c i = do
   execute c "DELETE FROM bodies WHERE rowid = (SELECT rowid FROM memories WHERE id = ?)" (i')
   execute c "DELETE FROM edges WHERE src = ?" (i')
+  execute c "DELETE FROM about_refs WHERE src = ?" (i')
   execute c "DELETE FROM memories WHERE id = ?" (i')
   where
     i' = Only $ render i
@@ -424,6 +434,7 @@ clearAll :: Connection -> IO ()
 clearAll c = do
   execute_ c "DELETE FROM bodies;"
   execute_ c "DELETE FROM edges;"
+  execute_ c "DELETE FROM about_refs;"
   execute_ c "DELETE FROM memories;"
 
 -- | Throw away everything in the cache, and read the whole store again. Use
@@ -495,6 +506,21 @@ loadGraph (Cache c) = do
           <$> query_ c "SELECT id FROM memories"
           <*> query_ c "SELECT src, kind, dst FROM edges"
   pure $ rows >>= build
+
+-- | The about-ref links of every memory in the cache. A memory with no links
+-- has no entry. A row with a ref name that is not valid is left out: the
+-- store, not the cache, is the truth.
+loadAboutRefs :: Cache -> IO (Either CacheError (Map Id (Set Name)))
+loadAboutRefs (Cache c) = do
+  rows <- tryAs CacheSQL (query_ c "SELECT src, ref FROM about_refs" :: IO [(Text, Text)])
+  pure $
+    fmap
+      ( \rs ->
+          Map.fromListWith
+            (<>)
+            [(i, Set.singleton n) | (s, r) <- rs, Right i <- [parse s], Right n <- [mkName r]]
+      )
+      rows
 
 -- | A short view of one memory: the headers without the edges, and the
 -- first line of the body. A list of these is enough to draw a graph of the
