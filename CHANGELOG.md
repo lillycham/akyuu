@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0.0 (2026-10-17)
 
 ### Compatibility
 
@@ -69,6 +69,8 @@
   arguments it has and a "did you mean" hint. Before, it ignored the argument,
   so a misspelt `expected` made a compare-and-set into a plain write.
 - When the root is missing, the error says to run `akyuu init`.
+- A config file that is there but cannot be read is an error, not no file.
+  An argument of a profile may not name a variable that akyuu sets itself.
 
 ### Changes
 
@@ -84,7 +86,8 @@
   `akyuu-embed-llama` and `akyuu-embed-openai` no longer add it, so a command
   of your own that adds the prefix itself must stop, or the text gets it twice.
 - `status` names the profile and the key, and the config file.
-
+- The README (Trust and safety) and the policy that `akyuu init` writes warn
+  that a memory can carry a prompt injection to every later session.
 - The web view has a new look, "Akyuu Manuscript": a page of a chronicle
   in indigo ink. It has a paper theme (light) and an indigo theme (dark), one
   accent for what is current, and status colours for problems (vermilion),
