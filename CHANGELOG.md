@@ -4,6 +4,12 @@
 
 ### Added
 
+- A new edge kind, `follows`, links an episode to the one before it in its
+  log. `append` and `note` write it. Before, that link was the one
+  `derived_from` edge of an episode, so an episode could not cite evidence.
+  Now `append` and `note` take `derived_from` for evidence. akyuu still reads
+  older logs, and their next episode follows them. akyuu 0.2.0.0 and older
+  refuse a memory with this header.
 - About-ref links: a memory can be about a ref, not one exact memory, with the
   header `about-ref: NAME`. The link names whatever memory the ref names when
   it is read, so it does not go stale when the ref moves. Use `about_refs` in
@@ -47,6 +53,9 @@
 
 ### Changes
 
+- `check` knows which memories are episodes (a memory on a log chain), and
+  does not report their links to old versions as stale: an episode records a
+  past state, and an episode is never superseded.
 - `check` no longer reports a `derived-from` edge to an old version as a stale
   link: that edge is evidence of one exact text. A stale `about` link names the
   ref that holds the current memory, so the fix is an about-ref link.

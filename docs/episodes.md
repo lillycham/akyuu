@@ -19,11 +19,15 @@ clusters of episodes into facts, and a fact is a normal ref.
 ## The log
 
 A log is a ref, for example `agent/episodes`, that names the **newest**
-episode. Each episode has a `derived_from` edge to the one before it:
+episode. Each episode has a `follows` edge to the one before it:
 
 ```
-ref agent/episodes ──> e3 ──derived_from──> e2 ──derived_from──> e1
+ref agent/episodes ──> e3 ──follows──> e2 ──follows──> e1
 ```
+
+A log from before the `follows` edge links its episodes with their one
+`derived_from` edge. akyuu reads both, so an old log goes on with `follows`
+at its next append, and no episode is rewritten.
 
 `akyuu append REF --kind episode --agent NAME --body TEXT` adds the episode,
 adds that edge, and moves the ref, in one compare-and-set. The first append
@@ -33,13 +37,14 @@ second one reads the ref again and builds its episode again (three tries).
 `akyuu log REF [-n N] [--full]` walks the chain from the newest episode and
 prints one line for each. A last line `more: ID` says where the log goes on.
 
-### Why `derived_from`, and not `supersedes`
+### Why `follows`, and not `supersedes`
 
 GC keeps a memory if a ref, a pin or a live memory's edge reaches it, and
 liveness flows from the newer memory to the older one. A `supersedes` edge
 does **not** keep its target: that is how an old version becomes garbage. An
-episode must not be replaced, so the chain uses `derived_from`, which does keep
-its target. The ref keeps `e3`, `e3` keeps `e2`, and so on.
+episode must not be replaced, so the chain uses `follows`, which does keep
+its target. It is its own kind, and not `derived_from`, so that an episode can
+also cite its evidence, and so that `check` can tell an episode from a fact. The ref keeps `e3`, `e3` keeps `e2`, and so on.
 
 An episode that is only `about` a topic is **not** kept alive by that edge. The
 edge goes from the episode to the topic. Without a log or a ref above it, the
@@ -48,9 +53,13 @@ eager notes needs the chain.
 
 ## Rules
 
-- The `derived_from` edge of an episode is its link to the previous one. The
-  tool adds it, and refuses a memory that has one of its own. Link an episode
-  to a topic with `about` or `refines`.
+- The `follows` edge of an episode is its link to the previous one. The tool
+  adds it, and refuses a memory that has one of its own. Link an episode to a
+  topic with `about`, `about-ref` or `refines`, and to its evidence with
+  `derived_from`. The first episode of a log cannot have exactly one
+  `derived_from` edge, because an old log reads that as the chain.
+- An episode records what was true when it was written. `check` does not report
+  its links to old versions as stale.
 - One log for one stream: an agent, a session, a project, a persona. Several
   logs are fine, and a summary can be derived from several of them.
 - Keep an episode small and about one thing. Search finds them by words.

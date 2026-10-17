@@ -33,7 +33,7 @@ The headers come first, then a blank line, then the body. A header is a name, a
 colon, one space and a value. *kind*, *created* and *agent* are required, once
 each and in that order; *kind* and *agent* are one line, not empty, with no
 space at either end; *created* is UTC in whole seconds. The edge headers follow:
-*supersedes*, *about*, *derived-from* and *refines*, in that order, each with
+*supersedes*, *about*, *derived-from*, *refines* and *follows*, in that order, each with
 one id and each repeatable, the ids of one name in ascending order and none
 twice. Last come the *about-ref* headers, each with one ref name, repeatable,
 the names in ascending order and none twice. The body is everything after the first blank line, unchanged. Lines end
@@ -55,13 +55,16 @@ the store. So the graph has no cycles.
 	This memory is about the target.
 
 *derived-from*
-	This memory comes from the target. The episodes of a log point at the
-	episode before them with this edge.
+	This memory comes from the target: its evidence. In a log from before
+	*follows*, an episode points at the one before it with this edge.
 
 *refines*
 	This memory adds detail to the target.
 
-*gc* keeps the target of an *about*, *derived-from* or *refines* edge from a
+*follows*
+	This episode comes after the target in its log.
+
+*gc* keeps the target of an *about*, *derived-from*, *refines* or *follows* edge from a
 memory that it keeps. A *supersedes* edge keeps nothing.
 
 *about-ref* _name_ is not an edge: it says that the memory is about the ref
