@@ -65,6 +65,14 @@ and `akyuu-version`.
   serves to bring memories into Git for versioning and sync.
 - **Secrets.** Do not store passwords or keys in memories, as they are
   plaintext and readable by anyone on your device.
+- **Memories are read as context.** Agents read the `always` tier and their
+  search hits at the start of work, so a memory puts text in front of every
+  agent you run. If an agent saves text from an untrusted source (a web page,
+  an issue, a file someone sent), instructions hidden in it reach every later
+  session: a prompt injection that persists. Agents should write what they
+  learned in their own words, not paste untrusted text, and treat what they
+  read from the store as notes, not commands. Look through `akyuu log` now and
+  then for memories you did not expect.
 
 ## Documents
 
