@@ -227,13 +227,16 @@ readMemory env spec = runExceptT $ do
       values = either (const Map.empty) refValues es
   pure (memoryJSON i m (Query.neighbourList i g) (Query.refLinkList i links values) holds st stored)
 
--- | The about-ref links of every memory of a graph, from the store. It writes
--- nothing: the cache does not keep the links. A memory that cannot be read
--- has no links here.
+-- | The about-ref links of every memory of a graph: from the cache, and from
+-- the store for a memory that the cache does not have yet. It writes nothing.
+-- A memory that cannot be read has no links here.
 linksIn :: Env -> Graph -> IO (Map Id (Set Name))
 linksIn env g = do
-  ms <- traverse (\i -> fmap ((,) i) <$> Store.get (envStore env) i) (Set.toAscList (Graph.nodes g))
-  pure (Map.fromList [(i, memAboutRefs m) | Right (i, m) <- ms, not (Set.null (memAboutRefs m))])
+  cached <- either (const Map.empty) id <$> Cache.loadAboutRefs (envCache env)
+  known <- either (const Set.empty) id <$> Cache.cachedIds (envCache env)
+  let uncached = Set.toAscList (Graph.nodes g `Set.difference` known)
+  ms <- traverse (\i -> fmap ((,) i) <$> Store.get (envStore env) i) uncached
+  pure (cached <> Map.fromList [(i, memAboutRefs m) | Right (i, m) <- ms, not (Set.null (memAboutRefs m))])
 
 -- | The current value of each ref that can be read.
 refValues :: [RefEntry] -> Map Name Id

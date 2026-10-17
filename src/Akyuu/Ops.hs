@@ -667,15 +667,12 @@ neighboursOf env i = runExceptT $ do
     then missing env i
     else pure ns
 
--- | The about-ref links of every memory in the store, after a sync of the
--- cache. A memory with no links has no entry. It reads each memory, because
--- the cache does not keep the links.
+-- | The about-ref links of every memory in the store, from the cache after a
+-- sync. A memory with no links has no entry.
 aboutRefLinks :: Env -> IO (Either AkyuuError (Map.Map Id (Set Name)))
 aboutRefLinks env = runExceptT $ do
   synced env
-  g <- cache (Cache.loadGraph (envCache env))
-  ms <- liftIO (traverse (\i -> fmap ((,) i) <$> Store.get (envStore env) i) (Set.toAscList (Graph.nodes g)))
-  pure (Map.fromList [(i, memAboutRefs m) | Right (i, m) <- ms, not (Set.null (memAboutRefs m))])
+  cache (Cache.loadAboutRefs (envCache env))
 
 -- | The about-ref links of a memory, in both directions
 -- ('Akyuu.Query.refLinkList'). An 'Id' that is not a memory has none: call
