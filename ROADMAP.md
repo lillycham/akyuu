@@ -7,10 +7,6 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
 
 - **A test of the systemd units on a real machine.** The module is checked by
   evaluation, and the package builds on Linux, but nobody has run the timers.
-- **Per-log retention.** A long log is found by `check` (`long-log`). Whether a
-  log should summarise itself (an agent runs a procedure) or keep only the
-  newest episodes (GC cuts the chain) is not decided. Today it is by hand.
-
 ## Later
 
 - **Install without Nix.** The goal is that anyone can install akyuu. Nothing

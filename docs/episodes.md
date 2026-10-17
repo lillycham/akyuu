@@ -64,6 +64,30 @@ eager notes needs the chain.
   logs are fine, and a summary can be derived from several of them.
 - Keep an episode small and about one thing. Search finds them by words.
 
+## Summaries
+
+A log only grows. To read an old stretch cheaply, an agent writes a summary
+beside it; the episodes stay, and only the view changes.
+
+- `akyuu log REF --todo` lists the oldest stretches that need a summary: runs
+  of 8 episodes (`--size`) that no summary covers. The newest 10 (`--keep`)
+  are left out.
+- `akyuu summarise REF --source ID ... --agent NAME --body TEXT` records the
+  summary of one run. It has a `derived_from` edge to each episode, and goes to
+  the log `REF.l1`, which is a log like any other. The sources must be the
+  oldest that no summary covers, so the covered part is always the oldest.
+- When `REF.l1` has 8 summaries that no summary covers, `--todo` offers level
+  2: a summary of summaries, in `REF.l2`, and so on.
+- `akyuu log REF --resolution` shows the newest episodes whole, each older
+  stretch as its highest summary, and older episodes with no summary as one
+  line. `--budget CHARS` shows fewer episodes whole until it fits, or fails
+  and says what it needs. It never drops a stretch in silence.
+- `akyuu unfold ID` prints the sources of a summary, whole. Read them before
+  you quote a summary.
+
+The MCP tools are `log` (with `todo` or `resolution`), `summarise` and
+`unfold`.
+
 ## Reading
 
 - `log` for the recent episodes of one stream.

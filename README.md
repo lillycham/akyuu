@@ -110,6 +110,8 @@ akyuu check                         # stale links, forks, duplicates, memories n
 akyuu append me/episodes --kind episode --agent me --body "..."   # a log: each episode points at the one before
 akyuu log me/episodes               # the episodes, newest first (see docs/episodes.md)
 akyuu log me/episodes --since 7d    # only the last week
+akyuu log me/episodes --todo        # the old stretches that need a summary
+akyuu log me/episodes --resolution  # recent episodes whole, older ones as summaries
 akyuu serve                         # the read-only web UI on 127.0.0.1:7420
 akyuu seed --demo --root /tmp/demo  # a demo store, for the web UI
 ```
