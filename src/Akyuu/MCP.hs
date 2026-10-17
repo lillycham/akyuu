@@ -243,7 +243,8 @@ toolList =
             ("body", stringSchema "The text of the episode."),
             ("about", idsSchema "Memories that this episode is about."),
             ("about_refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("Refs that this episode is about. The link follows the ref: it names whatever memory the ref names now, so it does not go stale. Use it for a topic with a ref, and about for one exact memory. Each ref must exist." :: Text)]),
-            ("refines", idsSchema "Memories that this episode adds detail to.")
+            ("refines", idsSchema "Memories that this episode adds detail to."),
+            ("derived_from", idsSchema "Memories that this episode comes from: its evidence. The link to the episode before it is added for you.")
           ]
           ["ref", "kind", "agent", "body"]
       ),
@@ -280,7 +281,8 @@ toolList =
             ("cwd", stringSchema "The directory that you work in. The default is the directory of the server."),
             ("about", idsSchema "Memories that this note is about."),
             ("about_refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("Refs that this note is about. The link follows the ref: it names whatever memory the ref names now, so it does not go stale. Use it for a topic with a ref, and about for one exact memory. Each ref must exist." :: Text)]),
-            ("refines", idsSchema "Memories that this note adds detail to.")
+            ("refines", idsSchema "Memories that this note adds detail to."),
+            ("derived_from", idsSchema "Memories that this note comes from: its evidence.")
           ]
           ["body"]
       ),
@@ -539,7 +541,7 @@ parseArgs n args = case n of
     k <- maybe "note" id <$> optional' args "kind" asText "a string" >>= check . checkField "kind"
     ag <- optional' args "agent" asText "a string" >>= traverse (check . checkField "agent")
     b <- required args "body" asText "a string"
-    es <- edgesArg args [("about", About), ("refines", Refines)]
+    es <- edgesArg args [("about", About), ("derived_from", DerivedFrom), ("refines", Refines)]
     rs <- aboutRefsArg args
     pure (CallNote c ag NewMemory {newKind = k, newAgent = "", newEdges = es, newBody = b, newAboutRefs = rs})
   "check" -> do

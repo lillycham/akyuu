@@ -4,7 +4,7 @@ module CheckTests (checkTests) where
 
 import Akyuu.Check (CheckOptions (hubDegree, longLog), Finding (findingIds, findingKind, findingRelated, findingSeverity), FindingKind (DuplicateBody, Fork, Hub, LongLog, MissingRef, NearDuplicate, StaleLink, Unreferenced), Inputs (Inputs), Severity (Info, Problem), check, defaultCheckOptions, findingWhy, jaccard, normalise, shingles)
 import Akyuu.GC (Roots (Roots, rootPins, rootRefs, rootTemps))
-import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, singleton)
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Follows, Refines, Supersedes), Graph, singleton)
 import Akyuu.Id (Id)
 import Akyuu.Refs (Name, mkName)
 import Data.Map.Strict qualified as Map
@@ -27,6 +27,7 @@ checkTests =
       unreferencedCases,
       hubCases,
       longLogCases,
+      episodeCases,
       aboutRefCases,
       reviewedCases,
       helperCases,
@@ -237,8 +238,33 @@ longLogCases =
       testCase "a chain at the limit is not long, and an older value of the ref is not counted again" $ do
         let g = build [(a, []), (b, [(DerivedFrom, a)]), (c, [(DerivedFrom, b)])]
         check defaultCheckOptions {longLog = 3} (inputs g Map.empty (held [c, b]) Set.empty) @?= []
-        map findingKind (check defaultCheckOptions {longLog = 2} (inputs g Map.empty (held [c, b]) Set.empty)) @?= [LongLog]
+        map findingKind (check defaultCheckOptions {longLog = 2} (inputs g Map.empty (held [c, b]) Set.empty)) @?= [LongLog],
+      testCase "a chain of follows edges is a log" $ do
+        let g = build [(a, []), (b, [(Follows, a)]), (c, [(Follows, b), (DerivedFrom, e)]), (e, [])]
+            fs = check defaultCheckOptions {longLog = 2} (inputs g Map.empty (held [c, e]) Set.empty)
+        [(findingKind x, findingIds x) | x <- fs] @?= [(LongLog, [c])]
     ]
+
+episodeCases :: TestTree
+episodeCases =
+  testGroup
+    "episodes"
+    [ testCase "a stale link from an episode of a follows log is not reported" $
+        -- t2 supersedes t1. Episode b of the log c-b-a is about t1.
+        kinds (build [(t1, []), (t2, [(Supersedes, t1)]), (a, []), (b, [(Follows, a), (About, t1)]), (c, [(Follows, b)])]) [] [t2, c] @?= [],
+      testCase "a stale link from an episode of an old derived_from log is not reported" $
+        kinds (build [(t1, []), (t2, [(Supersedes, t1)]), (a, [(About, t1)]), (b, [(DerivedFrom, a)]), (c, [(DerivedFrom, b)])]) [] [t2, c] @?= [],
+      testCase "an old chain of two is not a log: it looks like a fact with evidence" $
+        kinds (build [(t1, []), (t2, [(Supersedes, t1)]), (a, []), (b, [(DerivedFrom, a), (About, t1)])]) [] [t2, b] @?= [StaleLink],
+      testCase "a fact that supersedes is not an episode, though it has one derived_from edge" $
+        -- f2 supersedes f1 and comes from episode b of the log b-a.
+        kinds (build [(t1, []), (t2, [(Supersedes, t1)]), (a, []), (b, [(DerivedFrom, a)]), (f1, []), (f2, [(Supersedes, f1), (DerivedFrom, b), (About, t1)])]) [] [t2, f2] @?= [StaleLink]
+    ]
+  where
+    t1 = nid 10
+    t2 = nid 11
+    f1 = nid 12
+    f2 = nid 13
 
 -- | Findings with a set of reviewed pairs.
 runReviewed :: Graph -> [(Id, Text)] -> [(Id, Id)] -> [FindingKind]

@@ -171,6 +171,13 @@ if (vizPath) {
   eq(tr.children.map(c => c.path).join(' '), 'claude policy', 'the tree by the first part');
   eq(A.textBacklinks([{ name: 'a', body: 'see claude/profile' }, { name: 'claude/profile', body: 'claude/profile' }, { name: 'b', body: 'claude/profiles' }], 'claude/profile').join(), 'a', 'backlinks from the text, not from itself');
   eq(A.isLogPage('claude/log/akyuu', 'fact') && A.isLogPage('x/y', 'episode') && !A.isLogPage('claude/profile', 'fact'), true, 'a log page');
+  {
+    const o = (kind, id) => ({ dir: 'out', kind, id });
+    eq(A.previousEpisode([o('follows', 'b'), o('derived-from', 'x')]), 'b', 'follows comes first');
+    eq(A.previousEpisode([o('derived-from', 'a')]), 'a', 'one derived-from links an older log');
+    eq(A.previousEpisode([o('derived-from', 'a'), o('derived-from', 'b')]), null, 'two derived-from edges are evidence');
+    eq(A.previousEpisode([{ dir: 'in', kind: 'follows', id: 'c' }]), null, 'an edge in is not the episode before');
+  }
   console.log('wiki Markdown and links: ok');
 }
 // ---- the whole page in a small fake DOM ----------------------------------------

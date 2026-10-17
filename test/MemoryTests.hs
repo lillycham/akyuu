@@ -2,7 +2,7 @@
 
 module MemoryTests (memoryTests, genMemory, shrinkMemory) where
 
-import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (About, DerivedFrom, Refines, Supersedes))
+import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (About, DerivedFrom, Follows, Refines, Supersedes))
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, IdParseError (BadLength, BadPrefix), fromDigest, hashBytes)
 import Akyuu.Id qualified as Id
@@ -146,14 +146,20 @@ renderTests =
               fixture
                 { memEdges =
                     Set.fromList
-                      [ Edge Refines (nid 0),
+                      [ Edge Follows (nid 0),
+                        Edge Refines (nid 0),
                         Edge DerivedFrom (nid 0),
                         Edge About (nid 0),
                         Edge Supersedes (nid 0)
                       ]
                 }
-         in map (T.takeWhile (/= ':')) (take 4 (drop 3 (T.lines (TE.decodeUtf8 (renderMemory m)))))
-              @?= ["supersedes", "about", "derived-from", "refines"],
+         in map (T.takeWhile (/= ':')) (take 5 (drop 3 (T.lines (TE.decodeUtf8 (renderMemory m)))))
+              @?= ["supersedes", "about", "derived-from", "refines", "follows"],
+      testCase "a follows edge reads back, and comes before the about-ref lines" $ do
+        let m = withAboutRefs (Set.singleton (ref "me/notes")) fixture {memEdges = Set.singleton (Edge Follows (nid 4))}
+            ls = T.lines (TE.decodeUtf8 (renderMemory m))
+        take 2 (drop 3 ls) @?= ["follows: " <> idText 4, "about-ref: me/notes"]
+        fmap memEdges (parseMemory (renderMemory m)) @?= Right (Set.singleton (Edge Follows (nid 4))),
       testCase "writes the Ids of one kind in ascending order" $
         let m = fixture {memEdges = Set.fromList [Edge About (nid 3), Edge About (nid 1), Edge About (nid 2)]}
          in drop 3 (take 6 (T.lines (TE.decodeUtf8 (renderMemory m))))

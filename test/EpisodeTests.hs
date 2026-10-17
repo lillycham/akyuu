@@ -5,10 +5,10 @@ module EpisodeTests (episodeTests) where
 import Akyuu.Episode (Walk (walkEntries, walkMore))
 import Akyuu.Error (AkyuuError (BadInput))
 import Akyuu.GC (Policy (gracePeriod, keepGenerations), defaultPolicy)
-import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom))
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Follows))
 import Akyuu.Memory (Memory (memBody, memEdges))
-import Akyuu.Ops (NewMemory, addMemory, appendEpisode, dryRunGC, readLog, supersedeMemory)
-import Akyuu.Refs (mkName)
+import Akyuu.Ops (NewMemory, addMemory, appendEpisode, dryRunGC, readLog, setRefTo, supersedeMemory)
+import Akyuu.Refs (Expected (MustBeAbsent), mkName)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (forM, forM_)
@@ -35,7 +35,7 @@ episodeTests =
           walkMore w @?= Nothing
           case walkEntries w of
             [(_, newest), (_, oldest)] -> do
-              memEdges newest @?= Set.singleton (Edge DerivedFrom a)
+              memEdges newest @?= Set.singleton (Edge Follows a)
               memEdges oldest @?= Set.empty
             other -> error ("unexpected: " <> show (length other)),
       testCase "the limit cuts the walk, and says where it goes on" $
@@ -45,15 +45,36 @@ episodeTests =
           w <- right =<< readLog env n 2
           map fst (walkEntries w) @?= [ids !! 3, ids !! 2]
           walkMore w @?= Just (ids !! 1),
-      testCase "other links are allowed, derived_from is not" $
+      testCase "other links are allowed, and derived_from is evidence" $
         withOpsEnv $ \_ env -> do
           n <- right (mkName "agent/episodes")
           topic <- right =<< addMemory env (note "a topic")
-          _ <- right =<< appendEpisode env n (newMem "episode" "claude" (Set.singleton (Edge About topic)) "it was about the topic")
+          a <- right =<< appendEpisode env n (newMem "episode" "claude" (Set.singleton (Edge About topic)) "it was about the topic")
+          b <- right =<< appendEpisode env n (newMem "episode" "claude" (Set.singleton (Edge DerivedFrom topic)) "it came from the topic")
+          w <- right =<< readLog env n 10
+          map fst (walkEntries w) @?= [b, a],
+      testCase "append adds follows, so a follows edge of its own is refused" $
+        withOpsEnv $ \_ env -> do
+          n <- right (mkName "agent/episodes")
+          a <- right =<< appendEpisode env n (note "first")
+          r <- appendEpisode env n (newMem "episode" "claude" (Set.singleton (Edge Follows a)) "x")
+          isBadInput r @?= True,
+      testCase "the first episode cannot have exactly one derived_from edge" $
+        withOpsEnv $ \_ env -> do
+          n <- right (mkName "agent/episodes")
+          topic <- right =<< addMemory env (note "a topic")
           r <- appendEpisode env n (newMem "episode" "claude" (Set.singleton (Edge DerivedFrom topic)) "x")
-          case r of
-            Left (BadInput _) -> pure ()
-            other -> error ("expected BadInput, got " <> show other),
+          isBadInput r @?= True,
+      testCase "an old log goes on: a new episode follows a chain of derived_from edges" $
+        withOpsEnv $ \_ env -> do
+          n <- right (mkName "agent/episodes")
+          a <- right =<< addMemory env (note "old a")
+          b <- right =<< addMemory env (newMem "episode" "claude" (Set.singleton (Edge DerivedFrom a)) "old b")
+          _ <- right =<< setRefTo env n MustBeAbsent b
+          c <- right =<< appendEpisode env n (note "new c")
+          w <- right =<< readLog env n 10
+          map fst (walkEntries w) @?= [c, b, a]
+          walkMore w @?= Nothing,
       testCase "a log that GC knows is kept whole, a loose memory is not" $
         withOpsEnv $ \_ env -> do
           n <- right (mkName "agent/episodes")
@@ -89,3 +110,6 @@ episodeTests =
     note :: Text -> NewMemory
     note = newMem "episode" "claude" Set.empty
     now = defaultPolicy {gracePeriod = 0, keepGenerations = 1}
+    isBadInput r = case r of
+      Left (BadInput _) -> True
+      _ -> False

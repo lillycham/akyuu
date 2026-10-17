@@ -26,7 +26,7 @@
   /* The names the rest of this sheet uses. */
   --bg: var(--ai); --fg: var(--ink); --muted: var(--ink-muted); --card: var(--ai-raised);
   --accent: var(--sora); --warn: var(--shu); --ok: var(--matsu); --grey: #e1e3ea; --grey-fg: var(--ink-muted);
-  --sup: var(--wire); --about: var(--sora); --derived: var(--matsu); --refines: var(--fuji);
+  --sup: var(--wire); --about: var(--sora); --derived: var(--matsu); --refines: var(--fuji); --follows: var(--matsu);
   --hit: var(--kin); --planned: var(--shu); --sel: var(--ink);
   font: 13px/1.45 var(--font-mono);
 }
@@ -111,6 +111,7 @@ svg.graph .edge.supersedes { stroke: var(--sup); stroke-width: 2.2; }
 svg.graph .edge.about { stroke: var(--about); stroke-width: 1.3; stroke-dasharray: 6 4; }
 svg.graph .edge.derived-from { stroke: var(--derived); stroke-width: 1.3; stroke-dasharray: 1 4; }
 svg.graph .edge.refines { stroke: var(--refines); stroke-width: 1.3; }
+svg.graph .edge.follows { stroke: var(--follows); stroke-width: 1.6; }
 svg.graph .edge.dim { opacity: .12; }
 svg.graph marker path { fill: none; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 /* Highlight: the edges of the hovered or selected node are bold, the rest is faint. */
@@ -886,7 +887,7 @@ const Akyuu = (function () {
   const ROW_GAP = ROW_H - NODE_H;  // a row gap with no track, or with one track
   const CORNER = 6;                // radius of the rounded corners
   const PORT_MAX = 12, PORT_PAD = 12, PIN_STEP = 6;
-  const KIND_RANK = { supersedes: 0, about: 1, 'derived-from': 2, refines: 3 };
+  const KIND_RANK = { supersedes: 0, about: 1, 'derived-from': 2, refines: 3, follows: 4 };
   const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
   function planRoutes(graph, lay) {
@@ -1382,12 +1383,20 @@ const Akyuu = (function () {
 
   // Is this page a log? Its name has a log part, or its memory is an
   // episode or a note (the kinds that append and note write).
+  function previousEpisode(edges) {
+    const outs = (kind) => edges.filter(e => e.dir === 'out' && e.kind === kind).map(e => e.id).sort();
+    const f = outs('follows');
+    if (f.length) return f[0];
+    const d = outs('derived-from');
+    return d.length === 1 ? d[0] : null;
+  }
+
   function isLogPage(name, kind) {
     if (/(^|\/)(log|logs|episodes)(\/|$)/.test(name || '')) return true;
     return kind === 'episode' || kind === 'note';
   }
 
-  const pure = { mdBlocks, mdInline, refMatcher, wikiTree, textBacklinks, isLogPage, compareText, sentences, fitScale, anchorScroll, MIN_SCALE, MAX_SCALE, OVERVIEW_BELOW, shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, planRoutes, routeEdges, roundedPath, NODE_W, NODE_H, ROW_H, COL_GAP, TRACK, TOP, LEFT };
+  const pure = { previousEpisode, mdBlocks, mdInline, refMatcher, wikiTree, textBacklinks, isLogPage, compareText, sentences, fitScale, anchorScroll, MIN_SCALE, MAX_SCALE, OVERVIEW_BELOW, shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, planRoutes, routeEdges, roundedPath, NODE_W, NODE_H, ROW_H, COL_GAP, TRACK, TOP, LEFT };
   if (typeof document === 'undefined') return pure;
 
   // ---------------------------------------------------------------------
@@ -1596,7 +1605,7 @@ const Akyuu = (function () {
 
   // ---- the graph drawing ---------------------------------------------------
 
-  const EDGE_VAR = { supersedes: 'sup', about: 'about', 'derived-from': 'derived', refines: 'refines' };
+  const EDGE_VAR = { supersedes: 'sup', about: 'about', 'derived-from': 'derived', refines: 'refines', follows: 'follows' };
 
   // The layout, the routes and the geometry of a graph.
   function geometryOf(graph, lay, marks) {
@@ -2483,7 +2492,8 @@ const Akyuu = (function () {
     }
   }
 
-  // Walk a log from an episode along derived_from, n at a time.
+  // Walk a log from an episode to the one before it, n at a time: its follows
+  // edge, or in an older log its one derived-from edge (Akyuu.Episode.previous).
   async function showEpisodes(ol, name, start, n) {
     let id = start;
     for (let k = 0; id && k < n; k++) {
@@ -2494,8 +2504,7 @@ const Akyuu = (function () {
         el('div', { class: 'muted' }, [fmtTime(m.created) + ' · ' + m.kind + ' · ' + m.agent + ' · ', idLink(m.id)]),
         el('div', { class: 'md' }, blockNodes(mdBlocks(m.body, pageNames())))
       ]));
-      const prev = m.edges.find(e => e.dir === 'out' && e.kind === 'derived-from');
-      id = prev ? prev.id : null;
+      id = previousEpisode(m.edges);
     }
     if (id) {
       const more = el('li', {}, [el('button', { type: 'button', text: 'older episodes', onclick: () => { more.remove(); showEpisodes(ol, name, id, n); } })]);
