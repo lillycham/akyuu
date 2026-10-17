@@ -26,5 +26,5 @@ week, and I will tell you when a fix is released.
 
 - An agent that you connected to the MCP server changing your memories. That is
   the purpose of the tool.
-- The commands that you put in `AKYUU_EMBED_COMMAND` or in
-  `~/.config/akyuu/embed.env`. They are run as you.
+- The commands of the embedding profiles in `~/.config/akyuu/config.toml`, or
+  in `AKYUU_EMBED_COMMAND` or the older `embed.env`. They are run as you.

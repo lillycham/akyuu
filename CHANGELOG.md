@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Compatibility
+
+- A store that this version writes can have memories with `about-ref` and
+  `follows` headers. akyuu 0.2.0.0 and older refuse those memories, and the
+  store has no format version, so update every machine and backup tool that
+  reads the store together.
+- The cache has a new table (schema 4). It is rebuilt by itself on the first
+  run. Restart the clients that run `akyuu mcp` after the update: while an old
+  and a new server run side by side, each one rebuilds the cache of the other.
+
 ### Added
 
 - Summaries in levels on top of a log. `log REF --todo` lists the oldest

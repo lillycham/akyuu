@@ -409,7 +409,8 @@ move refs, and *serve* shows every memory to anyone on the machine.
 *gc* does not hold the lock of the refs. A ref that moves to a new memory
 during a sweep keeps it only because of the grace period.
 
-A log only grows. *check* reports a long one, and it is summarised by hand.
+A log keeps every episode. Summaries make it short to read (*log --resolution*),
+but an agent must write them (*summarise*): akyuu runs no model.
 
 *check* reports forks, but there is no rule for which side wins.
 

@@ -10,7 +10,7 @@ between memories is derived from the files. An agent reads and writes it
 through a command line or an MCP server, so Claude Code, Codex and
 other MCP clients can share one memory.
 
-**Status: 0.2.0.0, pre-1.0.** I daily drive Akyuu with all my agents, and
+**Status: 0.3.0.0, pre-1.0.** I daily drive Akyuu with all my agents, and
 have found it to work well for holding general information and task-specific
 information. I test a lot and run the latest main build in my config, so I find
 issues quite quickly. With that said, Akyuu should be treated as beta software,
