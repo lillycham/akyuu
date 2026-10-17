@@ -488,7 +488,7 @@ searchMemories env = searchMemoriesMode env Fused
 -- and the wait is at most 5 seconds. @akyuu embed@ fills what this missed.
 embedNew :: Env -> Id -> Text -> IO ()
 embedNew env i body = do
-  me <- Embed.embedderFromEnv
+  me <- Embed.loadEmbedder
   forM_ me $ \e0 -> do
     let e = e0 {Embed.embTimeout = min 5 (Embed.embTimeout e0)}
     r <- try (Embed.embedText e Embed.Document body) :: IO (Either SomeException (Either Text [Embed.Vector]))

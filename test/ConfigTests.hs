@@ -58,6 +58,8 @@ fileCases =
         assertBool "error" (isLeft (parseConfigText "[embed.profiles.a]\ncommand = \"c\"\nkey = \"k\"\ntimeout = \"soon\"\n")),
       testCase "a profile needs a command and a key" $
         assertBool "error" (isLeft (parseConfigText "[embed.profiles.a]\ncommand = \"c\"\n")),
+      testCase "an argument that would be a variable of akyuu is an error" $
+        assertBool "error" (isLeft (parseConfigText "[embed.profiles.a]\ncommand = \"c\"\nkey = \"k\"\nargs = { role = \"x\" }\n")),
       testCase "a minimum out of range is an error" $
         assertBool "error" (isLeft (parseConfigText "[embed.profiles.a]\ncommand = \"c\"\nkey = \"k\"\nmin = 2\n")),
       testCase "embed.env lines are read as before" $

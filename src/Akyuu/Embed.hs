@@ -33,7 +33,7 @@ module Akyuu.Embed
     Embedder (..),
     Role (..),
     embedderFromConfig,
-    embedderFromEnv,
+    loadEmbedder,
     fingerprint,
     runEmbedder,
     embedText,
@@ -245,11 +245,11 @@ embedderFromConfig = fmap fromSettings . cfgEmbed
           embProfile = esProfile s
         }
 
--- | The embedder of the config file and the environment. 'Nothing' if search
+-- | Load the config file and the environment, and give their embedder. 'Nothing' if search
 -- by meaning is off, or if the config cannot be read (the commands that need
 -- the config say why).
-embedderFromEnv :: IO (Maybe Embedder)
-embedderFromEnv = either (const Nothing) embedderFromConfig <$> loadConfig
+loadEmbedder :: IO (Maybe Embedder)
+loadEmbedder = either (const Nothing) embedderFromConfig <$> loadConfig
 
 -- | What makes the vectors of a key what they are: the command, its
 -- arguments and the prefixes. Two embedders with one key and two

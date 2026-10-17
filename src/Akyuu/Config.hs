@@ -73,6 +73,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8')
 import System.Environment (getEnvironment)
 import System.FilePath ((</>))
+import System.IO.Error (ioeGetErrorString, isDoesNotExistError)
 import Text.Read (readMaybe)
 import Toml (Result (Failure, Success), Value' (Bool', Double', Integer', Text'), decode)
 import Toml.Schema (FromValue (fromValue), optKey, parseTableFromValue, reqKey)
@@ -254,6 +255,10 @@ parseConfigText t = case decode t of
         <> ["embed.profiles." <> n <> ".max-chars must be at least 1" | Just s <- [prMaxChars p], s < 1]
         <> ["embed.profiles." <> n <> ".command must not be empty" | T.null (T.strip (prCommand p))]
         <> ["embed.profiles." <> n <> ".key must not be empty" | T.null (T.strip (prKey p))]
+        <> [ "embed.profiles." <> n <> ".args." <> k <> " would be " <> T.pack (argVar k) <> ", which akyuu sets itself"
+           | k <- Map.keys (prArgs p),
+             argVar k `elem` controlVars
+           ]
 
 -- | Read the older @embed.env@: lines of @NAME=value@. The value is
 -- everything after the first @=@ (spaces stay). A line that starts with @#@ is
@@ -316,10 +321,14 @@ findFiles env = case nonEmpty "AKYUU_CONFIG" of
       ((</> "akyuu") <$> nonEmpty "XDG_CONFIG_HOME")
         <|> ((\h -> h </> ".config" </> "akyuu") <$> nonEmpty "HOME")
     old p = T.pack p <> " is the older format. Move its settings to config.toml (see akyuu(1)), and remove it."
+    -- A file that is not there is no file. A file that is there but cannot be
+    -- read is an error: its settings must not vanish without a word.
     readText p = do
       r <- try (BS.readFile p) :: IO (Either IOException BS.ByteString)
       pure $ case r of
-        Left _ -> Right Nothing
+        Left e
+          | isDoesNotExistError e -> Right Nothing
+          | otherwise -> Left (ConfigUnreadable p (T.pack (ioeGetErrorString e)))
         Right bs -> either (const (Left (ConfigUnreadable p "it is not UTF-8"))) (Right . Just) (decodeUtf8' bs)
 
 -- | Read the config file and the environment.
@@ -460,7 +469,24 @@ environmentProfile cmd src vars positive minVar =
     get k = case lookup k vars of
       Just (v, _) | not (null v) -> Just v
       _ -> Nothing
+    -- The older list, unchanged: the args of this profile make its
+    -- fingerprint, and a new list would change the fingerprint of old vectors.
     control = ["AKYUU_EMBED_COMMAND", "AKYUU_EMBED_MODEL", "AKYUU_EMBED_MIN", "AKYUU_EMBED_TIMEOUT", "AKYUU_EMBED_MAX_CHARS", "AKYUU_EMBED_ROLE", "AKYUU_EMBED_PROFILE"]
+
+-- | The variables that akyuu reads or sets itself. An argument of a profile
+-- must not have one of these names.
+controlVars :: [String]
+controlVars =
+  [ "AKYUU_EMBED_COMMAND",
+    "AKYUU_EMBED_MODEL",
+    "AKYUU_EMBED_MIN",
+    "AKYUU_EMBED_TIMEOUT",
+    "AKYUU_EMBED_MAX_CHARS",
+    "AKYUU_EMBED_ROLE",
+    "AKYUU_EMBED_PROFILE",
+    "AKYUU_EMBED_QUERY_PREFIX",
+    "AKYUU_EMBED_DOCUMENT_PREFIX"
+  ]
 
 -- | The variable of an argument: @gguf@ is @AKYUU_EMBED_GGUF@, and
 -- @api-model@ is @AKYUU_EMBED_API_MODEL@.

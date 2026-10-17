@@ -251,4 +251,4 @@ searchCases =
           assertBool "has a note" (not (null (corrections r)))
     ]
   where
-    embedderNow = Akyuu.Embed.embedderFromEnv
+    embedderNow = Akyuu.Embed.loadEmbedder
