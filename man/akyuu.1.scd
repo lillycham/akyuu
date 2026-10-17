@@ -103,9 +103,29 @@ episodes with one *derived-from* edge; it is still read.)
 	then *agent* in the config file, then *agent*.
 	*--about-ref* links the note to a ref, as for *add*.
 
-*log* _ref_ [*-n* _n_ | *--limit* _n_] [*--full*] [*--since* _duration_]
+*log* _ref_ [*-n* _n_ | *--limit* _n_] [*--full*] [*--since* _duration_] [*--todo* [*--size* _n_] | *--resolution* [*--budget* _chars_]] [*--keep* _n_]
 	Print the episodes of a log, newest first: 20 of them, or _n_, or those of
 	the last _duration_. *--full* prints the bodies too.
+
+	*--todo* prints the oldest stretches that need a summary: runs of _n_ (8)
+	memories that no summary covers, at level 1 (episodes) and above (level-1
+	summaries, and so on). The newest _n_ (*--keep*, 10) episodes get no summary
+	yet. *--resolution* prints those newest episodes whole, each older stretch
+	as the highest summary that covers it, and an older episode that no summary
+	covers as one line. With *--budget*, it shows fewer episodes whole until the
+	text fits in _chars_; if it cannot fit, it fails and says what it needs.
+
+*summarise* _ref_ [*--level* _n_] *--source* _id_ ... *--agent* _text_ [*--kind* _text_] [_body_]
+	Record a summary of the oldest stretch of the log _ref_ that has none. The
+	sources are the memories that it covers, as *log --todo* lists them: at
+	level 1 (the default) the oldest episodes that no summary covers, at level
+	_n_ the oldest summaries of level _n_ - 1. The summary gets a *derived-from*
+	edge to each source and goes to the log _ref_*.l*_n_. The episodes stay. The
+	kind is *summary*, or *--kind*.
+
+*unfold* _id_
+	Print the sources of a summary, newest first, whole: the exact words that it
+	stands for.
 
 ## Context
 

@@ -4,6 +4,14 @@
 
 ### Added
 
+- Summaries in levels on top of a log. `log REF --todo` lists the oldest
+  stretches that need a summary, `summarise` records one in the log `REF.l1`
+  (and summaries of summaries in `REF.l2`, and so on), and `unfold ID` prints
+  the sources of a summary whole. The episodes stay. The MCP tools are `log`
+  (with `todo`), `summarise` and `unfold`.
+- `log REF --resolution` shows the newest episodes whole and each older
+  stretch as its highest summary. With `--budget`, it shows fewer episodes
+  whole until it fits, or fails and says what it needs.
 - A new edge kind, `follows`, links an episode to the one before it in its
   log. `append` and `note` write it. Before, that link was the one
   `derived_from` edge of an episode, so an episode could not cite evidence.
@@ -53,6 +61,8 @@
 
 ### Changes
 
+- The `long-log` finding of `check` counts only the episodes that no summary
+  covers, and points at `log --todo`, not at replacing the log.
 - `check` knows which memories are episodes (a memory on a log chain), and
   does not report their links to old versions as stale: an episode records a
   past state, and an episode is never superseded.

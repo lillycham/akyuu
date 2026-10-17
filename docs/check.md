@@ -73,7 +73,7 @@ sorted by severity, then kind, then ids.
 | 5 | `Unreferenced` | Suggestion | A head that no ref holds and no pin holds, and that no live memory points at with a retaining edge. GC collects it after the grace period (`explain` says "not live"). The finding shows it before GC does. |
 | 6 | `SameProject` | Suggestion | Two heads under different refs whose first line names the same path (`~/devel/akyuu`). Weak: a heuristic on the text. |
 | 7 | `Hub` | Info | A memory with more than N (default 5) incoming retaining edges. It is a sign that links should be a tier (see "Weighted connections" in the TODO). |
-| 8 | `LongLog` | Info | A log (the value of a ref that no episode follows) with more than N (default 30) episodes in its chain of `follows` edges (or, in an older log, of one `derived_from` edge each). Replace it with a summary. |
+| 8 | `LongLog` | Info | A log (the value of a ref that no episode follows) with more than N (default 30) episodes that no summary covers in its chain of `follows` edges (or, in an older log, of one `derived_from` edge each). See `log --todo`. |
 | 9 | `MissingRef` | Problem | A live memory has an `about-ref` link to a ref that does not exist. The link resolves to nothing. |
 
 Notes on each:
