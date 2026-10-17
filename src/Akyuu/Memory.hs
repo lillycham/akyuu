@@ -18,7 +18,7 @@
 -- Rules of the format:
 --
 -- * @kind@, @created@ and @agent@ are required. Each one appears once.
--- * @supersedes@, @about@, @derived-from@ and @refines@ are optional.
+-- * @supersedes@, @about@, @derived-from@, @refines@ and @follows@ are optional.
 --   Each one can appear many times. Each line holds one 'Id'.
 -- * @about-ref@ is optional and can appear many times. Each line holds one
 --   ref name: the memory is about whatever memory that ref names when it is
@@ -53,7 +53,7 @@ module Akyuu.Memory
   )
 where
 
-import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph)
+import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (About, DerivedFrom, Follows, Refines, Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, IdParseError, hashBytes)
 import Akyuu.Id qualified as Id
@@ -189,13 +189,14 @@ edgeToHeader Supersedes = "supersedes"
 edgeToHeader About = "about"
 edgeToHeader DerivedFrom = "derived-from"
 edgeToHeader Refines = "refines"
+edgeToHeader Follows = "follows"
 
 -- | Write a memory in its canonical form.
 --
 -- The order is: @kind@, @created@, @agent@, then the edge headers, then the
 -- @about-ref@ headers, then a blank line, then the body. The edge headers go
 -- in the order of the 'Edge' type: @supersedes@, @about@, @derived-from@,
--- @refines@. Inside one header name, the values are in ascending order;
+-- @refines@, @follows@. Inside one header name, the values are in ascending order;
 -- @about-ref@ values are sorted by 'nameText'.
 -- The time has the form @2026-10-05T12:00:00Z@.
 --

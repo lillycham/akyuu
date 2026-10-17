@@ -50,6 +50,8 @@ data EdgeType
     DerivedFrom
   | -- | The new memory adds detail to the old memory.
     Refines
+  | -- | The new memory is the next episode of a log, after the old memory.
+    Follows
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | An edge from a memory to an older memory. The source of the edge is the
