@@ -1,0 +1,25 @@
+Day 1 09:00 Kickoff meeting for the new bakery oven project, with the owner and the head baker.
+Day 1 10:30 Listed the needs: a gas oven, a steam injector, and room for 40 loaves.
+Day 1 12:00 The head baker asked for two fans, because the old oven bakes unevenly.
+Day 1 15:00 Measured the kitchen wall: 100 cm of free width next to the sink.
+Day 1 17:00 Agreed to ask three suppliers for a price by Thursday.
+Day 2 09:30 Phone call with the first supplier, Harwell Ovens: the 90 cm model costs 8,400 pounds.
+Day 2 11:00 Phone call with the second supplier, Brightmoor: only a 60 cm model, with one fan.
+Day 2 13:00 The third supplier, Dunmore, did not answer the supplier call and will ring back.
+Day 2 15:30 The head baker said that one fan is not enough, so Brightmoor is out.
+Day 2 16:45 Noted that Harwell Ovens ships a gas safety certificate with every oven.
+Day 3 09:00 Dunmore rang back: their 90 cm model costs 9,900 pounds and arrives in ten weeks.
+Day 3 10:15 Harwell Ovens can deliver in six weeks.
+Day 3 12:00 The fitter looked at the gas supply and said that the regulator may need to change.
+Day 3 14:00 Asked the fitter for a written quote for the regulator.
+Day 3 16:30 The owner worried about the cost, and asked for a summary of the options.
+Day 4 09:00 Wrote the summary of the three options and sent it to the owner.
+Day 4 11:30 The owner chose the 90 cm model from Harwell Ovens.
+Day 4 12:30 Decided to buy the 90 cm model, because it fits the wall and ships soonest.
+Day 4 14:00 Placed the order with Harwell Ovens and paid the deposit.
+Day 4 16:00 Booked the fitter for the week of the delivery.
+Day 5 09:00 The fitter's quote for the regulator arrived: 450 pounds.
+Day 5 10:30 Approved the regulator quote.
+Day 5 12:00 Told the head baker the delivery date and the plan for the two weeks without the old oven.
+Day 5 14:30 Cleared the wall space and moved the sink fittings.
+Day 5 17:00 Wrote the plan for the first week of baking in the new oven.
