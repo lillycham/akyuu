@@ -6,7 +6,8 @@ import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind (Fork),
 import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
 import Akyuu.Id (IdParseError (BadHex), parse, render)
-import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (mcpAgent, mcpPlace, mcpPolicyRef), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallNote, CallRefList, CallRefSet, CallReview, CallSearch, CallSearchMode), ToolResult (ToolResult), clientAgent, defaultMcpConfig, expandCall, handleLine, handleMessage, parseToolCall, resolvePrefix, runTool, supportedVersions)
+import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep, defaultSize)
+import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (mcpAgent, mcpPlace, mcpPolicyRef), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallNote, CallRefList, CallRefSet, CallReview, CallSearch, CallSearchMode, CallSummarise, CallUnfold), ToolResult (ToolResult), clientAgent, defaultMcpConfig, expandCall, handleLine, handleMessage, parseToolCall, resolvePrefix, runTool, supportedVersions)
 import Akyuu.Ops (NewMemory (newAboutRefs), SearchMode (TextOnly))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, mkName)
@@ -122,7 +123,7 @@ protocolCases =
         case r >>= at ["result", "tools"] of
           Just (Array ts) -> do
             let names = [n | t <- foldr (:) [] ts, Just (String n) <- [at ["name"] t]]
-            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list", "check", "compare", "review", "context", "append", "log", "amend", "note"]
+            Set.fromList names @?= Set.fromList ["add", "get", "supersede", "search", "neighbours", "ref_get", "ref_set", "ref_list", "check", "compare", "review", "context", "append", "log", "amend", "note", "summarise", "unfold"]
             mapM_ (\t -> (at ["inputSchema", "type"] t, isJust (at ["description"] t)) @?= (Just "object", True)) ts
           other -> assertFailure ("no tools: " <> show other),
       testCase "a tool call runs the tool" $ do
@@ -257,7 +258,18 @@ toolCallCases =
         parseToolCall "append" (args [("ref", "agent/episodes"), ("kind", "episode"), ("agent", "claude"), ("body", "x")])
           @?= Right (CallAppend n (newMem "episode" "claude" Set.empty "x"))
         parseToolCall "log" (args [("ref", "agent/episodes"), ("limit", Number 3), ("full", Bool True)])
-          @?= Right (CallLog n (Just 3) True Nothing),
+          @?= Right (CallLog n (Just 3) True Nothing Plain)
+        parseToolCall "log" (args [("ref", "agent/episodes"), ("todo", Bool True)])
+          @?= Right (CallLog n Nothing False Nothing (Todo defaultSize defaultKeep))
+        parseToolCall "log" (args [("ref", "agent/episodes"), ("resolution", Bool True), ("keep", Number 3), ("budget", Number 900)])
+          @?= Right (CallLog n Nothing False Nothing (Resolution 3 (Just 900)))
+        either (const True) (const False) (parseToolCall "log" (args [("ref", "agent/episodes"), ("todo", Bool True), ("resolution", Bool True)]))
+          @?= True,
+      testCase "summarise and unfold read their arguments" $ do
+        n <- right (mkName "agent/episodes")
+        parseToolCall "summarise" (args [("ref", "agent/episodes"), ("sources", A.toJSON [render (nid 1), render (nid 2)]), ("agent", "claude"), ("body", "sum")])
+          @?= Right (CallSummarise n 1 [nid 1, nid 2] (newMem "summary" "claude" Set.empty "sum"))
+        parseToolCall "unfold" (args [("id", A.toJSON (render (nid 1)))]) @?= Right (CallUnfold (nid 1)),
       testCase "context reads the tier and the refs" $ do
         parseToolCall "context" (args []) @?= Right (CallContext Nothing Nothing [] Nothing Nothing)
         n <- right (mkName "claude/projects/x")

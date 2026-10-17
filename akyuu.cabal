@@ -68,6 +68,7 @@ library
                    , Akyuu.Check
                    , Akyuu.Compare
                    , Akyuu.Episode
+                   , Akyuu.Levels
                    , Akyuu.Embed
                    , Akyuu.Fuzzy
                    , Akyuu.Init
@@ -118,6 +119,7 @@ test-suite akyuu-test
                     , RecallTests
                     , EmbedTests
                     , EpisodeTests
+                    , LevelsTests
                     , RefsTests
                     , StoreTests
                     , SeedTests

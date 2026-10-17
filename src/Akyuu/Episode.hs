@@ -13,8 +13,9 @@
 -- does not keep the old memory alive, so a superseded memory is garbage.
 -- Episodes are not replaced, they pile up, so the link keeps its target alive.
 --
--- To forget, replace the whole log with a summary: 'Akyuu.Supersede.supersede'
--- the ref with a memory that holds the summary. The summary has a @supersedes@
+-- To read an old stretch cheaply, write a summary beside it ("Akyuu.Levels"):
+-- the episodes stay. To forget, replace the whole log with a summary:
+-- 'Akyuu.Supersede.supersede' the ref with a memory that holds the summary. The summary has a @supersedes@
 -- edge to the newest episode, so the chain is not kept by it, and GC collects
 -- the chain once the ref generations that name it are past.
 module Akyuu.Episode

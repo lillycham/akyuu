@@ -48,10 +48,11 @@ import Akyuu.Fuzzy qualified as Fuzzy
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLog, readLogSince, readRef, refLinksOf, resolveId, reviewPair, searchMemoriesMode, setRefTo, supersedeMemory)
+import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep, defaultSize)
+import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLevels, readLog, readLogSince, readRef, refLinksOf, resolveId, reviewPair, searchMemoriesMode, setRefTo, summariseLog, supersedeMemory, unfoldMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareLines, edgeName, findingLines, heldBy, idLine, logLines, memoryText, neighbourLines, refLines, refLinkLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage)
+import Akyuu.Render (compareLines, edgeName, episodeLines, findingLines, heldBy, idLine, logLines, memoryText, neighbourLines, refLines, refLinkLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage, viewLines)
 import Akyuu.Tier (Place (Place), defaultPolicyRef, defaultTiersRef)
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (forM_, unless)
@@ -107,7 +108,11 @@ data ToolCall
   | -- | Append an episode to a log.
     CallAppend Name NewMemory
   | -- | Read a log: the ref, the limit, and whether to show the bodies.
-    CallLog Name (Maybe Int) Bool (Maybe NominalDiffTime)
+    CallLog Name (Maybe Int) Bool (Maybe NominalDiffTime) LogView
+  | -- | A summary at a level of a log: the ref, the level, the sources.
+    CallSummarise Name Int [Id] NewMemory
+  | -- | The sources of a summary.
+    CallUnfold Id
   | -- | The tier ('Nothing' for always), the directory that stands for where
     -- the session works, and extra refs.
     CallContext (Maybe Text) (Maybe Text) [Name] (Maybe Int) (Maybe Int)
@@ -235,7 +240,7 @@ toolList =
       ),
     tool
       "append"
-      "Add an episode to a log. A log is a ref that names the newest of a chain of memories: each episode points at the one before it, so the whole chain stays in the store. Use it for what happened or was said, which you want to keep and not to replace. The ref is created on the first call. To change what is current about a topic, use supersede instead. A log can only be shortened by replacing it with a summary (supersede the ref)."
+      "Add an episode to a log. A log is a ref that names the newest of a chain of memories: each episode points at the one before it, so the whole chain stays in the store. Use it for what happened or was said, which you want to keep and not to replace. The ref is created on the first call. To change what is current about a topic, use supersede instead. An old stretch of a log gets a summary with summarise; the episodes stay."
       ( objectSchema
           [ ("ref", refSchema),
             ("kind", stringSchema "The kind of memory, for example episode. One line, no space at either end."),
@@ -250,15 +255,37 @@ toolList =
       ),
     tool
       "log"
-      "Read the episodes of a log, newest first: one line each with the id, the time, the agent, the kind and the first line. With full, the bodies too. A last line more: ID says that the log goes on. Use get with an id to read one episode."
+      "Read the episodes of a log, newest first: one line each with the id, the time, the agent, the kind and the first line. With full, the bodies too. A last line more: ID says that the log goes on. Use get with an id to read one episode. With todo, the oldest stretches that need a summary (record one with summarise). With resolution, the recent episodes whole and the older ones as their summaries (read the sources of one with unfold)."
       ( objectSchema
           [ ("ref", refSchema),
             ("limit", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "default" .= (20 :: Int), "description" .= ("The most episodes to return." :: Text)]),
             ("full", object ["type" .= ("boolean" :: Text), "default" .= False]),
-            ("since", stringSchema "Only the episodes of the last length of time, for example 1d or 7d. With since, the default limit is 200.")
+            ("since", stringSchema "Only the episodes of the last length of time, for example 1d or 7d. With since, the default limit is 200."),
+            ("todo", object ["type" .= ("boolean" :: Text), "default" .= False, "description" .= ("List the oldest stretches that need a summary, each with its level and the ids to give to summarise." :: Text)]),
+            ("resolution", object ["type" .= ("boolean" :: Text), "default" .= False, "description" .= ("Show the recent episodes whole, and each older stretch as the highest summary that covers it." :: Text)]),
+            ("size", object ["type" .= ("integer" :: Text), "minimum" .= (2 :: Int), "default" .= defaultSize, "description" .= ("With todo, the memories that one summary covers." :: Text)]),
+            ("keep", object ["type" .= ("integer" :: Text), "minimum" .= (0 :: Int), "default" .= defaultKeep, "description" .= ("The newest episodes that are shown whole and get no summary yet." :: Text)]),
+            ("budget", object ["type" .= ("integer" :: Text), "minimum" .= (200 :: Int), "description" .= ("With resolution, the most characters to return. Fewer episodes are shown whole until it fits. If it cannot fit, the call fails and says what it needs." :: Text)])
           ]
           ["ref"]
       ),
+    tool
+      "summarise"
+      "Record a summary of the oldest stretch of a log that has none. Call log with todo first: it gives the level and the ids of the sources. Read the sources whole (log with full, or get), and write a summary that keeps the decisions, the facts and the names. The summary goes to the log of its level, and the episodes stay."
+      ( objectSchema
+          [ ("ref", refSchema),
+            ("level", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "default" .= (1 :: Int), "description" .= ("The level of the summary. Level 1 covers episodes, level 2 covers level-1 summaries." :: Text)]),
+            ("sources", idsSchema "The memories that the summary covers: the oldest of the level below that no summary covers, as log with todo lists them."),
+            ("body", stringSchema "The text of the summary."),
+            ("agent", stringSchema "The name of the agent that writes the summary. One line, no space at either end."),
+            ("kind", stringSchema "The kind of the summary. The default is summary.")
+          ]
+          ["ref", "sources", "body", "agent"]
+      ),
+    tool
+      "unfold"
+      "Read the sources of a summary whole, newest first: the exact words that it stands for. Use it before you quote a summary, or when it leaves out a detail you need."
+      (objectSchema [("id", idSchema "The id of the summary.")] ["id"]),
     tool
       "context"
       "Read the memories that every session needs, in one call: the profile, the preferences, the policy and the others that the manifest of the store puts in a tier. Call it at the start of work. The text ends with the names of the other refs. Pass refs to add the memories of a project, for example the ref of the project that you work in."
@@ -528,7 +555,26 @@ parseArgs n args = case n of
     lim <- traverse (atLeast "limit" 1) l
     sinceT <- optional' args "since" asText "a string"
     since <- traverse (check . parseDuration) sinceT
-    pure (CallLog r lim full since)
+    todoV <- maybe False id <$> optional' args "todo" asBool "true or false"
+    resV <- maybe False id <$> optional' args "resolution" asBool "true or false"
+    size <- optional' args "size" asInt "a whole number" >>= atLeast "size" 2 . maybe defaultSize id
+    keep <- optional' args "keep" asInt "a whole number" >>= atLeast "keep" 0 . maybe defaultKeep id
+    budget <- optional' args "budget" asInt "a whole number" >>= traverse (atLeast "budget" 200)
+    view <- case (todoV, resV) of
+      (True, True) -> Left (BadArguments "Give todo or resolution, not both.")
+      (True, False) -> pure (Todo size keep)
+      (False, True) -> pure (Resolution keep budget)
+      (False, False) -> pure Plain
+    pure (CallLog r lim full since view)
+  "summarise" -> do
+    r <- refArg args
+    level <- optional' args "level" asInt "a whole number" >>= atLeast "level" 1 . maybe 1 id
+    ss <- required args "sources" (asList asText) "a list of id strings" >>= traverse parseId
+    k <- maybe "summary" id <$> optional' args "kind" asText "a string" >>= check . checkField "kind"
+    a <- required args "agent" asText "a string" >>= check . checkField "agent"
+    b <- required args "body" asText "a string"
+    pure (CallSummarise r level ss NewMemory {newKind = k, newAgent = a, newEdges = Set.empty, newBody = b, newAboutRefs = Set.empty})
+  "unfold" -> CallUnfold <$> idArg args "id"
   "context" -> do
     t <- optional' args "tier" asText "a string"
     rs <- maybe [] id <$> optional' args "refs" (asList asText) "a list of strings"
@@ -590,7 +636,7 @@ idKeys = ["id", "a", "b", "expected"]
 
 -- | Arguments that hold a list of ids.
 idListKeys :: [Text]
-idListKeys = ["about", "derived_from", "refines", "supersedes"]
+idListKeys = ["about", "derived_from", "refines", "supersedes", "sources"]
 
 -- | The fewest hex digits of an id that a tool call may give.
 minIdDigits :: Int
@@ -670,7 +716,15 @@ runTool cfg env c = either failed id <$> go
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
       CallAppend n m -> fmap (\i -> okText (Id.render i) False) <$> appendEpisode env n m
-      CallLog n lim full since -> fmap (\w -> (if full then id else shorten) (okText (T.intercalate "\n" (logLines full w)) False)) <$> maybe (readLog env n (maybe 20 id lim)) (readLogSince env n (maybe 200 id lim)) since
+      CallLog n lim full since Plain -> fmap (\w -> (if full then id else shorten) (okText (T.intercalate "\n" (logLines full w)) False)) <$> maybe (readLog env n (maybe 20 id lim)) (readLogSince env n (maybe 200 id lim)) since
+      CallLog n _ full _ view -> do
+        levels <- readLevels env n
+        pure $
+          levels >>= \ls -> case viewLines full view ls of
+            Left t -> Left (BadInput t)
+            Right xs -> Right (okText (T.intercalate "\n" xs) False)
+      CallSummarise n level ss m -> fmap (\i -> okText (Id.render i) False) <$> summariseLog env n level ss m
+      CallUnfold i -> fmap (\ms -> okText (T.intercalate "\n" (concatMap (episodeLines True) ms)) False) <$> unfoldMemory env i
       CallRefList -> do
         r <- listRefValues env
         case r of

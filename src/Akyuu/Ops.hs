@@ -60,6 +60,9 @@ module Akyuu.Ops
     appendEpisode,
     readLog,
     readLogSince,
+    readLevels,
+    summariseLog,
+    unfoldMemory,
     unreviewPair,
     listReviewed,
     ContextEntry (..),
@@ -106,6 +109,7 @@ import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Init qualified as Init
+import Akyuu.Levels qualified as Levels
 import Akyuu.Memory (Memory (memAboutRefs, memAgent, memBody, memCreated, memEdges, memKind), MemoryError (InvalidField), MemoryParseError, mkMemory, validField, withAboutRefs)
 import Akyuu.Query (Neighbour, RefLink, SearchOptions, SearchResult)
 import Akyuu.Query qualified as Query
@@ -1117,6 +1121,60 @@ readLog :: Env -> Name -> Int -> IO (Either AkyuuError Walk)
 readLog env n limit = runExceptT $ do
   ref <- ExceptT (readRef env n)
   liftIO (Episode.walk (envStore env) limit (current ref))
+
+-- Levels ---------------------------------------------------------------
+
+-- | Every level of a log, from level 0 (the log), each one oldest first
+-- ('Akyuu.Levels'). The list stops at the first level whose ref does not
+-- exist. The log must exist.
+readLevels :: Env -> Name -> IO (Either AkyuuError [Levels.Chain])
+readLevels env n = runExceptT $ do
+  base <- chainOf n
+  rest <- above 1
+  pure (base : rest)
+  where
+    chainOf r = do
+      ref <- ExceptT (readRef env r)
+      w <- liftIO (Episode.walk (envStore env) maxBound (current ref))
+      pure (reverse (Episode.walkEntries w))
+    above :: Int -> ExceptT AkyuuError IO [Levels.Chain]
+    above k = do
+      r <- levelName n k
+      there <- liftIO (readRef env r)
+      case there of
+        Left _ -> pure []
+        Right _ -> (:) <$> chainOf r <*> above (k + 1)
+
+-- | The ref of a level of a log ('Akyuu.Levels.levelRef').
+levelName :: Name -> Int -> ExceptT AkyuuError IO Name
+levelName n k = either (throwE . BadName (Refs.nameText n)) pure (Levels.levelRef n k)
+
+-- | Record a summary at a level of a log, and return its 'Id'. The sources
+-- must be the oldest memories of the level below that no summary covers
+-- ('Akyuu.Levels.checkSources'). The summary gets a @derived_from@ edge to
+-- each source, and is appended to the log of its level, which starts with
+-- the first summary.
+--
+-- Two agents that summarise the same stretch at the same time can both pass
+-- the check. Then @check@ shows two summaries of one stretch.
+summariseLog :: Env -> Name -> Int -> [Id] -> NewMemory -> IO (Either AkyuuError Id)
+summariseLog env n k ids nm = runExceptT $ do
+  levels <- ExceptT (readLevels env n)
+  either (throwE . BadInput) pure (Levels.checkSources k ids levels)
+  r <- levelName n k
+  ExceptT (appendEpisode env r nm {newEdges = newEdges nm <> Set.fromList (map (Edge DerivedFrom) ids)})
+
+-- | The sources of a summary (its @derived_from@ edges), newest first, in the
+-- order of their chain ('Akyuu.Levels.chainOrder'). A memory with no sources
+-- is an error: it is not a summary.
+unfoldMemory :: Env -> Id -> IO (Either AkyuuError [(Id, Memory)])
+unfoldMemory env i = runExceptT $ do
+  m <- ExceptT (getMemory env i)
+  case Levels.sources m of
+    [] -> throwE (BadInput "This memory has no derived_from edges, so it is not a summary and has nothing to unfold.")
+    ss -> do
+      ms <- traverse (\s -> (,) s <$> ExceptT (getMemory env s)) ss
+      pure (Levels.chainOrder ms)
 
 -- The refs of the policy and the manifest ------------------------------------
 

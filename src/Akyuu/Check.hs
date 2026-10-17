@@ -78,8 +78,8 @@ data FindingKind
     Unreferenced
   | -- | A memory that many memories point at.
     Hub
-  | -- | A log (a chain of episodes under a ref) with many episodes. It
-    -- is time to replace it with a summary.
+  | -- | A log (a chain of episodes under a ref) with many episodes that no
+    -- summary covers. See @log --todo@.
     LongLog
   | -- | A live memory has an @about-ref@ link to a ref that does not exist.
     MissingRef
@@ -152,7 +152,7 @@ check o i =
         <> filter (not . judged) (nearDuplicates o g hs bodies)
         <> unreferenced g hs (inRoots i)
         <> hubs o g kept
-        <> longLogs o logs
+        <> longLogs o g logs
     )
   where
     g = inGraph i
@@ -330,9 +330,10 @@ hubs o g hs =
   ]
 
 -- | A log that has grown long: one of 'logChains' with more than 'longLog'
--- episodes.
-longLogs :: CheckOptions -> [(Id, [Id])] -> [Finding]
-longLogs o logs =
+-- episodes that no summary covers. A memory outside the chain with a
+-- @derived_from@ edge to an episode covers it ("Akyuu.Levels").
+longLogs :: CheckOptions -> Graph -> [(Id, [Id])] -> [Finding]
+longLogs o g logs =
   [ Finding
       { findingKind = LongLog,
         findingSeverity = Info,
@@ -341,10 +342,15 @@ longLogs o logs =
         findingWhy =
           "This log has "
             <> T.pack (show n)
-            <> " episodes. Replace it with a summary (supersede the ref) when you can, so that it stays short."
+            <> " episodes that no summary covers. See log --todo for the stretches to summarise. The episodes stay."
       }
   | (h, chain) <- logs,
-    let n = length chain,
+    let inChain = Set.fromList chain
+        -- A summary, or a fact with this evidence, has a derived_from
+        -- edge to the episode. In an older log, the next episode has one
+        -- too: that is the chain, and it does not cover.
+        covered e = any (\(k, s) -> k == DerivedFrom && s `Set.notMember` inChain) (ins e g)
+        n = length (filter (not . covered) chain),
     n > longLog o
   ]
 

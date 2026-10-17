@@ -38,6 +38,10 @@ module Akyuu.Render
     tierLinesWithin,
     tierPage,
     logLines,
+    episodeLines,
+    todoLines,
+    resolutionLines,
+    viewLines,
     verifyLines,
     edgeName,
     dirName,
@@ -54,6 +58,8 @@ import Akyuu.Error qualified as Error
 import Akyuu.GC (RunReport (swept), SweepReport (deleted, trashed))
 import Akyuu.Graph (Dir (In, Out), EdgeType)
 import Akyuu.Id (Id, render)
+import Akyuu.Levels (Item (Brief, Summary), LogView (Plain, Resolution, Todo), Run (runFrom, runLevel, runMemories, runTo))
+import Akyuu.Levels qualified as Levels
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader, renderMemory)
 import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, NoManifest, Present), ContextReport (ContextReport), EmbedReport (already, embedChanged, embedFailed, embedded), EmbedStatus (ebChanged, ebKey, ebProfile, ebVectors), EvalRow (evalCase, evalFound), SearchMode (Fused, MeaningOnly, TextOnly), StatusReport (stConfig, stEmbed, stGit, stManifest, stMemories, stPins, stPolicy, stRefs, stRoot), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), RefLink (linkDir, linkId, linkRef), SearchResult (context, corrections, matches))
@@ -69,7 +75,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
-import Data.Time (defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 
 -- | A memory in the file format of the store, as text. The store holds
 -- UTF-8, so the decode cannot fail.
@@ -522,12 +528,72 @@ contextBrief a = contextEntry a
 -- body follows, indented. A last line @more: ID@ says that the log goes on
 -- from that episode.
 logLines :: Bool -> Walk -> [Text]
-logLines full (Walk es more) = concatMap one es <> maybe [] (\i -> ["more: " <> render i]) more
+logLines full (Walk es more) = concatMap (episodeLines full) es <> maybe [] (\i -> ["more: " <> render i]) more
+
+-- | One memory of a log: a line with its id, time, agent, kind and first line,
+-- and with 'True' its body too, indented by two spaces.
+episodeLines :: Bool -> (Id, Memory) -> [Text]
+episodeLines full (i, m) =
+  T.intercalate "  " [render i, stamp (memCreated m), memAgent m, memKind m, firstLine (memBody m)]
+    : ["  " <> l | full, l <- T.lines (memBody m)]
   where
-    one (i, m) =
-      T.intercalate "  " [render i, T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (memCreated m)), memAgent m, memKind m, firstLine (memBody m)]
-        : ["  " <> l | full, l <- T.lines (memBody m)]
     firstLine b = case filter (not . T.null) (map T.strip (T.lines b)) of
       (l : _) | T.length l > 100 -> T.take 99 l <> "…"
       (l : _) -> l
       [] -> ""
+
+stamp :: UTCTime -> Text
+stamp = T.pack . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
+
+-- | What needs a summary ('Akyuu.Levels.todo'): for each run, a line with
+-- the level and the time span, then its memories, oldest first, as in
+-- 'logLines'.
+todoLines :: Bool -> [Run] -> [Text]
+todoLines _ [] = ["Nothing needs a summary."]
+todoLines full rs = concatMap one rs
+  where
+    one r =
+      ( "level "
+          <> T.pack (show (runLevel r))
+          <> ": "
+          <> count (length (runMemories r)) "memory"
+          <> ", "
+          <> stamp (runFrom r)
+          <> " to "
+          <> stamp (runTo r)
+      )
+        : map ("  " <>) (concatMap (episodeLines full) (runMemories r))
+
+-- | A view of a log from its levels. 'Left' is a sentence: the log does not
+-- fit in the budget. 'Plain' is not a view of the levels, so it gives
+-- nothing here: use 'logLines'.
+viewLines :: Bool -> LogView -> [Levels.Chain] -> Either Text [Text]
+viewLines _ Plain _ = Right []
+viewLines full (Todo size keep) levels = Right (todoLines full (Levels.todo size keep levels))
+viewLines _ (Resolution keep Nothing) levels = Right (resolutionLines (Levels.resolution keep levels))
+viewLines _ (Resolution keep (Just budget)) levels =
+  case Levels.fit (T.intercalate "\n" . resolutionLines) budget keep levels of
+    Right t -> Right (T.lines t)
+    Left need ->
+      Left
+        ( "The log does not fit in "
+            <> T.pack (show budget)
+            <> " characters: with every summary that it has, and no episode whole, it needs "
+            <> T.pack (show need)
+            <> ". Summarise more (see log --todo), or give a larger budget."
+        )
+
+-- | A log at a resolution ('Akyuu.Levels.resolution'), newest first. A recent
+-- episode is whole, an older one is its first line, and a summary is a line
+-- with its level and the episodes that it stands for, then its body. If there
+-- is a summary, a last line says how to read its sources.
+resolutionLines :: [Item] -> [Text]
+resolutionLines items = concatMap one items <> ["Read the sources of a summary with unfold ID." | any isSummary items]
+  where
+    one (Levels.Episode i m) = episodeLines True (i, m)
+    one (Brief i m) = episodeLines False (i, m)
+    one (Summary k i m n from to) =
+      T.intercalate "  " [render i, "level " <> T.pack (show k), count n "episode", stamp from <> " to " <> stamp to]
+        : ["  " <> l | l <- T.lines (memBody m)]
+    isSummary Summary {} = True
+    isSummary _ = False
