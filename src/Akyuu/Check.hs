@@ -34,8 +34,9 @@ module Akyuu.Check
   )
 where
 
+import Akyuu.Episode (previous)
 import Akyuu.GC (Roots (rootRefs), allRoots, retains)
-import Akyuu.Graph (Dir (In, Out), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph)
+import Akyuu.Graph (Dir (In, Out), Edge (Edge), EdgeType (About, DerivedFrom, Follows, Refines, Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id, render)
 import Akyuu.Query (resolve)
@@ -144,20 +145,24 @@ check :: CheckOptions -> Inputs -> [Finding]
 check o i =
   sortOn
     (\f -> (findingSeverity f, findingKind f, findingIds f, findingRelated f))
-    ( staleLinks g kept heldBy
+    ( staleLinks g (kept `Set.difference` episodes) heldBy
         <> missingRefs kept (inAboutRefs i) (inRefValues i)
         <> filter (not . judged) (forks g)
         <> filter (not . judged) (duplicates g hs bodies)
         <> filter (not . judged) (nearDuplicates o g hs bodies)
         <> unreferenced g hs (inRoots i)
         <> hubs o g kept
-        <> longLogs o g (rootRefs (inRoots i))
+        <> longLogs o logs
     )
   where
     g = inGraph i
     hs = Graph.heads g
     bodies = inBodies i
     heldBy = Map.fromListWith (<>) [(v, [n]) | (n, v) <- Map.toAscList (inRefValues i)]
+    logs = logChains g (rootRefs (inRoots i))
+    -- An episode records what was true when it was written, so an edge to an
+    -- old version is right there, and an episode is never superseded.
+    episodes = Set.fromList (concatMap snd logs)
     -- A finding is left out when every pair of the memories in it is judged.
     judged f =
       let is = if findingKind f == Fork then findingRelated f else findingIds f
@@ -324,12 +329,10 @@ hubs o g hs =
     n > hubDegree o
   ]
 
--- | A log that has grown long: a value of a ref that no episode follows,
--- with a chain of more than 'longLog' episodes behind it. The chain goes
--- through the one @derived_from@ edge of each episode, as 'Akyuu.Episode'
--- writes it, and stops at a memory with no such edge, or with more than one.
-longLogs :: CheckOptions -> Graph -> Set Id -> [Finding]
-longLogs o g refs =
+-- | A log that has grown long: one of 'logChains' with more than 'longLog'
+-- episodes.
+longLogs :: CheckOptions -> [(Id, [Id])] -> [Finding]
+longLogs o logs =
   [ Finding
       { findingKind = LongLog,
         findingSeverity = Info,
@@ -340,18 +343,37 @@ longLogs o g refs =
             <> T.pack (show n)
             <> " episodes. Replace it with a summary (supersede the ref) when you can, so that it stays short."
       }
-  | h <- Set.toAscList refs,
-    null [() | (k, _) <- ins h g, k == DerivedFrom],
-    let n = chainLength h,
+  | (h, chain) <- logs,
+    let n = length chain,
     n > longLog o
   ]
+
+-- | The logs among the values of the refs, each with its episodes, newest
+-- first. The chain goes from an episode to the one before it
+-- ('Akyuu.Episode.previous').
+--
+-- A value is a log if it has a @follows@ edge, and no episode follows it. A
+-- log written before the @follows@ edge is a chain of three or more memories
+-- with one @derived_from@ edge each, and no @supersedes@ edge: a shorter one
+-- looks the same as a fact with one piece of evidence. Such a log is found by
+-- its own rule until its next episode, which has a @follows@ edge. A memory
+-- with a @supersedes@ edge ends a chain, because an episode never replaces
+-- anything.
+logChains :: Graph -> Set Id -> [(Id, [Id])]
+logChains g refs =
+  [ (h, chain)
+  | h <- Set.toAscList refs,
+    null [() | (k, _) <- ins h g, k == Follows],
+    let chain = chainFrom h,
+    Follows `elem` map fst (outs h g)
+      || (null [() | (k, _) <- ins h g, k == DerivedFrom] && length chain >= 3)
+  ]
   where
-    chainLength = go Set.empty (0 :: Int)
-    go seen n x
-      | x `Set.member` seen = n
-      | otherwise = case [t | (DerivedFrom, t) <- outs x g] of
-          [t] -> go (Set.insert x seen) (n + 1) t
-          _ -> n + 1
+    chainFrom = go Set.empty
+    go seen x
+      | x `Set.member` seen = []
+      | Supersedes `elem` map fst (outs x g) = []
+      | otherwise = x : maybe [] (go (Set.insert x seen)) (previous [Edge k t | (k, t) <- outs x g])
 
 -- Helpers --------------------------------------------------------------
 

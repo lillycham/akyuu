@@ -101,7 +101,7 @@ import Akyuu.Episode qualified as Episode
 import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadConfig, BadField, BadIdSpec, BadInput, BadName, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
 import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
-import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Supersedes), Graph)
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Follows, Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
@@ -1076,15 +1076,24 @@ noteEpisode env manifestRef place new = runExceptT $ do
       BadTierRef n r _ -> "The manifest has a bad ref name on line " <> T.pack (show n) <> ": '" <> r <> "'."
 
 -- | Append an episode to the log that a ref names ('Akyuu.Episode.append').
--- A ref that does not exist starts a log. The new memory gets a
--- @derived_from@ edge to the newest episode, and the ref moves to it.
+-- A ref that does not exist starts a log. The new memory gets a @follows@
+-- edge to the newest episode, and the ref moves to it.
 --
--- The memory must not have a @derived_from@ edge: that edge is the link of
--- the chain. Use @about@ or @refines@ to link an episode to something else.
+-- The memory must not have a @follows@ edge: append adds it. It can have
+-- @derived_from@ edges to its evidence, except that the first episode of a log
+-- cannot have exactly one: an older log links its episodes with one
+-- @derived_from@ edge, so a reader would take the evidence for the episode
+-- before it ('Akyuu.Episode.previous').
 appendEpisode :: Env -> Name -> NewMemory -> IO (Either AkyuuError Id)
 appendEpisode env n nm = runExceptT $ do
-  let linked = [() | Edge k _ <- Set.toList (newEdges nm), k == DerivedFrom]
-  unless (null linked) (throwE (BadInput "An episode links to the one before it with derived_from, and append adds that edge. Use about or refines for other links."))
+  let count k = length [() | Edge k' _ <- Set.toList (newEdges nm), k' == k]
+  unless (count Follows == 0) (throwE (BadInput "An episode links to the one before it with follows, and append adds that edge."))
+  there <- liftIO (readRef env n)
+  case there of
+    Left _
+      | count DerivedFrom == 1 ->
+          throwE (BadInput "The first episode of a log cannot have exactly one derived_from edge: older logs link their episodes that way. Give it in the next episode, or use about or refines.")
+    _ -> pure ()
   linkable env nm
   m <- buildNow nm
   i <- withExceptT fromSupersede (ExceptT (Episode.append (envStore env) (envRefs env) n m))

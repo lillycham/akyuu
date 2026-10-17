@@ -4,7 +4,7 @@ module GCTests (gcTests) where
 
 import Akyuu.Cache (Cache, cachedIds, closeCache, openCache)
 import Akyuu.GC (GCError (CorruptTombstone, GCLocked, GCRefs), Observed (Observed), Policy (Policy, gracePeriod, keepGenerations, trashTTL), Reason (HeldByPin, HeldByRef, HeldByTemp, IsYoung, RetainedBy), Roots (Roots, rootPins, rootRefs, rootTemps), RunReport (planned, swept), SweepReport (SweepReport, deleted, trashed), Tombstone (Tombstone), TombstoneParseError (BadTombstone, TombstoneNotUtf8), Why (Why, whyIsNode, whyLive, whyPath, whyReasons), allRoots, collect, defaultPolicy, dryRun, explain, explainAll, gcLockPath, listPins, listTombstones, listTrash, lookupTombstone, parseTombstone, pin, pinPath, plan, readRoots, recheck, renderTombstone, retains, snapshot, sweep, sweepAndSync, tombstonePath, unpin, withGCLock)
-import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, nodes, reachable, singleton, successors)
+import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Follows, Refines, Supersedes), Graph, nodes, reachable, singleton, successors)
 import Akyuu.Id (Id)
 import Akyuu.Memory (Memory)
 import Akyuu.Refs (Expected (Unchecked), RefError (CorruptRef), Refs, mkName, openRefs, refPath, setRef)
@@ -106,7 +106,9 @@ retainsTests =
   testGroup
     "retains"
     [ testCase "only Supersedes does not retain" $
-        [k | k <- [minBound .. maxBound], not (retains k)] @?= [Supersedes]
+        [k | k <- [minBound .. maxBound], not (retains k)] @?= [Supersedes],
+      testCase "a follows edge keeps the episode before it" $
+        retains Follows @?= True
     ]
 
 -- plan -----------------------------------------------------------------

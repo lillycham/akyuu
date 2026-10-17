@@ -134,7 +134,7 @@ where
 import Akyuu.Cache (Cache, CacheError, SyncReport)
 import Akyuu.Cache qualified as Cache
 import Akyuu.Fs (atomicWrite, ifMissing, tryWith)
-import Akyuu.Graph (EdgeType (About, DerivedFrom, Refines, Supersedes), Graph, nodes, predecessors, reachable, singleton, successors)
+import Akyuu.Graph (EdgeType (About, DerivedFrom, Follows, Refines, Supersedes), Graph, nodes, predecessors, reachable, singleton, successors)
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memEdges), timeFormat)
@@ -195,6 +195,7 @@ retains Supersedes = False
 retains About = True
 retains DerivedFrom = True
 retains Refines = True
+retains Follows = True
 
 -- Policy ---------------------------------------------------------------
 
