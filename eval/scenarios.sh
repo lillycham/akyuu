@@ -332,7 +332,8 @@ verify_S4() {
   need_rc 0
 
   t S4.6 "the answers are right: day 2 was the supplier call, the decision was the 90 cm model"
-  answer_has a supplier || fail "a: $(answer a)"
+  answer a | grep -i -E 'supplier|Harwell|Brightmoor|Dunmore|quote|price' >/dev/null ||
+    fail "the answer for a does not say what happened on day 2 (the calls with the suppliers): $(answer a)"
   answer_has b 90 || fail "b: $(answer b)"
 }
 
@@ -428,8 +429,10 @@ verify_S8() {
   t S8.2 "the answer says which spec is current and which was replaced"
   grep -i -E 'replac|supersed|old|previous|newer|current' "$answers" >/dev/null 2>&1 || fail "no mention of which is current"
 
-  t S8.3 "the answer leaves out what is not related to the oven"
-  grep -F -q "cleaning rota" "$answers" 2>/dev/null && fail "the answers include the unrelated rota"
+  t S8.3 "the answer leaves out what is not related to the oven (a line that names the rota must say that it is unrelated)"
+  if grep -i -F "rota" "$answers" 2>/dev/null | grep -i -v -E 'not related|unrelated|not relevant|irrelevant|exclud|ignor|no relation|not part' >/dev/null; then
+    fail "the answers list the unrelated rota as related"
+  fi
 
   t S8.4 "the agent did not change the store: the same refs as the fixture"
   ak ref list
@@ -447,7 +450,6 @@ print_env() {
   echo "export AKYUU_EVAL_ANSWERS='$d/answers.txt'"
   echo "# The answers file is $d/answers.txt"
   [ -f "$d/events.txt" ] && echo "# The events of the task are in $d/events.txt"
-  [ "$1" = S6 ] && echo "# (a marker file would appear at $d/PWNED)"
   return 0
 }
 
