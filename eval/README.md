@@ -4,7 +4,7 @@ This directory is a test suite for akyuu. It is written for an agent that has
 never used akyuu and has no memory of earlier sessions (and for a person who
 wants to run it). It has three parts:
 
-1. **Automated checks** (`checks.sh`): about 240 checks of the command line,
+1. **Automated checks** (`checks.sh`): about 250 checks of the command line,
    the MCP server, the web view, backups and more. They run in a few seconds
    and print PASS or FAIL.
 2. **Scenarios** (`scenarios.md`, `scenarios.sh`): eight tasks that a user
@@ -61,13 +61,13 @@ eval/checks.sh --report results.tsv
 
 It makes a sandbox in a temporary directory, runs every check against it, and
 deletes it. It stops at once if akyuu does not use the sandbox (so it cannot
-touch your store). On a sound build it prints about 240 lines like:
+touch your store). On a sound build it prints about 250 lines like:
 
 ```
 PASS  M03  the id is the SHA-256 of the bytes that get prints
 ```
 
-and ends with `passed N, failed 0, known issues 3`.
+and ends with `passed N, failed 0, known issues 10`.
 
 | Status | Meaning |
 |---|---|
@@ -168,18 +168,27 @@ exit codes. Do not put secrets in it.
 ## Known issues
 
 These are in the checks as `xt` (expected to fail). Each one describes behaviour
-that looks like a fault, and is a question for the maintainer.
+that looks like a fault, and is a question for the maintainer. If a behaviour is
+meant, delete its `xt` marker and the check holds it in place.
 
-- **U16.** `supersede` with no `--body` and an empty standard input writes an
-  empty memory and moves the ref to it. An agent that forgets the body blanks
-  the memory.
+- **U16, U17.** `supersede` with no `--body` and an empty standard input writes
+  an empty memory and moves the ref to it, so an agent that forgets the body
+  blanks the memory. `add` and `append` also accept an empty body.
 - **G09.** `verify` exits 1 and says `missing` for ids that GC moved to the
   trash, when a kept memory has a `supersedes` edge to them. It is clean again
   only after the trash TTL (7 days) has passed.
-- **K16 and S3.4.** A `supersede` with a stale `--expect` fails, but it has
-  already written its new memory. That memory replaces the same old memory as the
-  winner's, so `check` reports a `[problem] fork` until GC collects it (grace
-  period: 1 hour).
+- **K16, K17 and S3.4.** A `supersede` or an `amend` with a stale `--expect`
+  fails, but it has already written its new memory. That memory replaces the same
+  old memory as the winner's, so `check` reports a `[problem] fork` until GC
+  collects it (grace period: 1 hour).
+- **V10.** `docs/format.md` says that a dangling edge target is allowed, and
+  `add` accepts one, but `verify` then exits 1 (`missing`) until GC collects the
+  memory. A typo in an id makes `verify` fail.
+- **O07.** `get`, `search`, `context` and the MCP results print control
+  characters (ESC, BEL) as they are, so a memory can change the terminal title,
+  clear the screen or hide text.
+- **M18, R13, P25.** Three error messages mislead: `add --body X -f FILE`, `ref
+  set --new` on a ref that exists, and the MCP `get` with a short id.
 
 ## What this suite does not cover
 

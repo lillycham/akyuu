@@ -78,4 +78,13 @@ sec_verify() {
   ak status
   need_rc 0
   need_out_match 'memories: [0-9]+, refs: 2'
+
+  xt V10 "the docs and verify agree about an edge to an id that is not in the store: it is refused, or verify accepts it" \
+    "docs/format.md says that a dangling target is allowed, and add accepts one, but verify then exits 1 ('missing') until GC collects the memory. One typo in an id makes verify fail"
+  use_root verify-dangling
+  ak add --kind fact --agent tester --supersedes sha256-1111111111111111111111111111111111111111111111111111111111111111 --body "a typo in an id"
+  if [ "$rc" = 0 ]; then
+    ak verify
+    need_rc 0
+  fi
 }

@@ -136,4 +136,11 @@ sec_supersede() {
   [ "$rc" != 0 ] || fail "supersede with no body succeeded"
   ak ref get me/plan
   need_out_eq "$before" "the ref moved to an empty memory"
+
+  xt U17 "add and append refuse an empty body, as supersede should" \
+    "add --body '' and append with an empty body succeed and write an empty memory (an empty memory is also a duplicate-body finding)"
+  ak add --kind fact --agent tester --body ""
+  [ "$rc" != 0 ] || fail "add accepted an empty body"
+  ak append me/empty-log --kind episode --agent tester --body ""
+  [ "$rc" != 0 ] || fail "append accepted an empty body"
 }

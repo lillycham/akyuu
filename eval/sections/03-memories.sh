@@ -152,4 +152,11 @@ lines" --agent tester --body x
   t M17 "an unknown id in --about-ref's place: a ref that does not exist is refused"
   ak add --kind fact --agent tester --about-ref no/such/ref --body x
   need_rc 1
+
+  xt M18 "giving both --body and --file is refused with an error that names the two options" \
+    "the error is 'Invalid option -f' with the usage of the top-level akyuu, and it does not say that --body and --file exclude each other"
+  printf 'file text' >"$sandbox/both.txt"
+  ak add --kind fact --agent tester --body X -f "$sandbox/both.txt"
+  [ "$rc" != 0 ] || fail "both options were accepted"
+  need_text_has "--body"
 }

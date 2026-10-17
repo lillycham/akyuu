@@ -184,6 +184,7 @@ sec_mcp() {
   mcp_call review "{\"a\":\"$id1\",\"b\":\"$other\",\"agent\":\"mcp-eval\",\"note\":\"checked\"}"                                      # 14
   mcp_call search '{"query":"second","limit":1,"hops":0,"mode":"text"}'                                                               # 15
   mcp_call check '{"kinds":["fork"],"severity":"problem"}'                                                                             # 16
+  mcp_call get '{"id":"5bf"}'                                                                                                      # 17
   mcp_run
 
   t P17 "get takes a whole id, or sha256- and the first 8 or more hex digits"
@@ -244,4 +245,10 @@ sec_mcp() {
   r_ok
   r_has "[second]"
   need_eq "$(printf '%s' "$reply" | grep -o 'sha256-' | wc -l | tr -d ' ')" 1 "hits with limit 1 and no neighbours"
+
+  xt P25 "the error for a short id in get says how many hex digits are needed" \
+    "the tool text says 8 or more hex digits, the CLI takes 4, and the error for '5bf' only says that the id must start with sha256-"
+  mcp_reply 17
+  r_err
+  r_has "8 or more"
 }

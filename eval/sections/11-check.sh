@@ -185,4 +185,17 @@ sec_check() {
   need_rc 1
   ak check --severity problem
   need_out_has "No findings."
+
+  xt K17 "a lost amend race leaves nothing that check calls a problem" \
+    "amend --expect with a stale value fails, but the memory it wrote stays and is reported as a [problem] fork (the same as K16, for amend)"
+  use_root check-race-amend
+  mk "base text of the topic, for amend"
+  base=$id
+  ak ref set me/race "$base" --new
+  ak amend me/race --append "winner" --expect "$base"
+  need_rc 0
+  ak amend me/race --append "loser" --expect "$base"
+  need_rc 1
+  ak check --severity problem
+  need_out_has "No findings."
 }

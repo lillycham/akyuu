@@ -86,4 +86,14 @@ sec_robust() {
   need_rc 0
   ak gc --dry-run
   need_rc 0
+
+  xt O07 "control characters in a memory do not reach the terminal raw through get and search" \
+    "get, search, context and the MCP results print ESC and BEL bytes as they are, so a memory can change the terminal title, clear the screen or hide text"
+  use_root robust-ansi
+  ak add --kind fact --agent tester --ref hx/ansi --body "red $(printf '\033[31m')RED$(printf '\033[0m') title $(printf '\033]0;TITLE\007') clear $(printf '\033[2J') end"
+  ak get --ref hx/ansi
+  esc=$(printf '\033')
+  ! grep -q "$esc" "$outf" || fail "get printed a raw ESC byte"
+  ak search red
+  ! grep -q "$esc" "$outf" || fail "search printed a raw ESC byte"
 }
