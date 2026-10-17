@@ -74,7 +74,7 @@ let
     # is written, unless the model was not ready. This also removes the
     # vectors of memories that GC deleted.
     embed = {
-      enable = cfg.embed.enable;
+      enable = embedOn;
       description = "akyuu vectors for search by meaning";
       exec = [ "${cfg.package}/bin/akyuu" "--root" cfg.root "embed" "--prune" ];
       at = { hour = 4; minute = 30; };
@@ -136,6 +136,18 @@ let
 
   profiles = cfg.embed.profiles // lib.optionalAttrs cfg.embed.enable { default = defaultProfile; };
   profileName = if cfg.embed.profile != null then cfg.embed.profile else if cfg.embed.enable then "default" else null;
+
+  # Search by meaning is on when a profile is in use: one that embed.profile
+  # names, or the only one (akyuu then takes it, see Akyuu.Config). Not only
+  # with embed.enable, so that embed.profiles alone also gets the daily job.
+  embedOn = profileName != null || builtins.length (builtins.attrNames profiles) == 1;
+
+  # The helper commands that the profiles call, by name or by path.
+  commands = map (p: p.command) (builtins.attrValues profiles);
+  calls = name: lib.any (c: c == name || lib.hasSuffix "/bin/${name}" c) commands;
+  helperPackages =
+    lib.optional (calls "akyuu-embed-llama") embedLlamaPackage
+    ++ lib.optional (calls "akyuu-embed-openai") embedPackage;
 
   configToml = lib.recursiveUpdate
     ({ inherit (cfg) root; }
@@ -349,9 +361,7 @@ in
       xdg.configFile."akyuu/config.toml".source = toml.generate "akyuu-config.toml" configToml;
     }
 
-    (mkIf cfg.embed.enable {
-      home.packages = if cfg.embed.local.enable then [ embedLlamaPackage ] else [ embedPackage ];
-    })
+    { home.packages = helperPackages; }
 
     {
 

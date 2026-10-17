@@ -156,7 +156,8 @@
               && expect "config.toml is written on both, and embed.env no more" (linux.hasConfigFile && mac.hasConfigFile && !linux.hasEmbedFile && !mac.hasEmbedFile)
               && expect "the older embed options make the profile default" (mac.settings.embed.profile == "default" && mac.settings.embed.profiles.default.key == "m" && mac.settings.embed.profiles.default.timeout == 60 && mac.settings.embed.profiles.default.args ? gguf)
               && expect "the root is in the file" (mac.settings.root == "/home/test/.local/share/akyuu")
-              && expect "push is passed on macOS" mac.pushFlag;
+              && expect "push is passed on macOS" mac.pushFlag
+              && expect "a profile alone gets the daily embed job and its helper" (mac.profileJob && linux.profileJob && lib.elem "akyuu-embed-openai" mac.profileHelpers);
           in
           assert ok;
           pkgs.runCommand "akyuu-module-check" { } "touch $out";

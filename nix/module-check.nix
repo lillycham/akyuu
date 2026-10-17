@@ -11,7 +11,7 @@ let
     hm.dag.entryAfter = after: data: { inherit after data; };
   };
   stub = lib.mkOption { type = lib.types.lazyAttrsOf lib.types.anything; default = { }; };
-  evaluated = lib.evalModules {
+  evalWith = akyuu: lib.evalModules {
     specialArgs = { inherit pkgs lib; };
     modules = [
       (import ./home-module.nix self)
@@ -28,18 +28,24 @@ let
         };
         config = {
           home.homeDirectory = "/home/test";
-          programs.akyuu = {
-            enable = true;
-            gc.enable = true;
-            backup.enable = true;
-            versioning = { enable = true; push = true; };
-            serve.enable = true;
-            embed = { enable = true; local.enable = true; model = "m"; };
-          };
+          programs.akyuu = akyuu;
         };
       }
     ];
   };
+  evaluated = evalWith {
+    enable = true;
+    gc.enable = true;
+    backup.enable = true;
+    versioning = { enable = true; push = true; };
+    serve.enable = true;
+    embed = { enable = true; local.enable = true; model = "m"; };
+  };
+  # A profile of its own, with no embed.enable.
+  profilesOnly = (evalWith {
+    enable = true;
+    embed.profiles.mine = { command = "akyuu-embed-openai"; key = "k"; args.api-model = "m"; };
+  }).config;
   c = evaluated.config;
   timer = n: c.systemd.user.timers.${n}.Timer;
 in
@@ -62,4 +68,7 @@ in
   hasEmbedFile = c.xdg.configFile ? "akyuu/embed.env";
   settings = c.programs.akyuu.generatedConfig;
   pushFlag = lib.optionalAttrs (c.launchd.agents != { }) (lib.elem "--push" c.launchd.agents.akyuu-version.config.ProgramArguments);
+  # With embed.profiles alone: the daily embed job, and the helper it calls.
+  profileJob = profilesOnly.launchd.agents ? akyuu-embed || profilesOnly.systemd.user.timers ? akyuu-embed;
+  profileHelpers = map lib.getName profilesOnly.home.packages;
 }
