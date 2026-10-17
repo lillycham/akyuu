@@ -32,7 +32,7 @@ defaultPolicy =
       "- Link related memories. For a topic with a ref, use about_refs with the ref: the link follows the ref. Use about with an id for one exact memory.",
       "",
       "Keeping it tidy:",
-      "- The tool check lists duplicates, forks, stale links and long logs. It changes nothing; decide, then use supersede, review or a summary.",
+      "- The tool check lists duplicates, forks, stale links and long logs. It changes nothing; decide, then use supersede or review. For a long log, see log with todo, and summarise.",
       "",
       "Do not store passwords, keys or other secrets, or the private details of other people."
     ]

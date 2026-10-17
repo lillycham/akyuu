@@ -40,12 +40,13 @@ import Akyuu.GC (Policy (Policy, gracePeriod, keepGenerations, trashTTL), defaul
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
+import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep, defaultSize)
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLog, readLogSince, readRef, refLinksOf, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, supersedeMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLevels, readLog, readLogSince, readRef, refLinksOf, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, summariseLog, supersedeMemory, unfoldMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
-import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, evalLines, findingJSON, findingLines, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refLinkLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines)
+import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, episodeLines, evalLines, findingJSON, findingLines, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refLinkLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines, viewLines)
 import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Store qualified as Store
@@ -55,7 +56,7 @@ import Akyuu.Web.Read qualified as Read
 import Akyuu.Web.Server qualified as Server
 import Control.Exception (IOException, try)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT)
+import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE)
 import Data.Aeson (encode, toJSON)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
@@ -171,8 +172,13 @@ data Command i
   | -- | Append an episode to the log that a ref names.
     Append Name (MemoryArgs i)
   | -- | Read a log: the ref, the most episodes ('Nothing' for the default),
-    -- and 'True' for the bodies.
-    Log Name (Maybe Int) Bool (Maybe NominalDiffTime)
+    -- 'True' for the bodies, the age, and the view ('Akyuu.Levels').
+    Log Name (Maybe Int) Bool (Maybe NominalDiffTime) LogView
+  | -- | A summary at a level of a log: the ref, the level, the sources, the
+    -- kind, the agent and the body.
+    Summarise Name Int [i] Text Text BodySource
+  | -- | Print the sources of a summary.
+    Unfold i
   | Search SearchMode SearchOptions Text
   | -- | A short report of the setup.
     Status
@@ -238,6 +244,13 @@ atLeast lo = do
   n <- auto
   if n >= lo then pure n else readerError ("the number must be at least " <> show lo)
 
+-- | Where the body comes from: --body, --file, or the standard input.
+bodySource :: Parser BodySource
+bodySource =
+  (BodyText <$> strOption (long "body" <> metavar "TEXT" <> help "The body of the memory."))
+    <|> (BodyFile <$> strOption (long "file" <> short 'f' <> metavar "PATH" <> help "Read the body from a file."))
+    <|> pure BodyStdin
+
 memoryArgs :: Parser (MemoryArgs IdSpec)
 memoryArgs =
   MemoryArgs
@@ -255,10 +268,7 @@ memoryArgs =
         <*> edgeOpt DerivedFrom "The new memory comes from the memory ID."
         <*> edgeOpt Refines "The new memory adds detail to the memory ID."
         <*> edgeOpt Supersedes "The new memory replaces the memory ID. The supersede command adds this edge for you."
-    body =
-      (BodyText <$> strOption (long "body" <> metavar "TEXT" <> help "The body of the memory."))
-        <|> (BodyFile <$> strOption (long "file" <> short 'f' <> metavar "PATH" <> help "Read the body from a file."))
-        <|> pure BodyStdin
+    body = bodySource
 
 commandParser :: Parser (Command IdSpec)
 commandParser =
@@ -277,6 +287,8 @@ commandParser =
       <> cmd "append" appendP "Add an episode to a log: a memory that points at the one before it, under a ref that moves to it."
       <> cmd "note" noteP "Write a note in the log that the manifest names for the current directory."
       <> cmd "log" logP "Print the episodes of a log, newest first."
+      <> cmd "summarise" summariseP "Record a summary of the oldest stretch of a log that has none."
+      <> cmd "unfold" unfoldP "Print the sources of a summary, newest first, whole."
       <> cmd "context" contextP "Print the memories of a tier (the profile, the policy and so on) in one call, for the start of a session."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
       <> cmd "init" (pure Init) "Start a store: make the root, and write a short policy for agents and a manifest of the tiers. Existing refs are kept."
@@ -362,6 +374,25 @@ commandParser =
         <*> optional (option (atLeast 1) (long "limit" <> short 'n' <> metavar "N" <> help "The most episodes to print. The default is 20."))
         <*> switch (long "full" <> help "Print the body of each episode.")
         <*> optional (option (via parseDuration) (long "since" <> metavar "DURATION" <> help "Only the episodes of the last DURATION, for example 1d or 7d."))
+        <*> logView
+    logView =
+      ( \todoV resV size keep budget ->
+          if todoV then Todo size keep else if resV then Resolution keep budget else Plain
+      )
+        <$> switch (long "todo" <> help "Print the oldest stretches that need a summary, and the level of each.")
+        <*> switch (long "resolution" <> help "Print the recent episodes whole, and the older ones as their summaries.")
+        <*> option (atLeast 2) (long "size" <> metavar "N" <> value defaultSize <> showDefault <> help "With --todo, the memories that one summary covers.")
+        <*> option (atLeast 0) (long "keep" <> metavar "N" <> value defaultKeep <> showDefault <> help "The newest episodes that are shown whole and get no summary yet.")
+        <*> optional (option (atLeast 200) (long "budget" <> metavar "CHARS" <> help "With --resolution, show fewer episodes whole until the text fits, or fail."))
+    summariseP =
+      Summarise
+        <$> argument nameReader (metavar "REF")
+        <*> option (atLeast 1) (long "level" <> metavar "N" <> value 1 <> showDefault <> help "The level of the summary. Level 1 covers episodes, level 2 covers level-1 summaries.")
+        <*> some (option idReader (long "source" <> metavar "ID" <> help "A memory that the summary covers. Repeat for each one: the oldest that no summary covers."))
+        <*> option (via (checkField "kind")) (long "kind" <> metavar "TEXT" <> value "summary" <> showDefault <> help "The kind of the summary.")
+        <*> option (via (checkField "agent")) (long "agent" <> metavar "TEXT" <> help "The agent that writes the summary.")
+        <*> bodySource
+    unfoldP = Unfold <$> argument idReader (metavar "ID")
     contextP =
       Context
         <$> optional (strOption (long "tier" <> metavar "NAME" <> help "The tier to print. The default is always."))
@@ -564,9 +595,17 @@ runCommand env c = runExceptT $ case c of
     nm <- newMemory a
     i <- ExceptT (appendEpisode env n nm)
     pure (ok [Id.render i])
-  Log n lim full since -> do
+  Log n lim full since Plain -> do
     w <- ExceptT (maybe (readLog env n (maybe 20 id lim)) (readLogSince env n (maybe 200 id lim)) since)
     pure (ok (logLines full w))
+  Log n _ full _ view -> do
+    levels <- ExceptT (readLevels env n)
+    either (throwE . BadInput) (pure . ok) (viewLines full view levels)
+  Summarise n level ids kind agent src -> do
+    b <- ExceptT (readBody src)
+    i <- ExceptT (summariseLog env n level ids NewMemory {newKind = kind, newAgent = agent, newEdges = Set.empty, newBody = b, newAboutRefs = Set.empty})
+    pure (ok [Id.render i])
+  Unfold i -> ok . concatMap (episodeLines True) <$> ExceptT (unfoldMemory env i)
   Context tier extra given cwd budget page -> do
     manifest <- liftIO (resolveTiersRef given)
     place <- liftIO (placeFor cwd)

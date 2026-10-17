@@ -2,13 +2,14 @@
 
 module CLITests (cliTests) where
 
-import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand, cliProfile), Command (Add, AddRef, Append, CheckStore, Compare, Context, GC, Get, Log, Mcp, Neighbours, Note, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Supersede, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
+import Akyuu.CLI (BodySource (BodyFile, BodyStdin, BodyText), Check (MustBeAt, MustBeNew, NoCheck), CheckArgs (CheckArgs, caJson, caKinds, caOptions, caSeverity, caStrict), Cli (Cli, cliCommand, cliProfile), Command (Add, AddRef, Append, CheckStore, Compare, Context, GC, Get, Log, Mcp, Neighbours, Note, Pin, Pins, RefGet, RefList, RefSet, Reindex, Review, Reviews, Search, Serve, Summarise, Supersede, Unfold, Unpin, Unreview, Verify, Viz), GetTarget (ById, ByRef), MemoryArgs (MemoryArgs), Output (outBytes, outEndLine, outOk), parseCli, resolveCommand, runCommand, terminalBytes, withNewline)
 import Akyuu.Check (FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Check qualified as Check
 import Akyuu.Error (AkyuuError (NoSuchPrefix, StoreFailed))
 import Akyuu.GC (Policy (Policy, gracePeriod), defaultPolicy)
 import Akyuu.Graph (EdgeType (About, DerivedFrom, Refines))
 import Akyuu.Id (render)
+import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep)
 import Akyuu.Ops (IdSpec (Full, Prefix), SearchMode (Fused))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Name, mkName)
@@ -173,9 +174,19 @@ parseCases =
         a <- parses ["append", "agent/episodes", "--kind", "episode", "--agent", "claude", "--body", "x"]
         cliCommand a @?= Append n (MemoryArgs "episode" "claude" [] [] (BodyText "x"))
         l <- parses ["log", "agent/episodes", "-n", "5", "--full"]
-        cliCommand l @?= Log n (Just 5) True Nothing
+        cliCommand l @?= Log n (Just 5) True Nothing Plain
         d <- parses ["log", "agent/episodes"]
-        cliCommand d @?= Log n Nothing False Nothing,
+        cliCommand d @?= Log n Nothing False Nothing Plain
+        t <- parses ["log", "agent/episodes", "--todo", "--size", "4", "--keep", "2"]
+        cliCommand t @?= Log n Nothing False Nothing (Todo 4 2)
+        r <- parses ["log", "agent/episodes", "--resolution", "--budget", "500"]
+        cliCommand r @?= Log n Nothing False Nothing (Resolution defaultKeep (Just 500)),
+      testCase "summarise takes a ref, a level, the sources and a body; unfold takes an id" $ do
+        n <- name "agent/episodes"
+        s <- parses ["summarise", "agent/episodes", "--level", "2", "--source", i1, "--source", i2, "--agent", "claude", "--body", "sum"]
+        cliCommand s @?= Summarise n 2 [Full (nid 1), Full (nid 2)] "summary" "claude" (BodyText "sum")
+        u <- parses ["unfold", i1]
+        cliCommand u @?= Unfold (Full (nid 1)),
       testCase "gc takes the policy flags" $ do
         c <- parses ["gc", "--dry-run", "--keep-generations", "2", "--grace", "30m", "--trash-ttl", "1d"]
         cliCommand c @?= GC True (Policy 2 1800 86400),
