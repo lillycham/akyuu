@@ -138,12 +138,12 @@ todo size keep chains =
     -- The span is the time of the episodes under the run, also for a run of
     -- summaries, which were written later.
     run k xs =
-      let times = map memCreated (concatMap (episodesUnder chains . fst) xs)
+      let (from, to) = timeSpan (map snd xs) (concatMap (episodesUnder chains . fst) xs)
        in Run
             { runLevel = k,
               runMemories = xs,
-              runFrom = minimum times,
-              runTo = maximum times
+              runFrom = from,
+              runTo = to
             }
 
 -- | Check the sources of a new summary at level @k@: they must be the oldest
@@ -247,8 +247,17 @@ resolution whole keep chains@(episodes : _) =
     item (Right (k, s)) =
       let m = memories Map.! s
           eps = episodesUnder chains s
-          times = map memCreated eps
-       in Summary k s m (length eps) (minimum times) (maximum times)
+          (from, to) = timeSpan [m] eps
+       in Summary k s m (length eps) from to
+
+-- | The time of the first and the last of some episodes. If there are none
+-- (the walk of the log stopped early, at a memory that cannot be read), the
+-- times of the given memories stand in, so that a damaged log cannot crash a
+-- reader. The given memories are never empty: a run or a summary.
+timeSpan :: [Memory] -> [Memory] -> (UTCTime, UTCTime)
+timeSpan own eps = (minimum ts, maximum ts)
+  where
+    ts = map memCreated (if null eps then own else eps)
 
 -- | The episodes (level 0) that a memory of one of the levels stands for: an
 -- episode itself, or the episodes under the sources of a summary. The chains

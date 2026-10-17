@@ -75,6 +75,12 @@ pureCases =
         let l1 = [summary 101 Nothing [1, 2, 3], summary 102 (Just 101) [4, 5, 6], summary 103 (Just 102) [7, 8, 9]]
             rs = todo 3 0 [episodes 12, l1]
         [(runLevel r, ids (runMemories r)) | r <- rs] @?= [(1, map nid [10, 11, 12]), (2, map nid [101, 102, 103])],
+      testCase "a summary whose episodes are not in the walk does not crash" $ do
+        -- The walk of level 0 stopped early: it holds none of the episodes.
+        let l1 = [summary 101 Nothing [1, 2], summary 102 (Just 101) [3, 4]]
+        map runLevel (todo 2 0 [[], l1]) @?= [2]
+        length (resolution True 0 [[], l1]) @?= 0
+        length (resolution True 0 [take 1 (drop 4 (episodes 5)), l1]) @?= 1,
       testCase "a run of summaries spans the times of the episodes under it" $ do
         let l1 = [summary 101 Nothing [1, 2, 3], summary 102 (Just 101) [4, 5, 6]]
             minute :: Int -> UTCTime
