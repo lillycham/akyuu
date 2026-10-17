@@ -84,20 +84,23 @@ pureCases =
         assertBool "only one" (isLeft (checkSources 1 [nid 3] levels))
         assertBool "level 0" (isLeft (checkSources 0 [nid 3, nid 4] levels))
         assertBool "a level with nothing below" (isLeft (checkSources 3 [nid 101, nid 102] levels)),
-      testCase "resolution shows recent episodes whole, then the highest summaries, then lines" $ do
+      testCase "resolution shows episodes whole, or old ones as lines, and the highest summaries" $ do
         let l1 = [summary 101 Nothing [1, 2], summary 102 (Just 101) [3, 4]]
             l2 = [summary 201 Nothing [101, 102]]
             shape (Episode i _) = ("whole", i)
             shape (Brief i _) = ("line", i)
             shape (Summary k i _ n _ _) = ("level " <> T.pack (show k) <> " of " <> T.pack (show n), i)
-        map shape (resolution 2 [episodes 7, l1, l2])
+        map shape (resolution True 2 [episodes 7, l1, l2])
+          @?= [("whole", nid 7), ("whole", nid 6), ("whole", nid 5), ("level 2 of 4", nid 201)]
+        map shape (resolution False 2 [episodes 7, l1, l2])
           @?= [("whole", nid 7), ("whole", nid 6), ("line", nid 5), ("level 2 of 4", nid 201)],
-      testCase "fit shows fewer episodes whole until the text fits, or says what it needs" $ do
+      testCase "fit shows everything whole, then old episodes as lines and fewer whole, or says what it needs" $ do
         let render = T.concat . map (\it -> case it of Episode _ m -> memBody m <> T.replicate 50 "."; Brief _ _ -> "b"; Summary {} -> "s")
             levels = [episodes 5]
-        fmap T.length (fit render 1000 5 levels) @?= Right (T.length (render (resolution 5 levels)))
-        fit render 5 5 levels @?= Right "bbbbb"
-        fit render 3 5 levels @?= Left 5,
+        fmap T.length (fit render 1000 2 levels) @?= Right (T.length (render (resolution True 2 levels)))
+        fit render 150 2 levels @?= Right (render (resolution False 2 levels))
+        fit render 5 2 levels @?= Right "bbbbb"
+        fit render 3 2 levels @?= Left 5,
       testCase "chainOrder follows the chain, newest first, also when the times are equal" $ do
         let same = [(i, m {memCreated = noon}) | (i, m) <- episodes 4]
         ids (chainOrder (reverse (drop 1 same) <> take 1 same)) @?= map nid [4, 3, 2, 1]

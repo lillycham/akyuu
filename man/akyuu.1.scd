@@ -110,10 +110,12 @@ episodes with one *derived-from* edge; it is still read.)
 	*--todo* prints the oldest stretches that need a summary: runs of _n_ (8)
 	memories that no summary covers, at level 1 (episodes) and above (level-1
 	summaries, and so on). The newest _n_ (*--keep*, 10) episodes get no summary
-	yet. *--resolution* prints those newest episodes whole, each older stretch
-	as the highest summary that covers it, and an older episode that no summary
-	covers as one line. With *--budget*, it shows fewer episodes whole until the
-	text fits in _chars_; if it cannot fit, it fails and says what it needs.
+	yet. *--resolution* prints each older stretch as the highest summary that
+	covers it, and every other episode whole, so only a summary makes it
+	shorter. With *--budget*, if the text is longer than _chars_, older
+	episodes with no summary are cut to their first line, then fewer recent
+	episodes are whole, and a last line says so; if it still cannot fit, it
+	fails and says what it needs.
 
 *summarise* _ref_ [*--level* _n_] *--source* _id_ ... *--agent* _text_ [*--kind* _text_] [_body_]
 	Record a summary of the oldest stretch of the log _ref_ that has none. The

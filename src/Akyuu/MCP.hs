@@ -262,10 +262,10 @@ toolList =
             ("full", object ["type" .= ("boolean" :: Text), "default" .= False]),
             ("since", stringSchema "Only the episodes of the last length of time, for example 1d or 7d. With since, the default limit is 200."),
             ("todo", object ["type" .= ("boolean" :: Text), "default" .= False, "description" .= ("List the oldest stretches that need a summary, each with its level and the ids to give to summarise." :: Text)]),
-            ("resolution", object ["type" .= ("boolean" :: Text), "default" .= False, "description" .= ("Show the recent episodes whole, and each older stretch as the highest summary that covers it." :: Text)]),
+            ("resolution", object ["type" .= ("boolean" :: Text), "default" .= False, "description" .= ("Show each older stretch as the highest summary that covers it, and every other episode whole." :: Text)]),
             ("size", object ["type" .= ("integer" :: Text), "minimum" .= (2 :: Int), "default" .= defaultSize, "description" .= ("With todo, the memories that one summary covers." :: Text)]),
             ("keep", object ["type" .= ("integer" :: Text), "minimum" .= (0 :: Int), "default" .= defaultKeep, "description" .= ("The newest episodes that are shown whole and get no summary yet." :: Text)]),
-            ("budget", object ["type" .= ("integer" :: Text), "minimum" .= (200 :: Int), "description" .= ("With resolution, the most characters to return. Fewer episodes are shown whole until it fits. If it cannot fit, the call fails and says what it needs." :: Text)])
+            ("budget", object ["type" .= ("integer" :: Text), "minimum" .= (200 :: Int), "description" .= ("With resolution, the most characters to return. Older episodes with no summary are cut to their first line, then fewer recent ones are whole, until it fits. If it cannot fit, the call fails and says what it needs." :: Text)])
           ]
           ["ref"]
       ),

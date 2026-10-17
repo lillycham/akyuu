@@ -78,10 +78,12 @@ beside it; the episodes stay, and only the view changes.
   oldest that no summary covers, so the covered part is always the oldest.
 - When `REF.l1` has 8 summaries that no summary covers, `--todo` offers level
   2: a summary of summaries, in `REF.l2`, and so on.
-- `akyuu log REF --resolution` shows the newest episodes whole, each older
-  stretch as its highest summary, and older episodes with no summary as one
-  line. `--budget CHARS` shows fewer episodes whole until it fits, or fails
-  and says what it needs. It never drops a stretch in silence.
+- `akyuu log REF --resolution` shows each older stretch as its highest
+  summary, and every other episode whole, so only a summary makes it shorter.
+  With `--budget CHARS`, older episodes with no summary are cut to their first
+  line and fewer recent ones are whole until it fits, and a last line says
+  so. If it still cannot fit, it fails and says what it needs. It never drops
+  a stretch in silence.
 - `akyuu unfold ID` prints the sources of a summary, whole. Read them before
   you quote a summary.
 

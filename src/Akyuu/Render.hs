@@ -570,7 +570,7 @@ todoLines full rs = concatMap one rs
 viewLines :: Bool -> LogView -> [Levels.Chain] -> Either Text [Text]
 viewLines _ Plain _ = Right []
 viewLines full (Todo size keep) levels = Right (todoLines full (Levels.todo size keep levels))
-viewLines _ (Resolution keep Nothing) levels = Right (resolutionLines (Levels.resolution keep levels))
+viewLines _ (Resolution keep Nothing) levels = Right (resolutionLines (Levels.resolution True keep levels))
 viewLines _ (Resolution keep (Just budget)) levels =
   case Levels.fit (T.intercalate "\n" . resolutionLines) budget keep levels of
     Right t -> Right (T.lines t)
@@ -583,12 +583,15 @@ viewLines _ (Resolution keep (Just budget)) levels =
             <> ". Summarise more (see log --todo), or give a larger budget."
         )
 
--- | A log at a resolution ('Akyuu.Levels.resolution'), newest first. A recent
--- episode is whole, an older one is its first line, and a summary is a line
--- with its level and the episodes that it stands for, then its body. If there
--- is a summary, a last line says how to read its sources.
+-- | A log at a resolution ('Akyuu.Levels.resolution'), newest first. An
+-- episode is whole or its first line, and a summary is a line with its level
+-- and the episodes that it stands for, then its body. Last lines say how to
+-- read the sources of a summary, and that some episodes are cut to a line.
 resolutionLines :: [Item] -> [Text]
-resolutionLines items = concatMap one items <> ["Read the sources of a summary with unfold ID." | any isSummary items]
+resolutionLines items =
+  concatMap one items
+    <> ["Read the sources of a summary with unfold ID." | any isSummary items]
+    <> ["Older episodes with no summary are cut to their first line to fit the budget. Summarise them (log --todo), or give a larger budget." | any isBrief items]
   where
     one (Levels.Episode i m) = episodeLines True (i, m)
     one (Brief i m) = episodeLines False (i, m)
@@ -597,3 +600,5 @@ resolutionLines items = concatMap one items <> ["Read the sources of a summary w
         : ["  " <> l | l <- T.lines (memBody m)]
     isSummary Summary {} = True
     isSummary _ = False
+    isBrief Brief {} = True
+    isBrief _ = False

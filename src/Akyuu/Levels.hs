@@ -199,9 +199,10 @@ defaultKeep = 10
 
 -- | One part of a log at a resolution.
 data Item
-  = -- | A recent episode, shown whole.
+  = -- | An episode, shown whole.
     Episode Id Memory
-  | -- | An older episode that no summary covers, shown as its first line.
+  | -- | An older episode that no summary covers, shown as its first line, when
+    -- the whole text does not fit a budget ('fit').
     Brief Id Memory
   | -- | A summary at a level, the number of episodes that it stands for, and
     -- the time of the first and the last of them.
@@ -209,12 +210,13 @@ data Item
   deriving (Eq, Show)
 
 -- | A log at a resolution, newest first: the newest @keep@ episodes whole,
--- then each older stretch as the highest summary that covers it, and an
--- older episode that no summary covers as one line. The chains are the
--- levels of one log, from level 0.
-resolution :: Int -> [Chain] -> [Item]
-resolution _ [] = []
-resolution keep chains@(episodes : _) =
+-- then each older stretch as the highest summary that covers it. An older
+-- episode that no summary covers is whole with 'True', and one line with
+-- 'False'. So nothing is left out, and only a summary makes the text shorter.
+-- The chains are the levels of one log, from level 0.
+resolution :: Bool -> Int -> [Chain] -> [Item]
+resolution _ _ [] = []
+resolution whole keep chains@(episodes : _) =
   [Episode i m | (i, m) <- reverse recent] <> reverse (map item (dedupe (map older old)))
   where
     (old, recent) = splitAt (length episodes - max 0 keep) episodes
@@ -238,7 +240,7 @@ resolution keep chains@(episodes : _) =
     dedupe (Right a : rest@(Right b : _)) | a == b = dedupe rest
     dedupe (x : rest) = x : dedupe rest
     dedupe [] = []
-    item (Left (i, m)) = Brief i m
+    item (Left (i, m)) = if whole then Episode i m else Brief i m
     item (Right (k, s)) =
       let m = memories Map.! s
           eps = episodesUnder s
@@ -252,15 +254,19 @@ resolution keep chains@(episodes : _) =
     episodeIds = Set.fromList (map fst episodes)
 
 -- | The resolution that fits a budget of characters, with a function that
--- renders it. It shows as many recent episodes whole as fit, from @keep@ down
--- to none. If even that is too long, 'Left' gives the length it needs: the
--- caller says so, and drops nothing in silence.
+-- renders it. First every episode is whole. If that is too long, an older
+-- episode with no summary is one line, and then fewer recent episodes are
+-- whole, from @keep@ down to none. If even that is too long, 'Left' gives the
+-- length it needs: the caller says so, and drops nothing in silence.
 fit :: ([Item] -> Text) -> Int -> Int -> [Chain] -> Either Int Text
-fit render budget keep chains = go keep
+fit render budget keep chains
+  | T.length full <= budget = Right full
+  | otherwise = go keep
   where
+    full = render (resolution True keep chains)
     go k
       | T.length t <= budget = Right t
       | k <= 0 = Left (T.length t)
       | otherwise = go (k - 1)
       where
-        t = render (resolution k chains)
+        t = render (resolution False k chains)
