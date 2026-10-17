@@ -5,14 +5,13 @@ module LevelsTests (levelsTests) where
 import Akyuu.Error (AkyuuError (BadInput))
 import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom, Follows))
 import Akyuu.Id (Id)
-import Akyuu.Levels (Chain, Item (Brief, Episode, Summary), Run (runLevel, runMemories), chainOrder, checkSources, fit, levelRef, resolution, todo)
+import Akyuu.Levels (Chain, Item (Brief, Episode, Summary), Run (runFrom, runLevel, runMemories, runTo), chainOrder, checkSources, fit, levelRef, resolution, todo)
 import Akyuu.Memory (Memory (memBody, memCreated, memEdges))
 import Akyuu.Ops (appendEpisode, readLevels, summariseLog, unfoldMemory)
 import Akyuu.Refs (mkName, nameText)
 import Control.Monad (forM)
 import Data.Either (isLeft)
 import Data.Set qualified as Set
-import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -76,6 +75,11 @@ pureCases =
         let l1 = [summary 101 Nothing [1, 2, 3], summary 102 (Just 101) [4, 5, 6], summary 103 (Just 102) [7, 8, 9]]
             rs = todo 3 0 [episodes 12, l1]
         [(runLevel r, ids (runMemories r)) | r <- rs] @?= [(1, map nid [10, 11, 12]), (2, map nid [101, 102, 103])],
+      testCase "a run of summaries spans the times of the episodes under it" $ do
+        let l1 = [summary 101 Nothing [1, 2, 3], summary 102 (Just 101) [4, 5, 6]]
+            minute :: Int -> UTCTime
+            minute k = addUTCTime (fromIntegral (60 * k)) noon
+        [(runFrom r, runTo r) | r <- todo 2 0 [episodes 6, l1], runLevel r == 2] @?= [(minute 1, minute 6)],
       testCase "the sources must be the oldest that no summary covers" $ do
         let levels = [episodes 6, [summary 101 Nothing [1, 2]]]
         checkSources 1 [nid 4, nid 3] levels @?= Right ()

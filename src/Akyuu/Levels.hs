@@ -135,13 +135,16 @@ todo size keep chains =
     chunks xs
       | length xs >= size = take size xs : chunks (drop size xs)
       | otherwise = []
+    -- The span is the time of the episodes under the run, also for a run of
+    -- summaries, which were written later.
     run k xs =
-      Run
-        { runLevel = k,
-          runMemories = xs,
-          runFrom = minimum (map (memCreated . snd) xs),
-          runTo = maximum (map (memCreated . snd) xs)
-        }
+      let times = map memCreated (concatMap (episodesUnder chains . fst) xs)
+       in Run
+            { runLevel = k,
+              runMemories = xs,
+              runFrom = minimum times,
+              runTo = maximum times
+            }
 
 -- | Check the sources of a new summary at level @k@: they must be the oldest
 -- memories of level @k - 1@ that no summary covers, in any order, and at least
@@ -243,15 +246,24 @@ resolution whole keep chains@(episodes : _) =
     item (Left (i, m)) = if whole then Episode i m else Brief i m
     item (Right (k, s)) =
       let m = memories Map.! s
-          eps = episodesUnder s
+          eps = episodesUnder chains s
           times = map memCreated eps
        in Summary k s m (length eps) (minimum times) (maximum times)
-    episodesUnder s = case Map.lookup s memories of
+
+-- | The episodes (level 0) that a memory of one of the levels stands for: an
+-- episode itself, or the episodes under the sources of a summary. The chains
+-- are the levels of one log, from level 0.
+episodesUnder :: [Chain] -> Id -> [Memory]
+episodesUnder [] = const []
+episodesUnder chains@(episodes : _) = go
+  where
+    memories = Map.fromList (concat chains)
+    episodeIds = Set.fromList (map fst episodes)
+    go s = case Map.lookup s memories of
       Nothing -> []
       Just m
         | s `Set.member` episodeIds -> [m]
-        | otherwise -> concatMap episodesUnder (sources m)
-    episodeIds = Set.fromList (map fst episodes)
+        | otherwise -> concatMap go (sources m)
 
 -- | The resolution that fits a budget of characters, with a function that
 -- renders it. First every episode is whole. If that is too long, an older
