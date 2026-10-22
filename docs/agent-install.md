@@ -145,6 +145,21 @@ session: tell the person.
 
 ### Claude Code
 
+The default tool set is `ordinary`: `context`, `search`, `get`, `log`, `unfold`,
+`note`, `add`, `amend`, and `supersede`. Use `note` for an episode.
+Use `add` with a new `ref` for current knowledge. The ref keeps the memory alive.
+Read a memory with `get` before a revision. Pass its id as `expected` to
+`supersede` or `amend`. If the version is stale, read the current memory and
+revise it again. Do not repeat the old replacement with a new id.
+Ordinary `add` and `supersede` use the configured agent as the default author.
+An explicit `agent` overrides it.
+
+Use `AKYUU --root ROOT mcp --tool-set maintenance` for a consolidation client.
+This exposes all tools. Both sets require version checks for revisions.
+Maintenance `add` can omit `ref`, but an unretained object can disappear after GC.
+An outgoing link does not keep its source alive.
+The tool sets select an interface; they do not provide access control.
+
 Check: `claude mcp list` shows `akyuu`.
 
 ```sh

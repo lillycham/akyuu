@@ -4,11 +4,13 @@ module MCPTests (mcpTests) where
 
 import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
+import Akyuu.GC (Policy (gracePeriod), defaultPolicy)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, Supersedes))
 import Akyuu.Id (IdParseError (BadHex), parse, render)
 import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep, defaultSize)
 import Akyuu.MCP (CallError (BadArguments, UnknownTool), McpConfig (mcpAgent, mcpPlace, mcpPolicyRef), ToolCall (CallAdd, CallAppend, CallCheck, CallCompare, CallContext, CallGet, CallLog, CallNeighbours, CallNote, CallRefList, CallRefSet, CallReview, CallSearch, CallSearchMode, CallSummarise, CallUnfold), ToolResult (ToolResult), clientAgent, defaultMcpConfig, expandCall, handleLine, handleMessage, parseToolCall, resolvePrefix, runTool, supportedVersions)
-import Akyuu.Ops (NewMemory (newAboutRefs), SearchMode (TextOnly))
+import Akyuu.MCP qualified as MCP
+import Akyuu.Ops (NewMemory (newAboutRefs), SearchMode (TextOnly), runGC)
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, mkName)
 import Akyuu.Render (shortIds)
@@ -33,9 +35,59 @@ mcpTests :: TestTree
 mcpTests =
   testGroup
     "Akyuu.MCP"
-    [ protocolCases,
+    [ ordinaryCases,
+      protocolCases,
       toolCallCases,
       runToolCases
+    ]
+
+ordinaryCases :: TestTree
+ordinaryCases =
+  testGroup
+    "ordinary tools"
+    [ testCase "ordinary is the default and lists the task tools" $ do
+        MCP.mcpToolSet defaultMcpConfig @?= MCP.Ordinary
+        let names = [n | t <- MCP.toolsFor MCP.Ordinary, Just (String n) <- [at ["name"] t]]
+        Set.fromList names @?= Set.fromList ["context", "search", "get", "log", "unfold", "note", "add", "amend", "supersede"],
+      testCase "hidden tools cannot run by name" $ do
+        let r = runIdentity (handleMessage defaultMcpConfig (pure . fake) (callReq "ref_list" (object [])))
+        errCode r @?= Just (Number (-32602)),
+      testCase "ordinary creation requires a ref" $
+        MCP.parseToolCallFor defaultMcpConfig "add" (args [("kind", "fact"), ("body", "x")])
+          @?= Left (BadArguments "The argument 'ref' is missing."),
+      testCase "both sets require expected in schemas and parsers" $ do
+        sequence_
+          [ do
+              let cfg = defaultMcpConfig {MCP.mcpToolSet = set}
+                  as = args ([("ref", "me/topic")] <> if tool == "supersede" then [("kind", "fact"), ("agent", "me"), ("body", "x")] else [])
+              MCP.parseToolCallFor cfg tool as @?= Left (BadArguments "The argument 'expected' is missing.")
+              let schemas = [rs | t <- MCP.toolsFor set, at ["name"] t == Just (String tool), Just (Array rs) <- [at ["inputSchema", "required"] t]]
+              assertBool "schema requires expected" (not (null schemas) && all (elem (String "expected")) schemas)
+          | set <- [MCP.Ordinary, MCP.Maintenance],
+            tool <- ["supersede", "amend"]
+          ],
+      testCase "ordinary creation survives GC and stale revisions cannot replace current knowledge" $
+        withOpsEnv $ \_ env -> do
+          let cfg = defaultMcpConfig {mcpAgent = "test-agent"}
+              invoke tool as = do
+                c <- right (MCP.parseToolCallFor cfg tool (args as))
+                runTool cfg env c
+          ToolResult first False <- invoke "add" [("ref", "me/topic"), ("kind", "fact"), ("body", "tea")]
+          ToolResult _ True <- invoke "add" [("ref", "me/topic"), ("kind", "fact"), ("body", "duplicate")]
+          _ <- right =<< runGC env defaultPolicy {gracePeriod = 0}
+          n <- right (mkName "me/topic")
+          ToolResult initial False <- runTool cfg env (CallGet (Left n))
+          assertBool "configured author" ("agent: test-agent" `T.isInfixOf` initial)
+          let short = T.take 15 first
+          Right expanded <- expandCall (resolvePrefix env) (BL.toStrict (A.encode (callReq "supersede" (object ["ref" .= ("me/topic" :: Text), "expected" .= short]))))
+          (A.decodeStrict expanded >>= at ["params", "arguments", "expected"]) @?= Just (String first)
+          ToolResult second False <- invoke "supersede" [("ref", "me/topic"), ("expected", String first), ("kind", "fact"), ("agent", "override"), ("body", "tea and coffee")]
+          ToolResult _ True <- invoke "supersede" [("ref", "me/topic"), ("expected", String first), ("kind", "fact"), ("body", "stale")]
+          ToolResult _ True <- invoke "amend" [("ref", "me/topic"), ("expected", String first), ("replace", A.toJSON [object ["from" .= ("tea" :: Text), "to" .= ("water" :: Text)]])]
+          ToolResult currentText False <- runTool cfg env (CallGet (Left n))
+          assertBool "current id survives" (("id: " <> second) `T.isPrefixOf` currentText)
+          assertBool "current text survives" ("tea and coffee" `T.isSuffixOf` currentText)
+          assertBool "explicit author" ("agent: override" `T.isInfixOf` currentText)
     ]
 
 -- Helpers --------------------------------------------------------------
@@ -47,7 +99,7 @@ fake tc = ToolResult (T.pack (show tc)) False
 
 -- Answer one message with the fake runner.
 answer :: Value -> Maybe Value
-answer = runIdentity . handleMessage defaultMcpConfig (pure . fake)
+answer = runIdentity . handleMessage (defaultMcpConfig {MCP.mcpToolSet = MCP.Maintenance}) (pure . fake)
 
 -- A request with an id, a method and params.
 req :: Value -> Text -> Value -> Value
@@ -372,7 +424,7 @@ runToolCases =
           ToolResult i False <- runTool defaultMcpConfig env (CallAdd (newMem "fact" "claude" (Set.singleton (Edge About tid)) "Lilly likes tea."))
           n <- right (mkName "claude/tea")
           _ <- runTool defaultMcpConfig env (CallRefSet n MustBeAbsent (either (error . show) id (parse i)))
-          call <- either (assertFailure . show) pure (parseToolCall "amend" (args [("ref", "claude/tea"), ("replace", Array (pure (object ["from" .= ("tea" :: Text), "to" .= ("coffee" :: Text)])))]))
+          call <- either (assertFailure . show) pure (parseToolCall "amend" (args [("ref", "claude/tea"), ("expected", String i), ("replace", Array (pure (object ["from" .= ("tea" :: Text), "to" .= ("coffee" :: Text)])))]))
           ToolResult new False <- runTool defaultMcpConfig env call
           ToolResult g False <- runTool defaultMcpConfig env (CallGet (Left n))
           assertBool "new text" ("\n\nLilly likes coffee." `T.isSuffixOf` g)
@@ -380,7 +432,7 @@ runToolCases =
           assertBool "replaces" (("supersedes: " <> i) `T.isInfixOf` g)
           assertBool "a new memory" (new /= i)
           -- A text that is not there is an error, and the ref stays.
-          bad <- either (assertFailure . show) pure (parseToolCall "amend" (args [("ref", "claude/tea"), ("replace", Array (pure (object ["from" .= ("milk" :: Text), "to" .= ("x" :: Text)])))]))
+          bad <- either (assertFailure . show) pure (parseToolCall "amend" (args [("ref", "claude/tea"), ("expected", String new), ("replace", Array (pure (object ["from" .= ("milk" :: Text), "to" .= ("x" :: Text)])))]))
           ToolResult _ True <- runTool defaultMcpConfig env bad
           ToolResult g2 False <- runTool defaultMcpConfig env (CallGet (Left n))
           g2 @?= g,

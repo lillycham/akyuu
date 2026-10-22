@@ -217,9 +217,15 @@ be *\**, and *~* is the home directory).
 
 ## Agents and the web
 
-*mcp* [*--policy-ref* _name_] [*--tiers-ref* _name_]
+*mcp* [*--policy-ref* _name_] [*--tiers-ref* _name_] [*--tool-set* _set_]
 	Serve the Model Context Protocol (JSON-RPC 2.0) on the standard input and
-	output until the input ends. The tools are the commands above. The server
+	output until the input ends. The default tool set is *ordinary*: context,
+	search, get, log, unfold, note, add, amend, and supersede. Select
+	*--tool-set maintenance* for the full set, with raw object and ref tools.
+	Ordinary add requires a new ref. Ordinary add and supersede use the
+	configured agent as the default author. An explicit agent overrides it.
+	Both sets require expected for amend and supersede. Use the id from get.
+	The server
 	tells the agent to read the policy (*policy/memory*, or *--policy-ref*, or
 	*$AKYUU_POLICY_REF*, or *policy-ref* in the config file) first.
 
