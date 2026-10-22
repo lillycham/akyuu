@@ -200,7 +200,7 @@ data Command i
     CheckStore CheckArgs
   | -- | Serve MCP on stdin and stdout until stdin ends. The ref of the policy,
     -- if one is given (@--policy-ref@).
-    Mcp (Maybe Name) (Maybe Name)
+    Mcp (Maybe Name) (Maybe Name) MCP.ToolSet
   | -- | Serve the web UI on 127.0.0.1 at this port, until the program is
     -- stopped. Port 0 is a free port.
     Serve Int
@@ -424,6 +424,10 @@ commandParser =
       Mcp
         <$> optional (option nameReader (long "policy-ref" <> metavar "NAME" <> help "The ref that holds the policy of this store. The default is $AKYUU_POLICY_REF, then policy/memory."))
         <*> optional (option nameReader (long "tiers-ref" <> metavar "NAME" <> help "The ref of the manifest of the tiers. The default is $AKYUU_TIERS_REF, then policy/tiers."))
+        <*> option (eitherReader toolSetReader) (long "tool-set" <> metavar "ordinary|maintenance" <> value MCP.Ordinary <> help "The MCP tools to expose. The default is ordinary; maintenance exposes raw store and consolidation tools.")
+    toolSetReader "ordinary" = Right MCP.Ordinary
+    toolSetReader "maintenance" = Right MCP.Maintenance
+    toolSetReader _ = Left "The tool set must be ordinary or maintenance."
     checkP =
       CheckArgs
         <$> ( CheckOptions
@@ -662,7 +666,7 @@ runCommand env c = runExceptT $ case c of
           | caJson a = BL.toStrict (encode (toJSON (map findingJSON fs))) <> "\n"
           | otherwise = encodeUtf8 (T.unlines (findingLines refs fs))
     pure (Output out (not (caStrict a && any ((== Problem) . findingSeverity) fs)) False)
-  Mcp givenPolicy givenTiers -> do
+  Mcp givenPolicy givenTiers toolSet -> do
     policy <- liftIO (resolvePolicyRef givenPolicy)
     tiers <- liftIO (resolveTiersRef givenTiers)
     place <- liftIO (placeFor Nothing)
@@ -672,7 +676,7 @@ runCommand env c = runExceptT $ case c of
     let agent = case Config.cfgAgent cfg of
           Config.Sourced _ Config.Default -> ""
           s -> Config.sValue s
-    mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place)) <$> policy <*> tiers))
+    mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place) toolSet) <$> policy <*> tiers))
     liftIO (MCP.serve mcpConfig env)
     pure (Output BS.empty True False)
   Serve port -> do

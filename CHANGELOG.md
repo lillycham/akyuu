@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Compatibility
+
+- MCP uses the ordinary tool set by default. Use `mcp --tool-set maintenance`
+  for raw object, ref, and consolidation tools.
+- MCP `supersede` and `amend` require `expected` in both tool sets.
+  Read the current memory before each revision. A stale version causes an error.
+- Ordinary `add` requires a new `ref`. Ordinary `add` and `supersede` use
+  the configured agent as the default author. An explicit `agent` overrides it.
+
+The store format and CLI write operations do not change.
+
 ## 0.3.0.0 (2026-10-17)
 
 ### Compatibility

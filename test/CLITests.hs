@@ -10,6 +10,7 @@ import Akyuu.GC (Policy (Policy, gracePeriod), defaultPolicy)
 import Akyuu.Graph (EdgeType (About, DerivedFrom, Refines))
 import Akyuu.Id (render)
 import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep)
+import Akyuu.MCP (ToolSet (Maintenance, Ordinary))
 import Akyuu.Ops (IdSpec (Full, Prefix), SearchMode (Fused))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Name, mkName)
@@ -142,7 +143,13 @@ parseCases =
         n <- name "team/how-we-remember"
         a <- parses ["mcp", "--policy-ref", "team/how-we-remember"]
         b <- parses ["mcp"]
-        (cliCommand a, cliCommand b) @?= (Mcp (Just n) Nothing, Mcp Nothing Nothing),
+        (cliCommand a, cliCommand b) @?= (Mcp (Just n) Nothing Ordinary, Mcp Nothing Nothing Ordinary),
+      testCase "mcp selects maintenance explicitly" $ do
+        a <- parses ["mcp", "--tool-set", "maintenance"]
+        cliCommand a @?= Mcp Nothing Nothing Maintenance,
+      testCase "mcp refuses an unknown tool set" $ do
+        _ <- fails ["mcp", "--tool-set", "all"]
+        pure (),
       testCase "mcp refuses a policy ref that is not a ref name" $ do
         _ <- fails ["mcp", "--policy-ref", "Not A Name"]
         pure (),

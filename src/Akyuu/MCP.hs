@@ -24,6 +24,9 @@ module Akyuu.MCP
     ToolResult (..),
     CallError (..),
     toolList,
+    ToolSet (..),
+    toolsFor,
+    parseToolCallFor,
     parseToolCall,
     runTool,
 
@@ -89,7 +92,7 @@ data ToolCall
     CallAddRef Name NewMemory
   | -- | By 'Id' ('Right') or by the current value of a ref ('Left').
     CallGet (Either Name Id)
-  | CallSupersede Name (Maybe Id) NewMemory
+  | CallSupersede Name Id NewMemory
   | CallSearch SearchOptions Text
   | -- | A search with a mode other than the default (fused).
     CallSearchMode SearchMode SearchOptions Text
@@ -100,7 +103,7 @@ data ToolCall
     CallReview Id Id Text Text
   | -- | Change the text of a ref's memory: the ref, the id that it must
     -- point to now, the agent, and the edits.
-    CallAmend Name (Maybe Id) (Maybe Text) [Amend.Edit]
+    CallAmend Name Id (Maybe Text) [Amend.Edit]
   | -- | The ref, and 'True' to show the older values too.
     CallRefGet Name Bool
   | CallRefSet Name Expected Id
@@ -169,10 +172,10 @@ memoryProps =
   [ ("kind", stringSchema "The kind of memory, for example fact, preference or decision. One line, no space at either end."),
     ("agent", stringSchema "The name of the agent that writes the memory. One line, no space at either end."),
     ("body", stringSchema "The text of the memory. It can have many lines."),
-    ("about", idsSchema "Memories that this memory is about."),
-    ("about_refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("Refs that this memory is about. The link follows the ref: it names whatever memory the ref names now, so it does not go stale. Use it for a topic with a ref, and about for one exact memory. Each ref must exist." :: Text)]),
-    ("derived_from", idsSchema "Memories that this memory comes from."),
-    ("refines", idsSchema "Memories that this memory adds detail to.")
+    ("about", idsSchema "Exact memory versions that this memory is about. A live memory retains its ID targets."),
+    ("about_refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "description" .= ("Topics that this memory is about. Each ref must exist. The link follows its current value; it does not retain an old version. Use about for one exact version." :: Text)]),
+    ("derived_from", idsSchema "Exact memory versions used as evidence. A live memory retains these targets."),
+    ("refines", idsSchema "Exact memory versions that this memory adds detail to. A live memory retains these targets.")
   ]
 
 -- | The tools, for @tools/list@: name, description and input schema.
@@ -180,7 +183,7 @@ toolList :: [Value]
 toolList =
   [ tool
       "add"
-      "Store a new memory and return its id. A memory never changes after this. To replace the memory of a ref, use supersede. Edges point from the new memory to older ones. This tool moves no ref."
+      "Store a new memory and return its id. Give ref to create a new ref in the same call. Without a ref or another retaining root, GC can delete this memory. Outgoing links do not retain their source. Use supersede to replace current knowledge."
       (objectSchema (memoryProps <> [("supersedes", idsSchema "Memories that this memory replaces. This adds edges only. It moves no ref."), ("ref", stringSchema "A new ref to make for the memory, in the same call (it must not exist). Without it, no ref moves.")]) ["kind", "agent", "body"]),
     tool
       "get"
@@ -188,10 +191,10 @@ toolList =
       (objectSchema [("id", idSchema "The id of the memory."), ("ref", refSchema)] []),
     tool
       "supersede"
-      "Replace the memory of a ref with a new memory, and return the new id. The new memory gets a supersedes edge to the old one. Give expected (the id you read) so that the call fails if another agent moved the ref since then."
+      "Replace the complete memory of a ref, including its metadata and links. Return the new id. The server adds a supersedes edge. Require expected: the id from get. If the ref changed, read it again before you revise the text."
       ( objectSchema
           (("ref", refSchema) : ("expected", idSchema "The id that the ref must point to now.") : memoryProps)
-          ["ref", "kind", "agent", "body"]
+          ["ref", "expected", "kind", "agent", "body"]
       ),
     tool
       "amend"
@@ -203,7 +206,7 @@ toolList =
             ("expected", idSchema "The id that the ref must point to now."),
             ("agent", stringSchema "The agent of the new memory. The default is the agent of the old one.")
           ]
-          ["ref"]
+          ["ref", "expected"]
       ),
     tool
       "search"
@@ -451,6 +454,49 @@ plainEdges = [("about", About), ("derived_from", DerivedFrom), ("refines", Refin
 parseToolCall :: Text -> Args -> Either CallError ToolCall
 parseToolCall n args = checkArgNames n args *> parseArgs n args
 
+-- | Ordinary writers use retained creation and version-checked revisions.
+-- Maintenance exposes the full interface, with the same version checks.
+data ToolSet = Ordinary | Maintenance
+  deriving (Eq, Show)
+
+toolsFor :: ToolSet -> [Value]
+toolsFor Maintenance = toolList
+toolsFor Ordinary = map ordinarySchema (filter ordinaryTool toolList)
+  where
+    ordinaryTool (Object t) = case KM.lookup "name" t of
+      Just (String n) -> n `elem` ["context", "search", "get", "log", "unfold", "note", "add", "amend", "supersede"]
+      _ -> False
+    ordinaryTool _ = False
+    ordinarySchema (Object t)
+      | KM.lookup "name" t == Just (String "note") =
+          Object (KM.insert "description" (String "Record an episode in the configured log for this directory. The server creates the log if needed and links the episode to its predecessor. Use add or supersede for current knowledge.") t)
+      | Just (String n) <- KM.lookup "name" t,
+        n `elem` ["add", "supersede"],
+        Just (Object s) <- KM.lookup "inputSchema" t,
+        Just (Array rs) <- KM.lookup "required" s =
+          let names = filter (/= String "agent") (foldr (:) [] rs)
+              requiredNames = if n == "add" then String "ref" : names else names
+              t' = KM.insert "inputSchema" (Object (KM.insert "required" (A.toJSON requiredNames) s)) t
+           in Object (if n == "add" then KM.insert "description" (String "Create current knowledge under a new ref. The ref is required and must not exist. Use note for an episode and supersede to revise current knowledge. The configured agent is the default author.") t' else t')
+    ordinarySchema t = t
+
+-- | Enforce the selected set at dispatch as well as in tools/list.
+parseToolCallFor :: McpConfig -> Text -> Args -> Either CallError ToolCall
+parseToolCallFor cfg n args
+  | not (any named (toolsFor (mcpToolSet cfg))) = Left (UnknownTool n)
+  | otherwise = do
+      checkArgNames n args
+      if mcpToolSet cfg == Ordinary && n == "add" then () <$ refArg args else pure ()
+      let args' =
+            if mcpToolSet cfg == Ordinary && n `elem` ["add", "supersede"] && not (KM.member "agent" args)
+              then KM.insert "agent" (String author) args
+              else args
+      parseArgs n args'
+  where
+    author = if T.null (mcpAgent cfg) then "agent" else mcpAgent cfg
+    named (Object t) = KM.lookup "name" t == Just (String n)
+    named _ = False
+
 -- | The names of the arguments of each tool, from the schemas of 'toolList'.
 toolArgNames :: Map.Map Text [Text]
 toolArgNames =
@@ -504,7 +550,7 @@ parseArgs n args = case n of
       (Just x, Nothing) -> pure (CallGet (Right x))
       (Nothing, Just x) -> pure (CallGet (Left x))
       _ -> Left (BadArguments "Give exactly one of the arguments 'id' and 'ref'.")
-  "supersede" -> CallSupersede <$> refArg args <*> optIdArg args "expected" <*> memoryArg args plainEdges
+  "supersede" -> CallSupersede <$> refArg args <*> idArg args "expected" <*> memoryArg args plainEdges
   "search" -> do
     q <- required args "query" asText "a string"
     l <- optional' args "limit" asInt "a whole number"
@@ -520,7 +566,7 @@ parseArgs n args = case n of
       Just md -> CallSearchMode md (SearchOptions limit hops follow) q
   "amend" -> do
     r <- refArg args
-    e <- optIdArg args "expected"
+    e <- idArg args "expected"
     ag <- optional' args "agent" asText "a string" >>= traverse (check . checkField "agent")
     rs <- maybe [] id <$> optional' args "replace" (asList asObject) "a list of objects with from and to"
     reps <- traverse (\o -> Amend.Replace <$> required o "from" asText "a string" <*> required o "to" asText "a string") rs
@@ -703,7 +749,7 @@ runTool cfg env c = either failed id <$> go
         case i of
           Left e -> pure (Left e)
           Right x -> fmap (\m -> okText (idLine x <> "\n" <> memoryText m) False) <$> getMemory env x
-      CallSupersede n old m -> fmap (\i -> okText (Id.render i) False) <$> supersedeMemory env n old m
+      CallSupersede n old m -> fmap (\i -> okText (Id.render i) False) <$> supersedeMemory env n (Just old) m
       CallSearchMode md o q -> searchWithMode md o q
       CallSearch o q -> searchWithMode Fused o q
       CallNeighbours i -> runExceptT $ do
@@ -712,7 +758,7 @@ runTool cfg env c = either failed id <$> go
         pure (shorten (lines' "This memory has no edges or links." (neighbourLines ns <> refLinkLines ls)))
       CallCompare a b -> fmap (\r -> okText (T.intercalate "\n" (compareLines r)) False) <$> compareMemories env a b
       CallReview a b ag n -> fmap (const (okText ("reviewed " <> Id.render a <> " " <> Id.render b) False)) <$> reviewPair env a b ag n
-      CallAmend n e a es -> fmap (\i -> okText (Id.render i) False) <$> amendMemory env n e a es
+      CallAmend n e a es -> fmap (\i -> okText (Id.render i) False) <$> amendMemory env n (Just e) a es
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
       CallAppend n m -> fmap (\i -> okText (Id.render i) False) <$> appendEpisode env n m
@@ -788,12 +834,13 @@ data McpConfig = McpConfig
     -- | The name of the ref of the manifest of the tiers. The tool @context@
     -- reads it. See "Akyuu.Tier".
     mcpTiersRef :: Text,
-    -- | The agent of a note that names none. Empty: take the name that the
+    -- | The default author for notes and ordinary writes. Empty: take the name that the
     -- client gives in @initialize@ (@clientInfo.name@, for example
     -- @claude-code@), or else @agent@.
     mcpAgent :: Text,
     -- | Where the server runs, to find the refs and the log of this place.
-    mcpPlace :: Maybe Place
+    mcpPlace :: Maybe Place,
+    mcpToolSet :: ToolSet
   }
   deriving (Eq, Show)
 
@@ -801,7 +848,7 @@ data McpConfig = McpConfig
 -- one agent. A store that uses another name sets it with @--policy-ref@ or
 -- @AKYUU_POLICY_REF@.
 defaultMcpConfig :: McpConfig
-defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing
+defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing Ordinary
 
 -- | The result of @initialize@.
 initializeResult :: McpConfig -> Maybe Text -> Value
@@ -872,7 +919,7 @@ handleMessage cfg run msg = case msg of
     request i m p = case m of
       "initialize" -> pure (response i (initializeResult cfg (p >>= KM.lookup "protocolVersion" >>= asText)))
       "ping" -> pure (response i (object []))
-      "tools/list" -> pure (response i (object ["tools" .= toolList]))
+      "tools/list" -> pure (response i (object ["tools" .= toolsFor (mcpToolSet cfg)]))
       "tools/call" -> call i p
       _ -> pure (errorResponse i methodNotFound ("Method not found: " <> m))
     call i p = case p of
@@ -880,7 +927,7 @@ handleMessage cfg run msg = case msg of
       Just ps -> case (KM.lookup "name" ps, KM.lookup "arguments" ps) of
         (Just (String n), args) -> case argsOf args of
           Nothing -> pure (errorResponse i invalidParams "Invalid params: arguments must be an object.")
-          Just a -> case parseToolCall n a of
+          Just a -> case parseToolCallFor cfg n a of
             Left (UnknownTool t) -> pure (errorResponse i invalidParams ("Unknown tool: " <> t))
             Left (BadArguments t) -> pure (response i (toolResultValue (ToolResult t True)))
             Right tc -> response i . toolResultValue <$> run tc

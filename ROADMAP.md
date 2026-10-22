@@ -5,6 +5,8 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
 
 ## Next
 
+- **Safer MCP writes and tool sets.** Work in progress: required version
+  checks, retained ordinary creation, and a separate maintenance interface.
 - **A test of the systemd units on a real machine.** The module is checked by
   evaluation, and the package builds on Linux, but nobody has run the timers.
 ## Later

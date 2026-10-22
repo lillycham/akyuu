@@ -16,7 +16,7 @@ root=$(mktemp -d "${TMPDIR:-/tmp}/akyuu-mcp-smoke.XXXXXX")
 trap 'rm -rf "$root"' EXIT
 mkdir "$root/store-root"
 
-coproc SRV { "$bin" --root "$root/store-root" mcp 2>"$root/stderr.log"; }
+coproc SRV { "$bin" --root "$root/store-root" mcp --tool-set maintenance 2>"$root/stderr.log"; }
 srv_pid=$SRV_PID
 to_srv=${SRV[1]}
 from_srv=${SRV[0]}
@@ -99,4 +99,33 @@ wait "$srv_pid"
 echo "server exit code: $?"
 echo "--- stderr of the server"
 cat "$root/stderr.log"
+
+# The default interface supports retained writes without raw ref operations.
+exec {from_srv}<&-
+coproc SRV { "$bin" --root "$root/store-root" mcp 2>"$root/ordinary-stderr.log"; }
+srv_pid=$SRV_PID
+to_srv=${SRV[1]}
+from_srv=${SRV[0]}
+send '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"smoke","version":"0"}}}'
+recv
+send '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ref_list","arguments":{}}}'
+recv
+must '-32602'
+send '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add","arguments":{"ref":"me/topic","kind":"fact","body":"current knowledge"}}}'
+recv
+must '"isError":false'
+id=$(printf '%s' "$line" | grep -o 'sha256-[0-9a-f]\{64\}')
+send '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"amend","arguments":{"ref":"me/topic","append":"unchecked"}}}'
+recv
+must "expected"
+must '"isError":true'
+send '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"supersede","arguments":{"ref":"me/topic","expected":"'"${id:0:15}"'","kind":"fact","body":"revised knowledge"}}}'
+recv
+must '"isError":false'
+send '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get","arguments":{"ref":"me/topic"}}}'
+recv
+must 'revised knowledge'
+must 'agent: smoke'
+exec {to_srv}>&-
+wait "$srv_pid"
 echo "smoke test passed"
