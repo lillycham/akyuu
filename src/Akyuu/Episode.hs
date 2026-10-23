@@ -20,8 +20,10 @@
 -- the chain once the ref generations that name it are past.
 module Akyuu.Episode
   ( append,
+    appendWith,
     previous,
     Walk (..),
+    WalkEnd (..),
     walk,
   )
 where
@@ -29,42 +31,42 @@ where
 import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (DerivedFrom, Follows))
 import Akyuu.Id (Id)
 import Akyuu.Memory (Memory (memEdges))
-import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), RefError (NoSuchRef, Stale), Refs, getRef, setRef)
-import Akyuu.Store (Store, StoreError (BadMemory, NotFound))
+import Akyuu.Mutation (Mutation, checkMutation, withMutation)
+import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), RefError (Locked, NoSuchRef, RefIO), Refs, getRef, updateRef)
+import Akyuu.Store (Store, StoreError, storeRoot)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (SupersedeError (SupersedeRef, SupersedeStore))
+import Data.Bifunctor (first)
 import Data.Set qualified as Set
 
 -- | Add an episode to the log that a ref names, and move the ref to it.
 --
 -- If the ref does not exist, the log starts with this episode. Otherwise the
 -- episode gets a @follows@ edge to the current newest episode. The ref
--- moves with a compare-and-set. If another agent appended at the same time,
--- the function reads the ref again and builds the episode again, up to 20
--- times, because two appends do not conflict: both belong in the log.
+-- moves while holding the shared store mutation lock. Concurrent appends
+-- read the head in turn, so every successful append belongs to the chain
+-- and no unsuccessful attempt publishes a spare episode.
 --
 -- The memory must not have a @follows@ edge of its own: that edge is the link
 -- in the chain, and the function adds it. 'Akyuu.Ops.appendEpisode' checks this.
 append :: Store -> Refs -> Name -> Memory -> IO (Either SupersedeError Id)
-append st rs n m = go (20 :: Int)
+append st rs n m =
+  withMutation (storeRoot st) (SupersedeRef Locked) (SupersedeRef . RefIO) $ \held ->
+    appendWith held st rs n m
+
+-- | Append inside an existing mutation operation.
+appendWith :: Mutation -> Store -> Refs -> Name -> Memory -> IO (Either SupersedeError Id)
+appendWith held st rs n m = do
+  checkMutation held (storeRoot st)
+  cur <- getRef rs n
+  case cur of
+    Left (NoSuchRef _) -> publish MustBeAbsent m
+    Left e -> pure (Left (SupersedeRef e))
+    Right ref ->
+      publish (MustBe (current ref)) m {memEdges = Set.insert (Edge Follows (current ref)) (memEdges m)}
   where
-    go k = do
-      cur <- getRef rs n
-      case cur of
-        Left (NoSuchRef _) -> attempt k MustBeAbsent m
-        Left e -> pure (Left (SupersedeRef e))
-        Right ref ->
-          attempt k (MustBe (current ref)) m {memEdges = Set.insert (Edge Follows (current ref)) (memEdges m)}
-    attempt k expected episode = do
-      added <- Store.add st episode
-      case added of
-        Left e -> pure (Left (SupersedeStore e))
-        Right new -> do
-          moved <- setRef rs n expected new
-          case moved of
-            Right _ -> pure (Right new)
-            Left (Stale _ _) | k > 0 -> go (k - 1)
-            Left e -> pure (Left (SupersedeRef e))
+    publish expected episode =
+      fmap current <$> updateRef held rs n expected SupersedeRef (fmap (first SupersedeStore) (Store.addWith held st episode))
 
 -- | The episode before this one in its log, from its edges. This function is
 -- pure.
@@ -85,28 +87,32 @@ previous es = case [target e | e <- es, kind e == Follows] of
 data Walk = Walk
   { -- | The episodes that were read, with their ids.
     walkEntries :: [(Id, Memory)],
-    -- | The next episode, if the walk stopped at its limit before the end of
-    -- the chain. 'Nothing' at the end, and when the next episode was deleted by
-    -- GC or cannot be read.
-    walkMore :: Maybe Id
+    -- | Whether the chain ended, reached the limit, or could not be read.
+    walkEnd :: WalkEnd
   }
+  deriving (Eq, Show)
+
+-- | Why traversal stopped. An interruption retains the failed id and cause;
+-- 'walkEntries' still holds every readable episode before it.
+data WalkEnd
+  = Complete
+  | Limited Id
+  | Interrupted Id StoreError
   deriving (Eq, Show)
 
 -- | Read a log: from the newest episode, go to the one before it ('previous'),
 -- up to a limit.
 --
--- A memory that GC deleted, or that is not readable, ends the walk.
+-- An unreadable memory interrupts the walk without discarding its prefix.
 walk :: Store -> Int -> Id -> IO Walk
 walk st limit = go [] limit
   where
     go acc k i
-      | k <= 0 = pure (Walk (reverse acc) (Just i))
+      | k <= 0 = pure (Walk (reverse acc) (Limited i))
       | otherwise = do
           r <- Store.getVerified st i
           case r of
-            Left (NotFound _) -> pure (Walk (reverse acc) Nothing)
-            Left (BadMemory _ _) -> pure (Walk (reverse acc) Nothing)
-            Left _ -> pure (Walk (reverse acc) Nothing)
+            Left e -> pure (Walk (reverse acc) (Interrupted i e))
             Right m -> case previous (Set.toAscList (memEdges m)) of
-              Nothing -> pure (Walk (reverse ((i, m) : acc)) Nothing)
+              Nothing -> pure (Walk (reverse ((i, m) : acc)) Complete)
               Just next -> go ((i, m) : acc) (k - 1) next

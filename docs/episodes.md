@@ -30,12 +30,17 @@ A log from before the `follows` edge links its episodes with their one
 at its next append, and no episode is rewritten.
 
 `akyuu append REF --kind episode --agent NAME --body TEXT` adds the episode,
-adds that edge, and moves the ref, in one compare-and-set. The first append
-makes the ref. Two agents that append at the same time both get in: the
-second one reads the ref again and builds its episode again (three tries).
+adds that edge, and moves the ref under the shared mutation lock. The first
+append makes the ref. Concurrent appends read the head in turn, so each
+successful append follows the previous one without discarded retry objects.
 
 `akyuu log REF [-n N] [--full]` walks the chain from the newest episode and
 prints one line for each. A last line `more: ID` says where the log goes on.
+
+A limit produces a normal continuation. A missing, corrupt or unreadable
+episode instead produces an interruption with its ID and cause. The CLI
+preserves the readable prefix and returns failure. The MCP result preserves
+the prefix and sets `isError`. An unreadable head is not an empty log.
 
 ### Why `follows`, and not `supersedes`
 
@@ -86,6 +91,10 @@ beside it; the episodes stay, and only the view changes.
   a stretch in silence.
 - `akyuu unfold ID` prints the sources of a summary, whole. Read them before
   you quote a summary.
+
+Summary creation requires complete source chains at every existing level.
+An unreadable episode or level reference causes an error before publication.
+Only a missing level reference means there is no further level.
 
 The MCP tools are `log` (with `todo` or `resolution`), `summarise` and
 `unfold`.

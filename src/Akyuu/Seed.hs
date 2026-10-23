@@ -123,7 +123,7 @@ checkEmptyRoot root = do
       | n `elem` ["store", "trash", "refs", "pins", "tombstones"] = do
           files <- deep (dir </> n)
           pure (map ((n </>)) (filter (not . lockOrTemp) files))
-      | n == "gc.lock" || n == ".DS_Store" || "cache.sqlite" `isPrefixOf` n = pure []
+      | n `elem` ["store.lock", "gc.lock", ".DS_Store"] || "cache.sqlite" `isPrefixOf` n = pure []
       | otherwise = pure [n]
     lockOrTemp f = f == ".lock" || ".tmp" `isPrefixOf` f || ".DS_Store" `isSuffixOf` f
     -- Every file under a directory, by its path from that directory.

@@ -124,14 +124,7 @@ supersedeFromCases =
           theirs <- right =<< supersedeFrom s rs n v1 (mem "theirs")
           _ <- supersedeFrom s rs n v1 (mem "mine")
           r <- right =<< getRef rs n
-          (current r, history r) @?= (theirs, [v1]),
-      testCase "leaves the new object in the store after Stale" $
-        withEnv $ \s rs n v1 -> do
-          _ <- right =<< supersedeFrom s rs n v1 (mem "theirs")
-          _ <- supersedeFrom s rs n v1 (mem "mine")
-          ids <- right =<< Store.list s
-          -- v1, theirs and mine. GC collects "mine" later.
-          length ids @?= 3
+          (current r, history r) @?= (theirs, [v1])
     ]
 
 -- Several agents -------------------------------------------------------

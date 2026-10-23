@@ -35,6 +35,7 @@ import Akyuu.Amend qualified as Amend
 import Akyuu.Check (CheckOptions (CheckOptions, hubDegree, longLog, minWords, nearThreshold), Finding (findingSeverity), FindingKind, Severity (Problem), defaultCheckOptions, filterFindings, kindName, severityName)
 import Akyuu.Config qualified as Config
 import Akyuu.Embed qualified as Embed
+import Akyuu.Episode (Walk (walkEnd), WalkEnd (Interrupted))
 import Akyuu.Error (AkyuuError (BadConfig, BadInput, BadName), describe)
 import Akyuu.GC (Policy (Policy, gracePeriod, keepGenerations, trashTTL), defaultPolicy)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
@@ -601,7 +602,7 @@ runCommand env c = runExceptT $ case c of
     pure (ok [Id.render i])
   Log n lim full since Plain -> do
     w <- ExceptT (maybe (readLog env n (maybe 20 id lim)) (readLogSince env n (maybe 200 id lim)) since)
-    pure (ok (logLines full w))
+    pure $ (ok (logLines full w)) {outOk = case walkEnd w of Interrupted _ _ -> False; _ -> True}
   Log n _ full _ view -> do
     levels <- ExceptT (readLevels env n)
     either (throwE . BadInput) (pure . ok) (viewLines full view levels)

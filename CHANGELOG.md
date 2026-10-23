@@ -11,7 +11,33 @@
 - Ordinary `add` requires a new `ref`. Ordinary `add` and `supersede` use
   the configured agent as the default author. An explicit `agent` overrides it.
 
-The store format and CLI write operations do not change.
+- Update all writers and GC jobs together. Old processes do not use the shared
+  mutation lock. Restart old MCP servers before concurrent use.
+- An unreadable log returns an error instead of a complete or empty history.
+  The CLI preserves its readable prefix and fails. MCP sets `isError`.
+
+Memory bytes, IDs and the ref file format do not change.
+
+### Fixed
+
+- GC and writers share one mutation lock. Reference and pin target checks run
+  under that lock. A sweep also checks its candidates against current roots.
+- A stale expectation or reference name conflict rejects a proposal before
+  the store saves it. Reference creation and episode append use the same
+  publication checks.
+- Log traversal distinguishes completion, a limit and an unreadable episode.
+  Summary creation refuses incomplete chains. Corrupt level refs are errors,
+  not absent levels.
+- The llama.cpp helper checks the live model path before reuse or text
+  transmission. It refuses a different or unverifiable server on the port.
+- Optional embeddings share one five-second deadline across configuration,
+  all chunks and vector writes. The first failed chunk stops the operation.
+  SQLite contention skips optional vectors. Cancellation stops command
+  children without stopping successful persistent model servers.
+
+Object publication and reference replacement are still separate file writes.
+A crash or I/O failure between them can leave a searchable, unreferenced
+object. A stale expectation does not create such an object.
 
 ## 0.3.0.0 (2026-10-17)
 

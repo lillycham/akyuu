@@ -77,8 +77,11 @@ when the ref moves, and *gc* keeps nothing through it.
 current memory; the others are older values, newest first, as many as *gc*
 keeps. A _name_ is parts of *a*-*z*, *0*-*9*, *-*, *\_* and *.*, joined with
 */*. A part is a directory, so a name cannot be the start of another. A change
-replaces the file atomically, under the lock *refs/.lock*, and can check the
-current value first.
+replaces the file atomically. It takes *store.lock*, then *refs/.lock*, and
+checks the expected value before it publishes a new memory. Object additions,
+pins and GC also take *store.lock*. All writers and GC jobs must use this
+protocol. A crash or I/O failure between the object write and reference
+replacement can still leave a searchable, unreferenced object.
 
 ## Other files
 

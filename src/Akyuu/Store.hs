@@ -35,6 +35,7 @@ module Akyuu.Store
 
     -- * Objects
     add,
+    addWith,
     get,
     getVerified,
     exists,
@@ -43,6 +44,7 @@ module Akyuu.Store
     -- * Integrity and GC
     verify,
     trash,
+    trashWith,
 
     -- * Layout
     objectPath,
@@ -53,6 +55,7 @@ where
 import Akyuu.Fs (atomicWrite, tryWith)
 import Akyuu.Id (Id, hashBytes, hashFile, parse, render, toBytes)
 import Akyuu.Memory (Memory, MemoryParseError, parseMemory, renderMemory)
+import Akyuu.Mutation (Mutation, checkMutation, withMutation)
 import Control.Exception (IOException, try, tryJust)
 import Control.Monad (filterM, guard, unless)
 import Data.Bifunctor (first)
@@ -74,6 +77,8 @@ newtype Store = Store FilePath
 data StoreError
   = -- | The disk gave an error, for example a missing directory or no permission.
     StoreIO IOException
+  | -- | Another mutation holds the store lock.
+    StoreLocked
   | -- | The store has no object with this 'Id'.
     NotFound Id
   | -- | The content of the object does not hash to its name.
@@ -126,14 +131,16 @@ objectPath s i = storeRoot s </> "store" </> shard i </> fileName i
 -- adds an old object again gets the grace period of "Akyuu.GC". The content
 -- does not change, so an object still never changes.
 --
--- The touch is the check: if the file is not there (for example, GC moved it
--- to @trash@ just before), the function writes the object again. There is no
--- gap between a check and the touch.
---
--- Two agents can add the same memory at the same time. Both write the same
--- bytes, so whichever rename comes last is correct.
+-- The mutation lock serialises additions with GC and other writers. If GC
+-- moved an object first, adding its bytes publishes it again with a fresh
+-- grace period.
 add :: Store -> Memory -> IO (Either StoreError Id)
-add s m = tryIO $ do
+add s m = withMutation (storeRoot s) StoreLocked StoreIO $ \held -> addWith held s m
+
+-- | Add under the mutation lock of a compound operation.
+addWith :: Mutation -> Store -> Memory -> IO (Either StoreError Id)
+addWith held s m = tryIO $ do
+  checkMutation held (storeRoot s)
   createDirectoryIfMissing True (takeDirectory final)
   touched <- tryJust (guard . isDoesNotExistError) (touchFile final)
   either (const (atomicWrite final bytes)) pure touched
@@ -262,8 +269,14 @@ trashPath s i = storeRoot s </> "trash" </> fileName i
 -- undone. Returns 'NotFound' if the object is not in the store.
 -- The deletion of old files in @trash@ is not part of this function.
 trash :: Store -> Id -> IO (Either StoreError ())
-trash s i = do
-  made <- tryIO $ createDirectoryIfMissing True (takeDirectory to)
+trash s i = withMutation (storeRoot s) StoreLocked StoreIO $ \held -> trashWith held s i
+
+-- | Move an object under the mutation lock held by GC.
+trashWith :: Mutation -> Store -> Id -> IO (Either StoreError ())
+trashWith held s i = do
+  made <- tryIO $ do
+    checkMutation held (storeRoot s)
+    createDirectoryIfMissing True (takeDirectory to)
   case made of
     Left e -> pure (Left e)
     Right () -> orNotFound i $ renameFile from to

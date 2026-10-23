@@ -3,18 +3,27 @@
 module OpsTests (opsTests, withOpsEnv, note) where
 
 import Akyuu.Amend (Edit (Append))
-import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
-import Akyuu.GC (Policy (gracePeriod, trashTTL), Tombstone (Tombstone), defaultPolicy)
+import Akyuu.Cache qualified as Cache
+import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
+import Akyuu.GC (Policy (gracePeriod, keepGenerations, trashTTL), Tombstone (Tombstone), defaultPolicy)
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (Dir (In, Out), Edge (Edge), EdgeType (About, Refines, Supersedes))
 import Akyuu.Id (Id, render)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAboutRefs, memBody, memCreated, memEdges, memKind), parseMemory, renderMemory)
+import Akyuu.Mutation (withMutation)
 import Akyuu.Ops (Env (envCache, envStore), IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets), addMemory, addUnderRef, amendMemory, buildMemory, checkField, dryRunGC, getMemory, listRefNames, listRefValues, neighboursOf, parseDuration, parseIdSpec, readRef, refLinksOf, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops qualified as Ops
 import Akyuu.Query (Match (matchId), Neighbour (Neighbour), RefLink (RefLink), SearchResult (context, matches), defaultSearchOptions)
+import Akyuu.Query qualified as Query
 import Akyuu.Refs (Expected (MustBeAbsent, Unchecked), Name, Ref (Ref), RefError (Locked, NoSuchRef, Stale), mkName)
+import Akyuu.Refs qualified as Refs
 import Akyuu.Store (StoreError (NotFound), objectPath)
+import Akyuu.Store qualified as Store
 import Akyuu.Supersede (SupersedeError (SupersedeRef, SupersedeStore))
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
+import Control.Monad (forM)
 import Data.ByteString qualified as BS
 import Data.Either (isLeft)
 import Data.List (sort)
@@ -24,7 +33,7 @@ import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Support (nid, right, withTempDir)
-import System.Directory (createDirectoryIfMissing)
+import System.Directory (createDirectory, createDirectoryIfMissing, removeDirectory, removeFile)
 import System.FilePath (takeDirectory, (</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
@@ -38,6 +47,7 @@ opsTests =
       properties,
       envCases,
       opCases,
+      publicationCases,
       verifyCases,
       aboutRefCases,
       errorTextCases
@@ -210,7 +220,7 @@ opCases =
           _ <- right =<< setRefTo env n MustBeAbsent v1
           v2 <- right =<< supersedeMemory env n Nothing (note "v2" [])
           now <- getCurrentTime
-          let p = defaultPolicy {gracePeriod = 0, trashTTL = 0}
+          let p = defaultPolicy {gracePeriod = 0, trashTTL = 0, keepGenerations = 0}
               doomed = Set.singleton v1
           -- The first run moves v1 to trash. The second one deletes it.
           _ <- right =<< GC.sweepAndSync (envCache env) (envStore env) p (addUTCTime 2 now) doomed
@@ -397,3 +407,131 @@ errorTextCases =
         fromSupersede (SupersedeRef (NoSuchRef n)) @?= RefFailed (NoSuchRef n)
         fromSupersede (SupersedeStore (NotFound (nid 1))) @?= StoreFailed (NotFound (nid 1))
     ]
+
+-- Publication and collection -------------------------------------------
+
+publicationCases :: TestTree
+publicationCases =
+  testGroup
+    "publication"
+    [ testCase "stale proposals affect neither search nor version resolution" $
+        withOpsEnv $ \_ env -> do
+          let n = named "me/topic"
+          v1 <- right =<< addUnderRef env n (note "initial" [])
+          accepted <- right =<< supersedeMemory env n (Just v1) (note "accepted" [])
+          rejected <- supersedeMemory env n (Just v1) (note "rejected proposal" [])
+          rejected @?= Left (RefFailed (Stale n (Just accepted)))
+          hits <- right =<< searchMemories env defaultSearchOptions "rejected"
+          matches hits @?= []
+          graph <- right =<< Cache.loadGraph (envCache env)
+          Query.resolve v1 graph @?= Set.singleton accepted,
+      testCase "concurrent supersessions publish only the successful proposal" $
+        withOpsEnv $ \_ env -> do
+          let n = named "me/topic"
+          v1 <- right =<< addUnderRef env n (note "initial" [])
+          results <- together [supersedeMemory env n (Just v1) (note body []) | body <- ["proposal alpha", "proposal beta"]]
+          let accepted = [i | Right i <- results]
+          case accepted of
+            [winner] -> do
+              let losers = [e | Left e <- results]
+              losers @?= [RefFailed (Stale n (Just winner))]
+              hits <- right =<< searchMemories env defaultSearchOptions "proposal"
+              map matchId (matches hits) @?= [winner]
+              graph <- right =<< Cache.loadGraph (envCache env)
+              Query.resolve v1 graph @?= Set.singleton winner
+            _ -> assertFailure (show results),
+      testCase "concurrent reference creation publishes only the winner" $
+        withOpsEnv $ \_ env -> do
+          let n = named "me/topic"
+          results <- together [addUnderRef env n (note body []) | body <- ["proposal alpha", "proposal beta"]]
+          case [i | Right i <- results] of
+            [winner] -> do
+              hits <- right =<< searchMemories env defaultSearchOptions "proposal"
+              map matchId (matches hits) @?= [winner]
+              readRef env n >>= (@?= Right (Ref winner []))
+              length [() | Left (BadInput _) <- results] @?= 1
+            _ -> assertFailure (show results),
+      testCase "reference name conflicts reject before object publication" $
+        withOpsEnv $ \_ env -> do
+          _ <- right =<< addUnderRef env (named "me/topic") (note "existing" [])
+          let child = named "me/topic/child"
+          addUnderRef env child (note "rejected child" []) >>= (@?= Left (RefFailed (Refs.NameConflict child)))
+          _ <- right =<< addUnderRef env (named "me/other/child") (note "existing child" [])
+          let parent = named "me/other"
+          addUnderRef env parent (note "rejected parent" []) >>= (@?= Left (RefFailed (Refs.NameConflict parent)))
+          hits <- right =<< searchMemories env defaultSearchOptions "rejected"
+          matches hits @?= [],
+      testCase "a rejected nested reference does not reserve its parent name" $
+        withOpsEnv $ \_ env -> do
+          let parent = named "me/topic"
+              child = named "me/topic/child"
+          setRefTo env child MustBeAbsent (nid 7) >>= (@?= Left (StoreFailed (NotFound (nid 7))))
+          i <- right =<< addUnderRef env parent (note "valid parent" [])
+          readRef env parent >>= (@?= Right (Ref i [])),
+      testCase "failed object publication does not reserve the reference namespace" $
+        withOpsEnv $ \dir env -> do
+          let parent = named "me/topic"
+              child = named "me/topic/child"
+              objects = dir </> "store"
+          removeDirectory objects
+          BS.writeFile objects "not a directory"
+          result <- addUnderRef env child (note "cannot store this" [])
+          case result of
+            Left (StoreFailed (Store.StoreIO _)) -> pure ()
+            _ -> assertFailure (show result)
+          removeFile objects
+          createDirectory objects
+          i <- right =<< addUnderRef env parent (note "valid parent" [])
+          readRef env parent >>= (@?= Right (Ref i [])),
+      testCase "a collection that wins first makes reference updates and pins fail" $
+        withOpsEnv $ \_ env -> do
+          i <- right =<< addMemory env (note "unretained" [])
+          original <- right =<< getMemory env i
+          let p = defaultPolicy {gracePeriod = 0}
+              n = named "me/topic"
+          _ <- right =<< runGC env p
+          update <- setRefTo env n MustBeAbsent i
+          pinned <- Ops.pinMemory env i
+          case (update, pinned) of
+            (Left (StoreFailed (NotFound a)), Left (StoreFailed (NotFound b))) -> (a, b) @?= (i, i)
+            _ -> assertFailure (show (update, pinned))
+          readRef env n >>= (@?= Left (RefFailed (NoSuchRef n)))
+          _ <- right =<< Store.add (envStore env) original
+          _ <- right =<< setRefTo env n MustBeAbsent i
+          _ <- right =<< runGC env p
+          getMemory env i >>= (@?= Right original),
+      testCase "object writes, reference updates and pins cannot pass a held GC lock" $
+        withOpsEnv $ \_ env -> do
+          i <- right =<< addMemory env (note "candidate" [])
+          let n = named "me/topic"
+          held <- GC.withGCLock (envStore env) $ \_ -> do
+            addMemory env (note "blocked" []) >>= (@?= Left (StoreFailed Store.StoreLocked))
+            setRefTo env n MustBeAbsent i >>= (@?= Left (RefFailed Locked))
+            Ops.pinMemory env i >>= (@?= Left (GCFailed GC.GCLocked))
+            pure (Right ())
+          right held
+          _ <- right =<< setRefTo env n MustBeAbsent i
+          _ <- right =<< runGC env defaultPolicy {gracePeriod = 0}
+          m <- right =<< getMemory env i
+          memBody m @?= "candidate",
+      testCase "a failed mutation releases its lock for the next writer" $
+        withOpsEnv $ \dir env -> do
+          result <- withMutation dir (RefFailed Locked) (RefFailed . Refs.RefIO) (\_ -> ioError (userError "injected failure")) :: IO (Either AkyuuError ())
+          case result of
+            Left (RefFailed (Refs.RefIO _)) -> pure ()
+            _ -> assertFailure (show result)
+          i <- right =<< addUnderRef env (named "me/topic") (note "after failure" [])
+          _ <- right =<< runGC env defaultPolicy {gracePeriod = 0}
+          m <- right =<< getMemory env i
+          memBody m @?= "after failure"
+    ]
+  where
+    named = either (error . show) id . mkName
+    together actions = do
+      start <- newEmptyMVar
+      outputs <- forM actions $ \action -> do
+        output <- newEmptyMVar
+        _ <- forkIO (readMVar start >> action >>= putMVar output)
+        pure output
+      putMVar start ()
+      mapM takeMVar outputs

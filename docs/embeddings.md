@@ -49,6 +49,16 @@ The flake has two commands. `akyuu-embed-llama` runs llama.cpp itself (args
 `gguf`, `idle`, `llama-port`). `akyuu-embed-openai` calls any server with the
 OpenAI embeddings API (args `url`, `api-model`).
 
+`akyuu-embed-llama` reuses a server only when its live `/props.model_path`
+matches the canonical absolute path of `gguf`. A healthy server alone is
+not sufficient. The helper refuses an occupied port with a different or
+unverifiable model before it sends text. Stop that server yourself or choose
+another `llama-port`.
+
+This check verifies the reported model path, not the file content or the
+honesty of an external server. Do not replace a model file while its server
+is running. Use a new path and vector key for a different model.
+
 A profile keeps the parts of one model together, so a change of model is a
 change of one line (`profile`), and `akyuu --embed-profile NAME` tries another
 model for one command. `embeddings.sqlite` keeps a fingerprint of the profile
@@ -68,9 +78,12 @@ profile named `environment`. `AKYUU_EMBED_MIN`, `AKYUU_EMBED_TIMEOUT` and
   and a vector costs a model call. A vector is never out of date, because an
   `Id` names one text.
 - A new memory (`add`, `supersede`, `append`, so also `amend` and `note`) gets
-  its vector at once if the command works. This waits at most 5 seconds and
-  ignores every failure. `akyuu embed` gives a vector to each memory that has
-  none for the model.
+  its vectors if the command works. Configuration, all chunks and vector
+  writes share one five-second budget, or the shorter configured timeout.
+  The first failed chunk stops the operation. SQLite contention skips the
+  optional vectors. Command failures do not fail the memory write;
+  cancellation still propagates. `akyuu embed` fills the missing vectors
+  with the configured timeout for each command call.
 - `akyuu search` embeds the query and joins two ranked lists by reciprocal rank
   fusion (a memory scores `1 / (60 + rank)` in each list). The scores of the two
   lists are not compared, so bm25 and cosine need no common scale. The current

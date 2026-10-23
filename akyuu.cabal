@@ -61,6 +61,7 @@ library
                    , Akyuu.Fs
                    , Akyuu.Graph
                    , Akyuu.Memory
+                   , Akyuu.Mutation
                    , Akyuu.Store
                    , Akyuu.Refs
                    , Akyuu.Cache
