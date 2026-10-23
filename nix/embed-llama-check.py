@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import select
 import signal
 import socket
 import subprocess
@@ -99,6 +100,7 @@ def fake_flock(args):
 class HelperCheck(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="akyuu-llama-check-")
+        self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.runtime = self.root / "runtime"
         self.runtime.mkdir()
@@ -133,25 +135,41 @@ class HelperCheck(unittest.TestCase):
             "AKYUU_EMBED_IDLE": "3600",
         }
         self.processes = []
+        # Keep a live group owner until all cleanup signals have been sent.
+        # Darwin can return EPERM for a zombie-only group after the helper
+        # has been reaped. A live owner also prevents reuse of its group ID.
+        self.group_owner = subprocess.Popen(
+            [sys.executable, "-c",
+             "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+             "print('ready', flush=True); signal.pause()"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, process_group=0,
+        )
         self.addCleanup(self.cleanup)
+        ready, _, _ = select.select([self.group_owner.stdout], [], [], 8)
+        self.assertTrue(ready, "the process group owner did not start")
+        self.assertEqual(self.group_owner.stdout.readline(), b"ready\n")
+        self.group_owner.stdout.close()
 
     def cleanup(self):
-        # Every group here was created by this test, never taken from helper
-        # state or from the listening port.
-        for proc in reversed(self.processes):
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        for proc in self.processes:
-            try:
+        # Only this test's live owner supplies the group ID, never a reaped
+        # helper, a PID file or a listening port. Keep permission errors fatal.
+        try:
+            os.killpg(self.group_owner.pid, signal.SIGTERM)
+            for proc in self.processes:
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    break
+        finally:
+            # The owner ignores TERM, so even an otherwise empty group still
+            # has a live target for KILL. Reap it only after the final signal.
+            os.killpg(self.group_owner.pid, signal.SIGKILL)
+            self.group_owner.wait(timeout=3)
+            for proc in self.processes:
                 proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait(timeout=3)
-            proc.stdout.close()
-            proc.stderr.close()
-        self.tmp.cleanup()
+                proc.stdout.close()
+                proc.stderr.close()
 
     def events(self, kind):
         if not self.events_path.exists():
@@ -171,7 +189,7 @@ class HelperCheck(unittest.TestCase):
         payload.write_text(text)
         with payload.open("rb") as source:
             proc = subprocess.Popen(argv, env=env, stdin=source, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, start_new_session=True)
+                                    stderr=subprocess.PIPE, process_group=self.group_owner.pid)
         self.processes.append(proc)
         return proc
 
