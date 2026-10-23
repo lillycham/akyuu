@@ -1,0 +1,3 @@
+The store holds what you know about a person, Mira. akyuu is a memory store, and its tools are available to you. She told you today that she now bakes sourdough on Sundays, and no longer on Saturdays. Make the store say so, so that an agent that reads it later gets the right answer. Do not lose the old information.
+
+When you are done, say what you did, in one or two sentences.

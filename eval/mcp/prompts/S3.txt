@@ -1,0 +1,5 @@
+The store holds what you know about a person, Mira. akyuu is a memory store, and its tools are available to you. Today she told you that she now bakes sourdough on Sundays, and no longer on Saturdays. Another agent works on the same store, and may change it while you work.
+
+First read the current memory about Mira's baking routine. Then make your change to it, so that an agent that reads the store later gets the right answer. Do not lose the old information, and do not lose the other agent's changes.
+
+In your final message, as a line that starts with a:, say what happened when you made your change, and how you recovered if something went wrong.

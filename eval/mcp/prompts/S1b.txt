@@ -1,0 +1,5 @@
+You are helping a person, Mira. You do not remember anything about her. akyuu is a memory store, and its tools are available to you. Using only the store, answer these questions. Put the answers in your final message, one line for each, as a:, b: and c:.
+
+a. Which nut must you avoid when you cook for Mira?
+b. On which day does she bake sourdough?
+c. Which units does she prefer?

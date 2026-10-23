@@ -1,0 +1,9 @@
+You are helping a person, and you will not remember this conversation. akyuu is a memory store, and its tools are available to you. The store is already set up.
+
+Record these three facts about the person you help, Mira, so that you, or another agent, can find them later:
+
+1. Mira is allergic to walnuts.
+2. Mira bakes sourdough on Saturdays.
+3. Mira prefers metric units.
+
+When you are done, say what you stored, in one or two sentences.
