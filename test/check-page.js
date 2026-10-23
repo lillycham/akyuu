@@ -103,6 +103,34 @@ if (snips.s2 !== 'a �fake� mark and ' + O + 'Haskell' + C) { console.log('st
 const two = A.staticSearch({ s: { body: 'ab abc', edges: [], created: '2026-01-01T00:00:00Z' } }, 'ab abc', 10);
 if (two.matches[0].snippet !== O + 'ab' + C + ' ' + O + 'abc' + C) { console.log('staticSearch two words wrong: ' + JSON.stringify(two.matches[0].snippet)); problems++; }
 
+// ---- the topic map -----------------------------------------------------------
+{
+  const id = (i) => 'sha256-' + i.toString(16).padStart(64, '0');
+  const n = (i, extra) => Object.assign({ id: id(i), kind: 'fact', agent: 'a', created: '2026-10-0' + i + 'T00:00:00Z', line: 'line ' + i, status: 'head' }, extra || {});
+  // Topic proj/lang: 1 <- 2 (supersedes). Topic log/x: 5 follows 4 follows 3. Topic top: 6, with an about-ref link to
+  // proj/lang and an edge to the first episode of log/x. 7 is held by no ref.
+  const g = {
+    nodes: [n(1), n(2), n(3), n(4), n(5), n(6, { aboutRefs: ['proj/lang', 'proj/nowhere'] }), n(7)],
+    edges: [{ src: id(2), dst: id(1), kind: 'supersedes' }, { src: id(4), dst: id(3), kind: 'follows' }, { src: id(5), dst: id(4), kind: 'follows' },
+            { src: id(6), dst: id(3), kind: 'derived-from' }, { src: id(7), dst: id(2), kind: 'about' }],
+  };
+  const refs = [{ name: 'proj/lang', current: id(2) }, { name: 'log/x', current: id(5) }, { name: 'top', current: id(6) }, { name: 'bad', error: 'unreadable' }];
+  const m = A.topicMap(g, refs);
+  const t = Object.fromEntries(m.topics.map(x => [x.name, x]));
+  const link = (a, b) => m.links.find(l => l.from === a && l.to === b);
+  const ok = (c, msg) => { if (!c) { console.log('topicMap: ' + msg); problems++; } };
+  ok(m.topics.length === 3, 'one topic for each readable ref, got ' + m.topics.length);
+  ok(t['proj/lang'].count === 2 && !t['proj/lang'].isLog, 'a chain of two versions');
+  ok(t['log/x'].count === 3 && t['log/x'].isLog, 'a log of three episodes is one topic');
+  ok(t['log/x'].group === 'log' && t['log/x'].tail === 'x' && t.top.group === '', 'group and tail of a name');
+  ok(link('top', 'proj/lang') && link('top', 'proj/lang').kinds.has('about-ref'), 'an about-ref link leads to the topic of the ref');
+  ok(link('top', 'log/x') && link('top', 'log/x').kinds.has('derived-from'), 'an edge between memories of two topics is a link');
+  ok(!m.links.some(l => l.from === l.to), 'no link from a topic to itself');
+  ok(m.links.length === 2, 'a memory that no ref holds and a ref that does not exist make no link, got ' + m.links.length);
+  ok(m.owner.get(id(1)) === 'proj/lang' && !m.owner.has(id(7)), 'the owner of a memory');
+  console.log('topic map: ' + m.topics.length + ' topics, ' + m.links.length + ' links');
+}
+
 // ---- the export ------------------------------------------------------------
 const vizPath = process.argv[3];
 let viz = null;

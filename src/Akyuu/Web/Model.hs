@@ -118,7 +118,10 @@ data GraphData = GraphData
     -- | The memories in the cache now.
     gdCached :: Set Id,
     -- | The tombstone time of each dangling target that has one.
-    gdTombstones :: Map Id UTCTime
+    gdTombstones :: Map Id UTCTime,
+    -- | The refs that each memory is about (its @about-ref@ links). A
+    -- memory with no such link has no entry.
+    gdAboutRefs :: Map Id (Set Name)
   }
 
 -- | One node of the graph view: a memory, or a dangling target.
@@ -130,7 +133,10 @@ data GraphNode = GraphNode
     -- | 'False' if only the cache has it: the store lost the object and the
     -- cache did not catch up yet.
     gnInStore :: Bool,
-    gnInCache :: Bool
+    gnInCache :: Bool,
+    -- | The refs that this memory is about. The page draws a link from the
+    -- topic of this memory to the topic of each of these refs.
+    gnAboutRefs :: Set Name
   }
   deriving (Eq, Show)
 
@@ -229,7 +235,8 @@ graphView w d =
           gnSummary = Map.lookup i (gdSummaries d),
           gnStatus = status i,
           gnInStore = i `Set.member` gdStore d,
-          gnInCache = i `Set.member` gdCached d
+          gnInCache = i `Set.member` gdCached d,
+          gnAboutRefs = Map.findWithDefault Set.empty i (gdAboutRefs d)
         }
     status i
       | i `Set.member` ns = if i `Set.member` old then SupersededNode else HeadNode
@@ -273,6 +280,7 @@ nodeJSON n =
       <> case gnStatus n of
         PrunedTarget t -> ["prunedAt" .= timeJSON t]
         _ -> []
+      <> ["aboutRefs" .= map nameText (Set.toAscList (gnAboutRefs n)) | not (Set.null (gnAboutRefs n))]
   where
     s = gnSummary n
     statusText :: NodeStatus -> Text

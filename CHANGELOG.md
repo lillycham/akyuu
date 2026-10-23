@@ -18,6 +18,13 @@
 
 Memory bytes, IDs and the ref file format do not change.
 
+### Added
+
+- The web UI Graph tab opens on a topic map: one box for each ref, grouped by
+  namespace, with the number of versions or episodes. Point at a box to see
+  its links to other topics. The old view of every memory stays as "history".
+- `/api/graph` nodes have `aboutRefs`, the refs that the memory is about.
+
 ### Fixed
 
 - GC and writers share one mutation lock. Reference and pin target checks run

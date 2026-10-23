@@ -15,7 +15,7 @@ import Akyuu.Refs (Expected (MustBeAbsent), mkName)
 import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Store qualified as Store
 import Akyuu.Web.Api (Endpoint (CheckEndpoint, ExplainEndpoint, GraphEndpoint, MemoryEndpoint, PageEndpoint, PagesEndpoint, PlanEndpoint, RefsEndpoint, SearchEndpoint, StatsEndpoint, TrashEndpoint, VerifyEndpoint), RouteError (BadParam), WebRequest (WebRequest, reqQuery), WebResponse (resBody, resHeaders, resStatus), parseEndpoint, route, runEndpoint)
-import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), GraphEdge (geDst, geSrc), GraphNode (gnId, gnInStore, gnStatus), GraphView (gvEdges, gvNodes, gvSeeds, gvTotalEdges, gvTotalNodes, gvTruncated), NodeStatus (HeadNode, MissingTarget, PrunedTarget, SupersededNode), Window (Window, winAll, winFocus, winHops, winLimit), defaultWindow, graphView, graphViewJSON, selectWindow)
+import Akyuu.Web.Model (GraphData (GraphData, gdAboutRefs, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), GraphEdge (geDst, geSrc), GraphNode (gnId, gnInStore, gnStatus), GraphView (gvEdges, gvNodes, gvSeeds, gvTotalEdges, gvTotalNodes, gvTruncated), NodeStatus (HeadNode, MissingTarget, PrunedTarget, SupersededNode), Window (Window, winAll, winFocus, winHops, winLimit), defaultWindow, graphView, graphViewJSON, selectWindow)
 import Akyuu.Web.Page (dataMarker, fontsMarker, indexPage, scriptSafeJSON, vizPage)
 import Akyuu.Web.Server (application, hostAllowed, toWebRequest)
 import Control.Monad (forM, forM_)
@@ -242,7 +242,8 @@ dataOf g s =
       gdSummaries = s,
       gdStore = Map.keysSet s,
       gdCached = Map.keysSet s,
-      gdTombstones = Map.empty
+      gdTombstones = Map.empty,
+      gdAboutRefs = Map.empty
     }
 
 windowCases :: TestTree
@@ -288,6 +289,12 @@ windowCases =
         at ["truncated"] v @?= Just (Bool False)
         at ["window", "hops"] v @?= Just (Number 2)
         map (at ["status"]) (items (at ["nodes"] v)) @?= [Just "superseded", Just "head"],
+      testCase "the JSON of a node has its about-ref links, and only if it has some" $ do
+        let g = build [(nid 1, []), (nid 2, [])]
+        n <- right (mkName "claude/lang")
+        let d = (dataOf g (summariesFor [(nid 1, 1), (nid 2, 2)])) {gdAboutRefs = Map.singleton (nid 1) (Set.singleton n)}
+            v = graphViewJSON (graphView defaultWindow d)
+        map (at ["aboutRefs"]) (items (at ["nodes"] v)) @?= [Just (A.toJSON ["claude/lang" :: Text]), Nothing],
       testCase "a big graph is cut to a window" $ do
         -- 3000 memories in 1000 chains of three.
         let chain k = [(nid' (3 * k), []), (nid' (3 * k + 1), [(Supersedes, nid' (3 * k))]), (nid' (3 * k + 2), [(Supersedes, nid' (3 * k + 1))])]

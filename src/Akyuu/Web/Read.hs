@@ -52,7 +52,7 @@ import Akyuu.Render (findingJSON)
 import Akyuu.Store (StoreError (NotFound))
 import Akyuu.Store qualified as Store
 import Akyuu.Tier (parseManifest, tierRefs)
-import Akyuu.Web.Model (GraphData (GraphData, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), NodeStatus (HeadNode, SupersededNode), RefEntry (RefEntry, reName, reValue), Stats (Stats, statCached, statMemories, statNewest, statPins, statRefs, statTombstones, statTrash), Window (winAll, winFocus), defaultWindow, graphView, graphViewJSON, memoryJSON, pageJSON, planJSON, refHolds, refsJSON, searchJSON, statsJSON, timeJSON, trashJSON, verifyJSON, whyJSON)
+import Akyuu.Web.Model (GraphData (GraphData, gdAboutRefs, gdCached, gdGraph, gdStore, gdSummaries, gdTombstones), NodeStatus (HeadNode, SupersededNode), RefEntry (RefEntry, reName, reValue), Stats (Stats, statCached, statMemories, statNewest, statPins, statRefs, statTombstones, statTrash), Window (winAll, winFocus), defaultWindow, graphView, graphViewJSON, memoryJSON, pageJSON, planJSON, refHolds, refsJSON, searchJSON, statsJSON, timeJSON, trashJSON, verifyJSON, whyJSON)
 import Control.Exception (IOException, displayException, try, tryJust)
 import Control.Monad (forM, guard)
 import Control.Monad.IO.Class (liftIO)
@@ -121,6 +121,7 @@ readGraphData env = runExceptT $ do
       needed = filter (`Map.notMember` fromCache) (Set.toList (stored `Set.intersection` Graph.nodes g))
   extra <- catMaybes <$> traverse (summaryFromStore env) needed
   tombs <- gc (GC.listTombstones s)
+  links <- liftIO (linksIn env g)
   let dead = Graph.dangling g
   pure
     ( GraphData
@@ -128,7 +129,8 @@ readGraphData env = runExceptT $ do
           gdSummaries = fromCache <> Map.fromList [(sumId x, x) | x <- extra],
           gdStore = stored,
           gdCached = cached,
-          gdTombstones = Map.fromList [(i, GC.prunedAt t) | (i, t) <- tombs, i `Set.member` dead]
+          gdTombstones = Map.fromList [(i, GC.prunedAt t) | (i, t) <- tombs, i `Set.member` dead],
+          gdAboutRefs = links
         },
       ages
     )

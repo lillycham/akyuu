@@ -79,6 +79,30 @@ button { cursor: pointer; }
 .notice.warn { color: var(--warn); }
 .notice.warn::before { content: "※ "; }
 .canvas { flex: 1; overflow: auto; position: relative; }
+#view-graph[data-mode="map"] .hist-only, #view-graph[data-mode="history"] .map-only { display: none; }
+.map { flex: 1; overflow: auto; position: relative; padding: 16px; }
+.map[hidden] { display: none; }
+.map .groups { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 26px 34px; position: relative; }
+.mgroup { max-width: 100%; }
+.mgroup h3 { margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--rule-strong); font: 500 11px var(--font-mono); letter-spacing: .04em; color: var(--ink-muted); display: flex; gap: 10px; }
+.mgroup h3 .n { color: var(--ink-dim); }
+.mcards { display: grid; grid-template-columns: repeat(var(--cols, 1), 196px); gap: 10px; }
+.topic { --kind: hsl(var(--kh, 220) var(--kind-s) var(--kind-l)); position: relative; z-index: 1; text-align: left; width: 196px; min-height: 64px; font: inherit; color: var(--fg);
+  background: color-mix(in oklab, var(--kind) var(--kind-mix), var(--bg)); border: 1.2px solid var(--wire); padding: 7px 9px 7px 14px; }
+.topic::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--kind); }
+.topic .nm { display: block; font: 700 13px/1.25 var(--font-display); overflow-wrap: anywhere; }
+.topic .ln { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 3px; font-size: 11px; line-height: 1.35; color: var(--ink-muted); }
+.topic .meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 10px; color: var(--ink-dim); }
+.topic:hover { border-color: var(--sora); }
+.topic.nb { border-color: var(--sora); border-width: 1.8px; }
+.topic.sel { border-color: var(--sora); border-width: 2.4px; box-shadow: var(--glow-accent); }
+.topic.dim { opacity: .22; }
+svg.maplinks { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 0; overflow: visible; }
+svg.maplinks path { fill: none; stroke-linecap: round; }
+svg.maplinks .out { stroke: var(--about); }
+svg.maplinks .in { stroke: var(--fuji); }
+svg.maplinks .faint { opacity: .22; }
+svg.maplinks marker path { stroke-width: 1.4; stroke-linejoin: round; }
 svg.graph { display: block; }
 svg.graph text { font: 12px var(--font-mono); fill: var(--fg); }
 svg.graph .date { fill: var(--ink-dim); font-size: 11px; }
@@ -309,21 +333,24 @@ ol.timeline.episodes .md p { margin: 2px 0; }
     <div class="wfold" aria-hidden="true"><span>幻想郷縁起</span></div>
     <article class="wpage" id="wiki-page"></article>
   </section>
-  <section class="view" id="view-graph" hidden>
+  <section class="view" id="view-graph" data-mode="map" hidden>
     <div class="toolbar">
+      <label title="The map shows one box for each ref. History shows every memory and its edges.">view <select id="f-view"><option value="map">topic map</option><option value="history">history</option></select></label>
       <label>kind <select id="f-kind"></select></label>
       <label>agent <select id="f-agent"></select></label>
-      <label>ref <select id="f-ref"></select></label>
-      <label title="Edges away from the start nodes">hops <input id="w-hops" type="number" min="0" max="10" value="2"></label>
-      <label title="How many of the newest heads to start from">heads <input id="w-limit" type="number" min="1" max="100000" value="200"></label>
-      <label><input id="w-all" type="checkbox"> show all</label>
-      <span id="w-focus"></span>
-      <label title="Compact stacks short chains in fewer columns, to use the height. By time keeps one column for each chain.">layout <select id="f-layout"><option value="compact">compact</option><option value="time">by time</option></select></label>
-      <span class="zoombar" data-for="graph-canvas"><button type="button" data-zoom="out" title="Zoom out">−</button><button type="button" data-zoom="in" title="Zoom in">+</button><button type="button" data-zoom="fit" title="Fit the drawing to the window">Fit</button><button type="button" data-zoom="one" title="Natural size">100%</button><span class="muted" data-zoom-label></span></span>
+      <label class="hist-only">ref <select id="f-ref"></select></label>
+      <label class="map-only" title="Draw every link between topics, not only the links of the topic that you point at"><input id="m-all" type="checkbox"> all links</label>
+      <label class="hist-only" title="Edges away from the start nodes">hops <input id="w-hops" type="number" min="0" max="10" value="2"></label>
+      <label class="hist-only" title="How many of the newest heads to start from">heads <input id="w-limit" type="number" min="1" max="100000" value="200"></label>
+      <label class="hist-only"><input id="w-all" type="checkbox"> show all</label>
+      <span id="w-focus" class="hist-only"></span>
+      <label class="hist-only" title="Compact stacks short chains in fewer columns, to use the height. By time keeps one column for each chain.">layout <select id="f-layout"><option value="compact">compact</option><option value="time">by time</option></select></label>
+      <span class="zoombar hist-only" data-for="graph-canvas"><button type="button" data-zoom="out" title="Zoom out">−</button><button type="button" data-zoom="in" title="Zoom in">+</button><button type="button" data-zoom="fit" title="Fit the drawing to the window">Fit</button><button type="button" data-zoom="one" title="Natural size">100%</button><span class="muted" data-zoom-label></span></span>
     </div>
     <div class="notice" id="graph-notice"></div>
     <div class="legend" id="legend"></div>
     <div class="canvas" id="graph-canvas"></div>
+    <div class="map" id="map-canvas" hidden></div>
   </section>
   <section class="view" id="view-refs" hidden>
     <div class="notice" id="refs-notice"></div>
@@ -444,6 +471,63 @@ const Akyuu = (function () {
              truncated: nodes.length < total.nodes || edges.length < total.edges,
              total: total, shown: { nodes: nodes.length, edges: edges.length },
              seeds: seeds, window: windowInfo };
+  }
+
+  // The topic map: one topic for each ref, and the links between topics.
+  // A topic owns the memory that its ref holds now and the chain behind it
+  // (what that memory supersedes, and the episode that it follows), so a log
+  // of 90 episodes is one topic. A memory that two refs reach stays with the
+  // first ref by name, and a ref's own memory always stays with that ref.
+  // A link goes from topic A to topic B if a memory of A has an edge to a
+  // memory of B, or an about-ref link to the ref of B. `refs` is the list of
+  // /api/refs.
+  function topicMap(graph, refs) {
+    const node = new Map(graph.nodes.map(n => [n.id, n]));
+    const out = new Map();
+    for (const e of graph.edges) {
+      if (!out.has(e.src)) out.set(e.src, []);
+      out.get(e.src).push(e);
+    }
+    const topics = (refs || []).filter(r => !r.error && node.has(r.current))
+      .map(r => ({ name: r.name, current: r.current, ids: new Set(), steps: 0, episodes: 0 }))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const owner = new Map();
+    for (const t of topics) if (!owner.has(t.current)) { owner.set(t.current, t); t.ids.add(t.current); }
+    for (const t of topics) {
+      const todo = [t.current];
+      while (todo.length) {
+        for (const e of out.get(todo.pop()) || []) {
+          if ((e.kind !== 'supersedes' && e.kind !== 'follows') || owner.has(e.dst) || !node.has(e.dst)) continue;
+          owner.set(e.dst, t);
+          t.ids.add(e.dst);
+          if (e.kind === 'follows') t.episodes++; else t.steps++;
+          todo.push(e.dst);
+        }
+      }
+    }
+    const links = new Map();
+    const link = (a, b, kind) => {
+      if (!a || !b || a === b) return;
+      const key = a.name + '\n' + b.name;
+      if (!links.has(key)) links.set(key, { from: a.name, to: b.name, n: 0, kinds: new Set() });
+      const l = links.get(key);
+      l.n++;
+      l.kinds.add(kind);
+    };
+    for (const e of graph.edges) link(owner.get(e.src), owner.get(e.dst), e.kind);
+    // An about-ref link names a ref, so it leads to the topic of that ref.
+    const byName = new Map(topics.map(t => [t.name, t]));
+    for (const n of graph.nodes) for (const r of n.aboutRefs || []) link(owner.get(n.id), byName.get(r), 'about-ref');
+    for (const t of topics) {
+      const n = node.get(t.current);
+      t.kind = n.kind; t.agent = n.agent; t.created = n.created; t.line = n.line;
+      const slash = t.name.lastIndexOf('/');
+      t.group = slash < 0 ? '' : t.name.slice(0, slash);
+      t.tail = t.name.slice(slash + 1);
+      t.count = t.ids.size;
+      t.isLog = t.episodes > t.steps;
+    }
+    return { topics: topics, links: Array.from(links.values()), owner: new Map(Array.from(owner, ([id, t]) => [id, t.name])) };
   }
 
   // A small binary heap, for the order of the layout.
@@ -1396,7 +1480,7 @@ const Akyuu = (function () {
     return kind === 'episode' || kind === 'note';
   }
 
-  const pure = { previousEpisode, mdBlocks, mdInline, refMatcher, wikiTree, textBacklinks, isLogPage, compareText, sentences, fitScale, anchorScroll, MIN_SCALE, MAX_SCALE, OVERVIEW_BELOW, shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, planRoutes, routeEdges, roundedPath, NODE_W, NODE_H, ROW_H, COL_GAP, TRACK, TOP, LEFT };
+  const pure = { topicMap, previousEpisode, mdBlocks, mdInline, refMatcher, wikiTree, textBacklinks, isLogPage, compareText, sentences, fitScale, anchorScroll, MIN_SCALE, MAX_SCALE, OVERVIEW_BELOW, shortId, kindHue, windowGraph, layout, staticSearch, snippetParts, newestFirst, ago, columnGeometry, tagRows, rowWidth, planRoutes, routeEdges, roundedPath, NODE_W, NODE_H, ROW_H, COL_GAP, TRACK, TOP, LEFT };
   if (typeof document === 'undefined') return pure;
 
   // ---------------------------------------------------------------------
@@ -1555,6 +1639,9 @@ const Akyuu = (function () {
     wikiHome: null,
     stats: null,
     graph: null,
+    mapGraph: null,
+    view: 'map',
+    mapAll: false,
     gcGraph: null,
     refs: null,
     plan: null,
@@ -1595,7 +1682,7 @@ const Akyuu = (function () {
   }
 
   function nodeInfo(id) {
-    for (const g of [state.graph, state.gcGraph]) {
+    for (const g of [state.graph, state.mapGraph, state.gcGraph]) {
       if (!g) continue;
       const n = g.nodes.find(x => x.id === id);
       if (n) return n;
@@ -1902,6 +1989,10 @@ const Akyuu = (function () {
   }
 
   function renderGraph(scrollTo) {
+    $('view-graph').setAttribute('data-mode', state.view);
+    $('graph-canvas').hidden = state.view !== 'history';
+    $('map-canvas').hidden = state.view !== 'map';
+    if (state.view === 'map') return renderMap();
     const g = state.graph;
     const notice = $('graph-notice');
     if (!g) return;
@@ -1935,10 +2026,149 @@ const Akyuu = (function () {
     legend($('legend'), g, state.hits.size ? [el('span', {}, [el('span', { class: 'swatch', style: 'background: var(--hit)' }), 'search hit'])] : []);
   }
 
+  // ---- the topic map ----------------------------------------------------------
+
+  // A line from the rim of box a to the rim of box b, bent a little. Boxes are
+  // {x, y, w, h}, with (x, y) the centre.
+  function linkPath(a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const cx = (a.x + b.x) / 2 - dy * 0.12, cy = (a.y + b.y) / 2 + dx * 0.12;
+    const rim = (box, tx, ty) => {
+      const ux = tx - box.x, uy = ty - box.y;
+      const t = Math.min(ux ? (box.w / 2 + 3) / Math.abs(ux) : Infinity, uy ? (box.h / 2 + 3) / Math.abs(uy) : Infinity);
+      return [box.x + ux * t, box.y + uy * t];
+    };
+    const [x1, y1] = rim(a, cx, cy);
+    const [x2, y2] = rim(b, cx, cy);
+    return 'M' + x1.toFixed(1) + ',' + y1.toFixed(1) + ' Q' + cx.toFixed(1) + ',' + cy.toFixed(1) + ' ' + x2.toFixed(1) + ',' + y2.toFixed(1);
+  }
+
+  // The topic map of the whole store: a box for each ref, grouped by the
+  // namespace of the ref. The links of a topic show when the pointer is on it,
+  // or when it is selected.
+  function renderMap() {
+    const host = $('map-canvas');
+    const notice = $('graph-notice');
+    const g = state.mapGraph;
+    $('legend').replaceChildren();
+    notice.className = 'notice';
+    const keep = { left: host.scrollLeft, top: host.scrollTop };
+    host.replaceChildren();
+    if (!g) return;
+    const refs = state.refs && state.refs.refs ? state.refs.refs : [];
+    const map = topicMap(g, refs);
+    fillSelect($('f-kind'), Array.from(new Set(map.topics.map(t => t.kind).filter(Boolean))).sort(), state.filter.kind);
+    fillSelect($('f-agent'), Array.from(new Set(map.topics.map(t => t.agent).filter(Boolean))).sort(), state.filter.agent);
+    if (!map.topics.length) {
+      notice.textContent = 'No refs yet. A topic is a ref: add a memory with a ref to see it here.';
+      return;
+    }
+    const byName = new Map(map.topics.map(t => [t.name, t]));
+    const mine = state.selected ? map.owner.get(state.selected) : null;
+    let hover = null;
+    const groupsOf = new Map();
+    for (const t of map.topics) {
+      if (!groupsOf.has(t.group)) groupsOf.set(t.group, []);
+      groupsOf.get(t.group).push(t);
+    }
+    const byDate = (a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0);
+    for (const ts of groupsOf.values()) ts.sort(byDate);
+    const order = Array.from(groupsOf.keys()).sort((a, b) => byDate(groupsOf.get(a)[0], groupsOf.get(b)[0]));
+    const cards = new Map();
+    const groups = el('div', { class: 'groups' });
+    for (const name of order) {
+      const ts = groupsOf.get(name);
+      const grid = el('div', { class: 'mcards', style: '--cols: ' + Math.min(ts.length, ts.length > 6 ? 3 : 2) });
+      for (const t of ts) {
+        const what = t.count === 1 ? 'one memory' : t.count + (t.isLog ? ' episodes' : ' versions');
+        const card = el('button', { type: 'button', class: 'topic', style: kindStyle(t.kind), title: t.name + '\n' + (t.line || '') }, [
+          el('span', { class: 'nm', text: t.tail }),
+          el('span', { class: 'ln', text: t.line || '' }),
+          el('span', { class: 'meta' }, [el('span', { text: what }), el('span', { text: (t.created || '').slice(0, 10) })]),
+        ]);
+        card.addEventListener('click', () => selectNode(t.current));
+        card.addEventListener('mouseenter', () => { hover = t.name; paint(); });
+        card.addEventListener('mouseleave', () => { hover = null; paint(); });
+        cards.set(t.name, card);
+        grid.appendChild(card);
+      }
+      groups.appendChild(el('div', { class: 'mgroup' }, [
+        el('h3', {}, [el('span', { text: name || '(top level)' }), el('span', { class: 'n', text: String(ts.length) })]),
+        grid,
+      ]));
+    }
+    const layer = svg('svg', { class: 'maplinks' });
+    const defs = svg('defs');
+    for (const [id, v] of [['mk-out', 'about'], ['mk-in', 'refines']]) {
+      const m = svg('marker', { id: id, viewBox: '0 0 10 10', refX: '9', refY: '5', markerUnits: 'userSpaceOnUse', markerWidth: '9', markerHeight: '9', orient: 'auto' });
+      m.appendChild(svg('path', { d: 'M1,1 L9,5 L1,9', fill: 'none', style: 'stroke: var(--' + v + ')' }));
+      defs.appendChild(m);
+    }
+    layer.appendChild(defs);
+    host.appendChild(layer);
+    host.appendChild(groups);
+
+    function boxes() {
+      const origin = host.getBoundingClientRect();
+      const m = new Map();
+      for (const [name, c] of cards) {
+        const r = c.getBoundingClientRect();
+        m.set(name, { x: r.left - origin.left + host.scrollLeft + r.width / 2, y: r.top - origin.top + host.scrollTop + r.height / 2, w: r.width, h: r.height });
+      }
+      return m;
+    }
+    // The topic in focus is the one under the pointer, or else the selected one.
+    function paint() {
+      const focus = hover || mine;
+      const near = new Set();
+      const shown = [];
+      for (const l of map.links) {
+        const hot = !!focus && (l.from === focus || l.to === focus);
+        if (hot) { near.add(l.from); near.add(l.to); }
+        if (hot || state.mapAll) shown.push({ l: l, hot: hot });
+      }
+      for (const [name, c] of cards) {
+        const t = byName.get(name);
+        const off = (state.filter.kind && t.kind !== state.filter.kind) || (state.filter.agent && t.agent !== state.filter.agent);
+        c.classList.toggle('dim', !!(off || (focus && !near.has(name) && name !== focus)));
+        c.classList.toggle('nb', !!focus && near.has(name) && name !== focus);
+        c.classList.toggle('sel', name === mine);
+      }
+      const bx = boxes();
+      layer.setAttribute('width', host.scrollWidth);
+      layer.setAttribute('height', host.scrollHeight);
+      for (const p of Array.from(layer.querySelectorAll('path.link'))) p.remove();
+      for (const { l, hot } of shown) {
+        const a = bx.get(l.from), b = bx.get(l.to);
+        if (!a || !b) continue;
+        const out = !focus || l.from === focus;
+        layer.appendChild(svg('path', { class: 'link ' + (out ? 'out' : 'in') + (hot ? '' : ' faint'), d: linkPath(a, b),
+          'stroke-width': (1.2 + Math.min(2.4, Math.log2(l.n + 1) * 0.5)).toFixed(1), 'marker-end': 'url(#' + (out ? 'mk-out' : 'mk-in') + ')' }));
+      }
+      if (focus) {
+        const t = byName.get(focus);
+        const outs = map.links.filter(l => l.from === focus).length, ins = map.links.filter(l => l.to === focus).length;
+        notice.textContent = t.name + ': ' + (t.isLog ? count(t.count, 'episode', 'episodes') : count(t.count, 'version', 'versions')) +
+          ', links to ' + count(outs, 'topic', 'topics') + ', linked from ' + count(ins, 'topic', 'topics') + '.';
+      } else {
+        notice.textContent = count(map.topics.length, 'topic', 'topics') + ' (one for each ref), ' + count(map.links.length, 'link', 'links') +
+          ' between them. Point at a topic to see its links, and click it to read it.';
+      }
+    }
+    paint();
+    host.scrollLeft = keep.left;
+    host.scrollTop = keep.top;
+  }
+
   async function loadGraph() {
     try {
-      state.graph = await state.src.graph(state.window);
-      renderGraph(state.window.focus);
+      if (state.view === 'map') {
+        state.mapGraph = await state.src.graph({ focus: null, hops: 0, limit: 1, all: true });
+        renderGraph();
+      } else {
+        state.graph = await state.src.graph(state.window);
+        renderGraph(state.window.focus);
+      }
     } catch (e) {
       $('graph-notice').className = 'notice warn';
       $('graph-notice').textContent = 'The graph could not be read: ' + e.message;
@@ -2583,6 +2813,9 @@ const Akyuu = (function () {
     const dataEl = document.getElementById('akyuu-data');
     state.src = dataEl ? staticSource(JSON.parse(dataEl.textContent)) : liveSource();
     for (const b of document.querySelectorAll('#tabs button')) b.addEventListener('click', () => switchTab(b.dataset.tab));
+    $('f-view').addEventListener('change', (e) => { state.view = e.target.value; loadGraph(); });
+    $('m-all').addEventListener('change', (e) => { state.mapAll = e.target.checked; renderGraph(); });
+    window.addEventListener('resize', () => { if (state.tab === 'graph' && state.view === 'map') renderGraph(); });
     $('f-kind').addEventListener('change', (e) => { state.filter.kind = e.target.value; renderGraph(); });
     $('f-agent').addEventListener('change', (e) => { state.filter.agent = e.target.value; renderGraph(); });
     $('f-ref').addEventListener('change', (e) => { state.filter.ref = e.target.value; renderGraph(); });
