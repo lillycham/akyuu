@@ -124,6 +124,23 @@ nmem() { find "$AKYUU_ROOT/store" -type f 2>/dev/null | wc -l | tr -d ' '; }
 answer() { grep -i "^$1:" "$answers" 2>/dev/null | head -1 | cut -d: -f2-; }
 # Has the answer for KEY the word (ignoring case)?
 answer_has() { answer "$1" | grep -i -F -q -- "$2"; }
+# True if the text on the standard input states the word as a current fact:
+# some sentence has the word and no word that puts it in the past ("previously",
+# "before", "no longer", ...). The old value as history is fine, because the
+# task says "do not lose the old information" and an agent may keep a note.
+past_re='previous|before|used to|no longer|formerly|until|earlier|older|was |were |had |changed|instead|rather|prior|old '
+states_as_current() { tr '\n' ' ' | tr '.!?;' '\n\n\n\n' | grep -i -F -- "$1" | grep -i -v -E "$past_re" | grep -q .; }
+# The first ref whose current text states the word as a current fact.
+current_claims() {
+  local r
+  for r in $("$bin" ref list 2>/dev/null | awk '{ print $1 }'); do
+    if current "$r" | states_as_current "$1"; then
+      echo "$r"
+      return 0
+    fi
+  done
+  return 1
+}
 
 # --- the fixtures ----------------------------------------------------------
 
@@ -238,9 +255,9 @@ verify_S1() {
 }
 
 verify_S2() {
-  t S2.1 "the current memory about baking says Sunday, and none that a ref holds says Saturday"
+  t S2.1 "the current memory about baking says Sunday, and none that a ref holds states Saturday as the current day (the old routine as history is fine)"
   r=$(holder Sunday) || fail "no ref holds a memory with Sunday"
-  holder Saturday >/dev/null && fail "a current memory still says Saturday"
+  r=$(current_claims Saturday) && fail "a current memory still states Saturday as current: $r"
 
   t S2.2 "the change is a new version of the same ref: no new ref, and the history has the old id"
   need_eq "$(nrefs)" 6 "number of refs (the 2 of init, 3 facts, the log)"
@@ -250,7 +267,6 @@ verify_S2() {
   t S2.3 "the old text can still be found, and the search says that a newer memory replaces it"
   ak search --mode text --hops 0 Saturdays
   need_out_has "superseded by"
-  need_out_lacks "held by"
 
   t S2.4 "the other facts are unchanged"
   for r in people/mira/allergies people/mira/preferences; do
@@ -276,7 +292,7 @@ verify_S3() {
   r=$(holder Sunday) || fail "no ref holds a memory with Sunday"
   need_eq "$r" people/mira/routine "the ref with Sunday"
   current people/mira/routine | grep -F -q "rye on Wednesdays" || fail "the other agent's change was lost: $(current people/mira/routine | head -3 | tr '\n' '|')"
-  current people/mira/routine | grep -F -q "Saturdays" && fail "the old text is still current"
+  current people/mira/routine | states_as_current Saturday && fail "the old text is still current: $(current people/mira/routine | head -3 | tr '\n' '|')"
 
   t S3.2 "the history shows the other agent's version, and then the agent's: three ids at least"
   ak ref get people/mira/routine --history

@@ -58,10 +58,10 @@ an old text. The store has Mira's three facts under three refs and a short log.
 >
 > Answer in the answers file as `a:`: on which day does Mira bake sourdough?
 
-Verifier: the current memory says Sunday and no current memory says Saturday; the
-change is a new version of the same ref (no new ref); the old text can still be
-found and is marked as replaced; the other facts did not change; `check` has no
-problem.
+Verifier: the current memory says Sunday and no current memory states Saturday as
+the current day (a note that she used to bake on Saturdays is fine); the change is
+a new version of the same ref (no new ref); the old text can still be found and is
+marked as replaced; the other facts did not change; `check` has no problem.
 
 ## S3. Someone else changes it at the same time
 
@@ -81,9 +81,11 @@ store as S2.
 > Answer in the answers file as `a:`: what happened in step 3, and how you
 > recovered.
 
-Verifier: the final text has Sunday and the other agent's change; the history
-shows both versions; `verify` is clean. `S3.4` is a known issue (see
-`README.md`): after the lost race, `check` reports a fork.
+Verifier: the final text has Sunday and the other agent's change, and does not
+state Saturday as the current day (a note about the old routine is fine); the
+history shows both versions; `verify` is clean. `S3.4` was a known issue (see
+`README.md`): after the lost race, `check` reported a fork. It is fixed in
+akyuu 0.3.0.0 plus PR #19, and then the check reports XPASS.
 
 Watch for: whether the message of the failed write told you what to do.
 
