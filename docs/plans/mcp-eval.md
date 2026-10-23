@@ -106,6 +106,25 @@ session is capped by `--max-run-usd` (default 1) and `--max-seconds` (default
 Order: `probe`; then a pilot with one run for each cell (`--runs 1`); then the
 full run, if the pilot looks sound.
 
+### What changed between the pilots and the full run (2026-10-23)
+
+Two pilots ran, each with one run for each cell (about $0.25 and $0.22).
+
+- Pilot 1 showed three checks that failed correct work: S2.1, S2.3 and S3.1
+  rejected a note that she used to bake on Saturdays. They now fail only when a
+  current memory states Saturday as the current day. S1.3 stayed as it was.
+- The pilots showed three gaps in the topic set. The instructions did not say
+  that old text stays in the store, and one agent told a person that nothing
+  was left. Agents bundled the facts about a person in one topic. A `recall`
+  hit showed no version. The topic set was changed (instructions, the
+  description of `remember`, the version in each hit), and `tools/list` grew
+  from 8245 to 8411 bytes.
+- The full run therefore tests the changed topic set. The ordinary set is the
+  same as in the pilots. The pilot results are kept (`results-pilot1.tsv`,
+  `results-pilot2.tsv`) as the "before" for the topic set, with one run each.
+- S7.4 is still loose: its pattern matches the word "still". It is left as it
+  is, and the answers of S7 are read by hand.
+
 ## What is tested and what is not, before the first run
 
 - The self-test (`run.sh selftest`) runs S2 and S3 on both sets with a fake
