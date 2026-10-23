@@ -29,9 +29,18 @@ module Akyuu.Topic
     renderEntry,
     renderTopic,
     noMatch,
+
+    -- * Answers of the writers
+    renderMade,
+    renderAdded,
+    renderRevised,
+    renderReplaced,
+    renderNoted,
+    changedLines,
   )
 where
 
+import Akyuu.Amend (Edit (Replace))
 import Akyuu.Check (jaccard, normalise, shingles)
 import Akyuu.Fuzzy (editDistance)
 import Akyuu.Graph (Edge (Edge), EdgeType (Follows))
@@ -159,6 +168,47 @@ renderTopic n i m about mentions =
 -- | The answer of a query that finds nothing.
 noMatch :: Text
 noMatch = "No topic matches."
+
+-- Answers of the writers -----------------------------------------------
+
+-- | The answer of @remember@: the topic, its version, and the topics with
+-- similar text, if there are any.
+renderMade :: Name -> Id -> [Name] -> Text
+renderMade n i close =
+  T.intercalate "\n" $
+    ["Made topic " <> nameText n <> ".", versionLine i]
+      <> ["Topics with similar text, in case this repeats one: " <> T.intercalate ", " (map nameText close) <> "." | not (null close)]
+
+-- | The answer of @add_to@.
+renderAdded :: Name -> Id -> Text
+renderAdded n i = T.intercalate "\n" ["Added to topic " <> nameText n <> ".", versionLine i]
+
+-- | The answer of @revise@. The lines that the edits changed are shown, so
+-- that the agent can see what the patch made of the text.
+renderRevised :: Name -> Id -> [Text] -> Text
+renderRevised n i ls
+  | null ls = T.intercalate "\n" ["Revised topic " <> nameText n <> ".", versionLine i]
+  | otherwise = T.intercalate "\n" (["Revised topic " <> nameText n <> ". The changed lines now read:"] <> ls <> [versionLine i])
+
+-- | The answer of @replace@.
+renderReplaced :: Name -> Id -> Text
+renderReplaced n i = T.intercalate "\n" ["Replaced the text of topic " <> nameText n <> ".", versionLine i]
+
+-- | The answer of @note@. It names the log and no memory.
+renderNoted :: Name -> Text
+renderNoted n = "Noted in " <> nameText n <> "."
+
+-- | The lines of a text that hold the new text of a replacement, at most ten,
+-- each once. A replacement that only deletes shows no line.
+changedLines :: [Edit] -> Text -> [Text]
+changedLines edits body =
+  take 10 (nubOrdered [l | l <- T.lines body, any (`T.isInfixOf` l) tos])
+  where
+    tos = [t | Replace _ t <- edits, not (T.null (T.strip t))]
+    nubOrdered = foldr (\x acc -> x : filter (/= x) acc) []
+
+versionLine :: Id -> Text
+versionLine i = "version: " <> versionToken i
 
 -- The kind, the author and the time of a memory, on one line.
 facts :: Memory -> Text

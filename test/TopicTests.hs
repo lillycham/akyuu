@@ -2,11 +2,12 @@
 
 module TopicTests (topicTests) where
 
+import Akyuu.Amend (Edit (Replace))
 import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom, Follows))
 import Akyuu.Id (render)
 import Akyuu.Memory (Memory)
 import Akyuu.Refs (Name, mkName)
-import Akyuu.Topic (Entry (Entry), closeTopics, cutText, isLogTopic, noMatch, renderEntry, renderTopic, suggestNames, tokenPrefix, versionToken)
+import Akyuu.Topic (Entry (Entry), changedLines, closeTopics, cutText, isLogTopic, noMatch, renderAdded, renderEntry, renderMade, renderNoted, renderReplaced, renderRevised, renderTopic, suggestNames, tokenPrefix, versionToken)
 import Data.Either (isLeft)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -23,7 +24,8 @@ topicTests =
     [ logCases,
       versionCases,
       nearCases,
-      showCases
+      showCases,
+      answerCases
     ]
 
 -- Helpers --------------------------------------------------------------
@@ -147,3 +149,33 @@ showCases =
       testCase "noMatch is a sentence, not an empty text" $
         assertBool "text" (not (T.null noMatch))
     ]
+
+-- Answers of the writers -----------------------------------------------
+
+answerCases :: TestTree
+answerCases =
+  testGroup
+    "answers of the writers"
+    [ testCase "made shows the topic and the version, and the close topics if there are any" $ do
+        renderMade oven (nid 7) [] @?= "Made topic kitchen/oven.\nversion: " <> versionToken (nid 7)
+        renderMade oven (nid 7) [name "kitchen/rota", name "kitchen/shop"]
+          @?= "Made topic kitchen/oven.\nversion: " <> versionToken (nid 7) <> "\nTopics with similar text, in case this repeats one: kitchen/rota, kitchen/shop.",
+      testCase "added and replaced show the version" $ do
+        renderAdded oven (nid 7) @?= "Added to topic kitchen/oven.\nversion: " <> versionToken (nid 7)
+        renderReplaced oven (nid 7) @?= "Replaced the text of topic kitchen/oven.\nversion: " <> versionToken (nid 7),
+      testCase "revised shows the changed lines, or none" $ do
+        renderRevised oven (nid 7) ["The oven is 60 cm."]
+          @?= "Revised topic kitchen/oven. The changed lines now read:\nThe oven is 60 cm.\nversion: " <> versionToken (nid 7)
+        renderRevised oven (nid 7) [] @?= "Revised topic kitchen/oven.\nversion: " <> versionToken (nid 7),
+      testCase "noted names the log and no memory" $
+        renderNoted (name "me/log") @?= "Noted in me/log.",
+      testCase "changedLines picks the lines that hold the new text, each once" $
+        changedLines [Replace "90" "60 cm"] "The oven is 60 cm.\nIt has a grill.\nThe oven is 60 cm.\nA 60 cm door."
+          @?= ["The oven is 60 cm.", "A 60 cm door."],
+      testCase "changedLines shows nothing for a deletion" $
+        changedLines [Replace "grill" ""] "The oven is 60 cm." @?= [],
+      testCase "no answer has a full id" $
+        assertBool "no sha256-" (not ("sha256-" `T.isInfixOf` T.concat [renderMade oven (nid 7) [], renderAdded oven (nid 7), renderReplaced oven (nid 7), renderRevised oven (nid 7) []]))
+    ]
+  where
+    oven = name "kitchen/oven"

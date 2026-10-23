@@ -206,6 +206,17 @@ replaceCases =
           assertBool "current text" ("It has a grill." `T.isInfixOf` t)
           assertBool "no full id" (not ("sha256-" `T.isInfixOf` t))
           (right =<< readRef env oven) >>= (@?= before),
+      testCase "a version that no topic ever had is a change, and shows the current text and no id" $
+        withOpsEnv $ \_ env -> do
+          made env oven "The oven is 90 cm."
+          now <- versionOf env oven
+          before <- right =<< readRef env oven
+          t <- refusal =<< replaceTopic env manifest "claude" oven "000000000000" "New text." Nothing
+          assertBool "changed" ("changed since you read it" `T.isInfixOf` t)
+          assertBool "current version" (now `T.isInfixOf` t)
+          assertBool "current text" ("The oven is 90 cm." `T.isInfixOf` t)
+          assertBool "no id" (not ("sha256-" `T.isInfixOf` t))
+          (right =<< readRef env oven) >>= (@?= before),
       testCase "a version that is too short is refused" $
         withOpsEnv $ \_ env -> do
           made env oven "The oven is 90 cm."

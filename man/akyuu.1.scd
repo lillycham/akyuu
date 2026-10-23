@@ -236,6 +236,14 @@ be *\**, and *~* is the home directory).
 	Ordinary add requires a new ref. Ordinary add and supersede use the
 	configured agent as the default author. An explicit agent overrides it.
 	Both sets require expected for amend and supersede. Use the id from get.
+	Select *--tool-set topic* for an agent that should not handle ids. The
+	tools are context, log, unfold, and these, which name topics (refs) and
+	use plain text: *recall* finds topics or reads one, *remember* makes a
+	topic, *add_to* adds a line, *revise* changes a part of the text, *replace*
+	rewrites the whole text, and *note* records an episode. The server
+	retries a busy store lock, and it adds and revises under the lock, so a
+	writer needs no version for them. Only *replace* takes a version: the one
+	that *recall* shows. A stale version is refused with the current text.
 	The server
 	tells the agent to read the policy (*policy/memory*, or *--policy-ref*, or
 	*$AKYUU_POLICY_REF*, or *policy-ref* in the config file) first.

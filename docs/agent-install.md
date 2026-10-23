@@ -160,6 +160,20 @@ Maintenance `add` can omit `ref`, but an unretained object can disappear after G
 An outgoing link does not keep its source alive.
 The tool sets select an interface; they do not provide access control.
 
+Use `AKYUU --root ROOT mcp --tool-set topic` for an agent that should not handle
+ids or versions. It names topics, which are refs, and writes plain text:
+
+- `recall` with `query` finds topics. With `topic` it reads one, with its version.
+- `remember` makes a new topic. It refuses a topic that exists.
+- `add_to` adds a line. `revise` changes a part. Neither needs a version.
+- `replace` rewrites the whole text. Give the version that `recall` showed.
+  If the topic changed since, nothing is written, and the error shows the
+  current version and text.
+- `note` records an episode in the log of the directory.
+- `context`, `log` and `unfold` work as in the other sets.
+
+`add_to`, `revise` and `replace` refuse a log: use `note`.
+
 Check: `claude mcp list` shows `akyuu`.
 
 ```sh

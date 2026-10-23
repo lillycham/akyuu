@@ -1348,16 +1348,17 @@ reviseTopic env manifestRef agent topic edits = rewriteTopic env manifestRef age
 -- | Rewrite the whole text of a topic. The version must be the one that
 -- 'recallTopic' gave ('Akyuu.Topic.versionToken'). If the topic has changed,
 -- the error gives the current version and text, and nothing is written.
+-- A version that is no version of this topic, for example one that GC
+-- deleted, counts as a change: the store is not asked about it.
 -- With links, the new memory is about these refs. Without, it keeps the
 -- links of the old one.
 replaceTopic :: Env -> Name -> Text -> Name -> Text -> Text -> Maybe (Set Name) -> IO (Either AkyuuError (Id, Memory))
 replaceTopic env manifestRef agent topic token text about = runExceptT $ do
   prefix <- either (throwE . BadInput) pure (Topic.tokenPrefix token)
-  want <- ExceptT . either (pure . Left) (resolveId env) . parseIdSpec $ prefix
   forM_ about $ \links ->
     linkable env NewMemory {newKind = "fact", newAgent = agent, newEdges = Set.empty, newBody = text, newAboutRefs = links}
   ExceptT . rewriteTopic env manifestRef agent topic $ \i old ->
-    if i /= want
+    if not (prefix `T.isPrefixOf` Id.render i)
       then
         Left . BadInput $
           "The topic changed since you read it. Its version is now "

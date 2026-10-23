@@ -5,8 +5,10 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
 
 ## Next
 
-- **Safer MCP writes and tool sets.** Work in progress: required version
-  checks, retained ordinary creation, and a separate maintenance interface.
+- **Evaluate the topic tool set.** `mcp --tool-set topic` is built (see
+  [docs/plans/topic-verbs.md](docs/plans/topic-verbs.md)). Run the agent
+  scenarios on it and on the ordinary set with the same model, compare
+  success, errors and calls, and then decide which set is the default.
 - **A test of the systemd units on a real machine.** The module is checked by
   evaluation, and the package builds on Linux, but nobody has run the timers.
 ## Later

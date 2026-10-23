@@ -23,6 +23,16 @@ Memory bytes, IDs and the ref file format do not change.
 
 ### Added
 
+- `mcp --tool-set topic`: tools for an agent that should not handle ids. It
+  names topics (refs) and writes plain text. `recall` finds topics or reads
+  one, `remember` makes a topic, `add_to` adds a line, `revise` changes a
+  part, `replace` rewrites the whole text, and `note` records an episode.
+  `context`, `log` and `unfold` are in the set too. `add_to`, `revise` and
+  `replace` change a topic under the store lock, so they never lose a race
+  and leave no spare memory. Only `replace` takes a version: the one that
+  `recall` shows. A stale version is refused with the current text. The
+  tools refuse a log. The list of tools is about 8 KB, against 13 KB for
+  the ordinary set. The default stays `ordinary`.
 - The web UI Graph tab opens on a topic map: one box for each ref, grouped by
   namespace, with the number of versions or episodes. Point at a box to see
   its links to other topics. The old view of every memory stays as "history".

@@ -1,6 +1,6 @@
 # Topic verbs for agents
 
-Status: proposed 2026-10-23. Not implemented. Nothing here is merged or installed.
+Status as of 2026-10-23: steps 1 to 4 are built on the feature branch (blank-body refusal, the topic operations, the `topic` tool set, and the documents). The evaluation (step 6) has not run. Nothing here is merged or installed.
 
 ## Goal
 

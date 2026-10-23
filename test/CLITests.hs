@@ -10,7 +10,7 @@ import Akyuu.GC (Policy (Policy, gracePeriod), defaultPolicy)
 import Akyuu.Graph (EdgeType (About, DerivedFrom, Refines))
 import Akyuu.Id (render)
 import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep)
-import Akyuu.MCP (ToolSet (Maintenance, Ordinary))
+import Akyuu.MCP (ToolSet (Maintenance, Ordinary, Topic))
 import Akyuu.Ops (IdSpec (Full, Prefix), SearchMode (Fused))
 import Akyuu.Query (SearchOptions (SearchOptions), defaultSearchOptions)
 import Akyuu.Refs (Name, mkName)
@@ -147,6 +147,9 @@ parseCases =
       testCase "mcp selects maintenance explicitly" $ do
         a <- parses ["mcp", "--tool-set", "maintenance"]
         cliCommand a @?= Mcp Nothing Nothing Maintenance,
+      testCase "mcp selects the topic tool set" $ do
+        a <- parses ["mcp", "--tool-set", "topic"]
+        cliCommand a @?= Mcp Nothing Nothing Topic,
       testCase "mcp refuses an unknown tool set" $ do
         _ <- fails ["mcp", "--tool-set", "all"]
         pure (),

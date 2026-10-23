@@ -425,10 +425,11 @@ commandParser =
       Mcp
         <$> optional (option nameReader (long "policy-ref" <> metavar "NAME" <> help "The ref that holds the policy of this store. The default is $AKYUU_POLICY_REF, then policy/memory."))
         <*> optional (option nameReader (long "tiers-ref" <> metavar "NAME" <> help "The ref of the manifest of the tiers. The default is $AKYUU_TIERS_REF, then policy/tiers."))
-        <*> option (eitherReader toolSetReader) (long "tool-set" <> metavar "ordinary|maintenance" <> value MCP.Ordinary <> help "The MCP tools to expose. The default is ordinary; maintenance exposes raw store and consolidation tools.")
+        <*> option (eitherReader toolSetReader) (long "tool-set" <> metavar "ordinary|maintenance|topic" <> value MCP.Ordinary <> help "The MCP tools to expose. The default is ordinary; maintenance exposes raw store and consolidation tools; topic exposes tools that name topics and need no ids.")
     toolSetReader "ordinary" = Right MCP.Ordinary
     toolSetReader "maintenance" = Right MCP.Maintenance
-    toolSetReader _ = Left "The tool set must be ordinary or maintenance."
+    toolSetReader "topic" = Right MCP.Topic
+    toolSetReader _ = Left "The tool set must be ordinary, maintenance or topic."
     checkP =
       CheckArgs
         <$> ( CheckOptions
