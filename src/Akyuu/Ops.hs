@@ -73,6 +73,15 @@ module Akyuu.Ops
     CompareReport (..),
     compareMemories,
 
+    -- * Topics
+    TopicView (..),
+    rememberTopic,
+    addToTopic,
+    reviseTopic,
+    replaceTopic,
+    recallTopic,
+    recallQuery,
+
     -- * Init
     initStore,
     resolvePolicyRef,
@@ -122,16 +131,19 @@ import Akyuu.Review qualified as Review
 import Akyuu.SearchEval qualified as SearchEval
 import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), openStore)
 import Akyuu.Store qualified as Store
-import Akyuu.Supersede (supersede, supersedeFrom)
-import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), parseManifest, placeLines, placeLog, placeRefs, tierNames, tierRefs)
+import Akyuu.Supersede (ReviseError (ReviseFailed, ReviseRefused), SupersedeError (SupersedeRef), supersede, supersedeBy, supersedeFrom)
+import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), logRefs, parseManifest, placeLines, placeLog, placeRefs, tierNames, tierRefs)
+import Akyuu.Topic (Entry (Entry))
+import Akyuu.Topic qualified as Topic
+import Control.Concurrent (threadDelay)
 import Control.Exception (bracket, finally)
 import Control.Monad (forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE, withExceptT)
-import Data.Bifunctor (first)
+import Data.Bifunctor (bimap, first)
 import Data.Char (isDigit, isHexDigit)
 import Data.Either (partitionEithers)
-import Data.List (sort, sortOn)
+import Data.List (nub, sort, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Set (Set)
@@ -1195,6 +1207,208 @@ unfoldMemory env i = runExceptT $ do
     ss -> do
       ms <- traverse (\s -> (,) s <$> ExceptT (getMemory env s)) ss
       pure (Levels.chainOrder ms)
+
+-- Topics ---------------------------------------------------------------
+
+-- | A topic as an agent reads it: the ref, the id of its current memory (the
+-- source of its version, 'Akyuu.Topic.versionToken'), the memory, the refs
+-- that the memory is about, and the topics whose current memory is about
+-- this one.
+data TopicView = TopicView
+  { tvName :: Name,
+    tvId :: Id,
+    tvMemory :: Memory,
+    tvAbout :: [Name],
+    tvMentionedBy :: [Name]
+  }
+  deriving (Eq, Show)
+
+-- | The new text of a topic, and the about-ref links of the new memory if
+-- they change. The memory keeps its links when there are none here.
+data Revision = Revision Text (Maybe (Set Name))
+
+-- | The ref of a topic. A topic that does not exist is an error that names
+-- the names that are near.
+topicRef :: Env -> Name -> ExceptT AkyuuError IO Ref
+topicRef env n = do
+  r <- liftIO (readRef env n)
+  case r of
+    Left (RefFailed (Refs.NoSuchRef _)) -> noTopic env n
+    Left e -> throwE e
+    Right ref -> pure ref
+
+-- | The error for a topic that does not exist, with the names that are
+-- near the one that was given.
+noTopic :: Env -> Name -> ExceptT AkyuuError IO a
+noTopic env n = do
+  names <- either (const []) id <$> liftIO (listRefNames env)
+  let near = Topic.suggestNames n names
+  throwE . BadInput $
+    "There is no topic '"
+      <> Refs.nameText n
+      <> "'."
+      <> (if null near then "" else " Close names: " <> T.intercalate ", " (map Refs.nameText near) <> ".")
+      <> " To make a topic, use remember."
+
+-- | The refs that the @log@ lines of the manifest name. A manifest that
+-- cannot be read names none: a topic verb then relies on the other marks of
+-- a log ('Akyuu.Topic.isLogTopic').
+topicLogs :: Env -> Name -> IO [Name]
+topicLogs env manifestRef = either (const []) id <$> runExceptT go
+  where
+    go = do
+      ref <- ExceptT (readRef env manifestRef)
+      m <- ExceptT (getMemory env (current ref))
+      pure (either (const []) logRefs (parseManifest (memBody m)))
+
+-- | Read a topic: its text, its version, and its links.
+recallTopic :: Env -> Name -> IO (Either AkyuuError TopicView)
+recallTopic env n = runExceptT $ do
+  ref <- topicRef env n
+  let i = current ref
+  m <- ExceptT (getMemory env i)
+  heads <- ExceptT (listRefValues env)
+  links <- ExceptT (aboutRefLinks env)
+  let mentions = [h | (h, hi) <- heads, h /= n, Just ns <- [Map.lookup hi links], n `Set.member` ns]
+  pure TopicView {tvName = n, tvId = i, tvMemory = m, tvAbout = Set.toAscList (memAboutRefs m), tvMentionedBy = mentions}
+
+-- | Search, and show the hits as topics, at most this many.
+--
+-- A hit on an old version becomes the current memory of the same topic
+-- ('Akyuu.Query.resolve'). Two hits on one memory become one entry. A memory
+-- that no ref names, such as an episode that is not the newest of its log,
+-- is an entry with no topic.
+recallQuery :: Env -> Int -> Text -> IO (Either AkyuuError [Entry])
+recallQuery env limit q = runExceptT $ do
+  r <- ExceptT (searchMemories env Query.defaultSearchOptions {Query.searchLimit = limit} q)
+  snap <- liftIO (GC.snapshot (envCache env) (envStore env))
+  let graph = either (const Nothing) (Just . fst) snap
+      currentOf m
+        | Set.null (Query.matchSupersededBy m) = [Query.matchId m]
+        | otherwise = maybe [] (Set.toAscList . Query.resolve (Query.matchId m)) graph
+      ids = nub (concatMap currentOf (Query.matches r))
+  heads <- ExceptT (listRefValues env)
+  entries <- forM (take limit ids) $ \i -> do
+    m <- ExceptT (getMemory env i)
+    pure $ case [n | (n, hi) <- heads, hi == i] of
+      [] -> [Entry Nothing m]
+      ns -> map (\n -> Entry (Just n) m) ns
+  pure (take limit (concat entries))
+
+-- | Make a new topic, and return the id of its memory and the topics whose
+-- text is close to the new text ('Akyuu.Topic.closeTopics'). The close
+-- topics are advice: the write has been made.
+--
+-- A topic that exists is refused, and the error shows how its text starts
+-- and names the verbs that change it. The search for close topics reads the
+-- current memory of every other ref, so it costs a read for each topic.
+rememberTopic :: Env -> Name -> Text -> Text -> Text -> Set Name -> IO (Either AkyuuError (Id, [Name]))
+rememberTopic env topic agent kind text about = runExceptT $ do
+  there <- liftIO (readRef env topic)
+  case there of
+    Right ref -> do
+      m <- ExceptT (getMemory env (current ref))
+      let (start, _) = Topic.cutText 100 (T.strip (T.takeWhile (/= '\n') (T.strip (memBody m))))
+      throwE . BadInput $
+        "The topic '"
+          <> Refs.nameText topic
+          <> "' exists. Its text starts: "
+          <> start
+          <> " Use add_to to add a line, revise to change a part, or replace to rewrite it."
+    Left (RefFailed (Refs.NoSuchRef _)) -> pure ()
+    Left e -> throwE e
+  i <- ExceptT (addUnderRef env topic NewMemory {newKind = kind, newAgent = agent, newEdges = Set.empty, newBody = text, newAboutRefs = about})
+  heads <- ExceptT (listRefValues env)
+  texts <- liftIO . fmap catMaybes . forM [(n, hi) | (n, hi) <- heads, n /= topic] $ \(n, hi) -> do
+    r <- getMemory env hi
+    pure (either (const Nothing) (\m -> Just (n, memBody m)) r)
+  pure (i, Topic.closeTopics text texts)
+
+-- | Add a line to the end of a topic. The server reads the memory, adds the
+-- text and moves the ref under one hold of the store lock ('supersedeBy'), so
+-- the agent needs no version and never loses a race. A busy lock is tried
+-- again ('retryLocked').
+addToTopic :: Env -> Name -> Text -> Name -> Text -> IO (Either AkyuuError (Id, Memory))
+addToTopic env manifestRef agent topic text
+  | T.null (T.strip text) = pure (Left (BadInput "The text to add is empty."))
+  | otherwise = rewriteTopic env manifestRef agent topic $ \_ old ->
+      bimap (BadInput . Amend.describeAmend) (\b -> Revision b Nothing) (Amend.applyEdits [Amend.Append text] (memBody old))
+
+-- | Change a part of a topic: each edit gives text that occurs once in the
+-- memory, and its replacement ('Akyuu.Amend.applyEdits'). The edits apply to
+-- the current memory, also if it is newer than the one that the agent read.
+-- When an edit does not apply, the error shows the current text, so that the
+-- agent can correct the edit in one more call.
+reviseTopic :: Env -> Name -> Text -> Name -> [Amend.Edit] -> IO (Either AkyuuError (Id, Memory))
+reviseTopic env manifestRef agent topic edits = rewriteTopic env manifestRef agent topic $ \_ old ->
+  case Amend.applyEdits edits (memBody old) of
+    Right body -> Right (Revision body Nothing)
+    Left e -> Left (BadInput (Amend.describeAmend e <> "\nThe current text of the topic is:\n" <> memBody old))
+
+-- | Rewrite the whole text of a topic. The version must be the one that
+-- 'recallTopic' gave ('Akyuu.Topic.versionToken'). If the topic has changed,
+-- the error gives the current version and text, and nothing is written.
+-- With links, the new memory is about these refs. Without, it keeps the
+-- links of the old one.
+replaceTopic :: Env -> Name -> Text -> Name -> Text -> Text -> Maybe (Set Name) -> IO (Either AkyuuError (Id, Memory))
+replaceTopic env manifestRef agent topic token text about = runExceptT $ do
+  prefix <- either (throwE . BadInput) pure (Topic.tokenPrefix token)
+  want <- ExceptT . either (pure . Left) (resolveId env) . parseIdSpec $ prefix
+  forM_ about $ \links ->
+    linkable env NewMemory {newKind = "fact", newAgent = agent, newEdges = Set.empty, newBody = text, newAboutRefs = links}
+  ExceptT . rewriteTopic env manifestRef agent topic $ \i old ->
+    if i /= want
+      then
+        Left . BadInput $
+          "The topic changed since you read it. Its version is now "
+            <> Topic.versionToken i
+            <> ". Its current text is:\n"
+            <> memBody old
+            <> "\nMerge your change into this text, and call replace again with that version."
+      else Right (Revision text about)
+
+-- | Change a topic through a function of its current memory. The function
+-- sees the id and the memory that the ref names under the lock. The new
+-- memory keeps the kind, the edges (except the old @supersedes@ edges) and,
+-- unless the revision says otherwise, the about-ref links of the old one.
+--
+-- A log is refused: its newest memory must stay in its chain
+-- ('Akyuu.Topic.isLogTopic'). The result is the id and the new memory.
+rewriteTopic :: Env -> Name -> Text -> Name -> (Id -> Memory -> Either AkyuuError Revision) -> IO (Either AkyuuError (Id, Memory))
+rewriteTopic env manifestRef agent topic change = runExceptT $ do
+  logs <- liftIO (topicLogs env manifestRef)
+  now <- liftIO getCurrentTime
+  let step i old
+        | Topic.isLogTopic logs topic old =
+            Left (BadInput ("'" <> Refs.nameText topic <> "' is a log. A log keeps its chain of episodes. Use note to add to it."))
+        | otherwise = do
+            Revision body about <- change i old
+            buildMemory
+              now
+              NewMemory
+                { newKind = memKind old,
+                  newAgent = agent,
+                  newEdges = Set.filter (\(Edge t _) -> t /= Supersedes) (memEdges old),
+                  newBody = body,
+                  newAboutRefs = fromMaybe (memAboutRefs old) about
+                }
+  r <- liftIO (retryLocked 5 (supersedeBy (envStore env) (envRefs env) topic step))
+  case r of
+    Right (i, new) -> do
+      liftIO (embedNew env i (memBody new))
+      pure (i, new)
+    Left (ReviseRefused e) -> throwE e
+    Left (ReviseFailed (SupersedeRef (Refs.NoSuchRef _))) -> noTopic env topic
+    Left (ReviseFailed e) -> throwE (fromSupersede e)
+
+-- | Run an operation again, with a short wait, when the store lock was busy.
+-- It stops after this many attempts. Any other result ends it at once.
+retryLocked :: Int -> IO (Either (ReviseError e) a) -> IO (Either (ReviseError e) a)
+retryLocked n act = do
+  r <- act
+  case r of
+    Left (ReviseFailed (SupersedeRef Refs.Locked)) | n > 1 -> threadDelay 50000 >> retryLocked (n - 1) act
+    _ -> pure r
 
 -- The refs of the policy and the manifest ------------------------------------
 

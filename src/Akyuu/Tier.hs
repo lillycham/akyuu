@@ -42,6 +42,7 @@ module Akyuu.Tier
     tierRefs,
     placeRefs,
     placeLog,
+    logRefs,
     placeLines,
     defaultPolicyRef,
     defaultTiersRef,
@@ -176,6 +177,11 @@ contains p d
 -- manifest, with a ref once.
 placeRefs :: Place -> Manifest -> [Name]
 placeRefs p m = nub (concat [rs | (d, rs) <- manAt m, contains p d])
+
+-- | The refs that the @log@ lines name, each once, in the order of the
+-- manifest.
+logRefs :: Manifest -> [Name]
+logRefs = nub . map snd . manLog
 
 -- | The ref of the @log@ line that contains the place and names the longest
 -- directory. 'Nothing' if no line contains it.

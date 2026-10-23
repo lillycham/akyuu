@@ -20,6 +20,8 @@ module Akyuu.Supersede
   ( SupersedeError (..),
     supersede,
     supersedeFrom,
+    ReviseError (..),
+    supersedeBy,
   )
 where
 
@@ -30,7 +32,7 @@ import Akyuu.Mutation (Mutation, withMutation)
 import Akyuu.Refs (Expected (MustBe), Name, Ref (current), RefError (Locked, RefIO), Refs, getRef, updateRef)
 import Akyuu.Store (Store, StoreError, storeRoot)
 import Akyuu.Store qualified as Store
-import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, withExceptT)
+import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE, withExceptT)
 import Data.Bifunctor (first)
 import Data.Set qualified as Set
 
@@ -73,6 +75,33 @@ supersedeFrom :: Store -> Refs -> Name -> Id -> Memory -> IO (Either SupersedeEr
 supersedeFrom st rs n old m =
   withMutation (storeRoot st) (SupersedeRef Locked) (SupersedeRef . RefIO) $ \held ->
     publish held st rs n old m
+
+-- | Why 'supersedeBy' failed: the ref or the store, or the function of the
+-- caller, which refused the memory that it was given.
+data ReviseError e
+  = ReviseFailed SupersedeError
+  | ReviseRefused e
+  deriving (Eq, Show)
+
+-- | Replace the memory of a ref with a memory that a function makes from the
+-- current one.
+--
+-- The function gets the 'Id' and the memory that the ref names now. Reading
+-- the ref, the function and the move of the ref all happen under one hold of
+-- the store mutation lock. No other writer can move the ref in between, so a
+-- change that the function accepts is never stale. A refusal of the function
+-- leaves the store and the ref unchanged.
+--
+-- Returns the 'Id' of the new memory and the memory that the function made.
+-- The function must not run an external command: it runs under the lock.
+supersedeBy :: Store -> Refs -> Name -> (Id -> Memory -> Either e Memory) -> IO (Either (ReviseError e) (Id, Memory))
+supersedeBy st rs n f =
+  withMutation (storeRoot st) (ReviseFailed (SupersedeRef Locked)) (ReviseFailed . SupersedeRef . RefIO) $ \held -> runExceptT $ do
+    old <- withExceptT (ReviseFailed . SupersedeRef) (ExceptT (getRef rs n))
+    prior <- withExceptT (ReviseFailed . SupersedeStore) (ExceptT (Store.getVerified st (current old)))
+    new <- either (throwE . ReviseRefused) pure (f (current old) prior)
+    i <- withExceptT ReviseFailed (ExceptT (publish held st rs n (current old) new))
+    pure (i, new)
 
 publish :: Mutation -> Store -> Refs -> Name -> Id -> Memory -> IO (Either SupersedeError Id)
 publish held st rs n old m =
