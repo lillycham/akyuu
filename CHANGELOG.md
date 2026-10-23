@@ -23,6 +23,9 @@ Memory bytes, IDs and the ref file format do not change.
 - The web UI Graph tab opens on a topic map: one box for each ref, grouped by
   namespace, with the number of versions or episodes. Point at a box to see
   its links to other topics. The old view of every memory stays as "history".
+- Optional seals in the web UI: a small carved mark on each topic and in the
+  memory panel, made from the id of the memory or the name of the ref. The
+  "seals" switch in the header turns them on. They are off by default.
 - `/api/graph` nodes have `aboutRefs`, the refs that the memory is about.
 
 ### Fixed

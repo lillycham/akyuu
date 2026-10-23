@@ -131,6 +131,29 @@ if (two.matches[0].snippet !== O + 'ab' + C + ' ' + O + 'abc' + C) { console.log
   console.log('topic map: ' + m.topics.length + ' topics, ' + m.links.length + ' links');
 }
 
+// ---- seals ---------------------------------------------------------------------
+{
+  const id = (c) => 'sha256-' + c.repeat(64);
+  const ok = (c, msg) => { if (!c) { console.log('sealCells: ' + msg); problems++; } };
+  const a = A.sealCells(id('a')), b = A.sealCells(id('3')), r = A.sealCells('me/notes');
+  ok(a.length === 9 && b.length === 9 && r.length === 9, 'nine cells');
+  ok([a, b, r].every(c => c.every(k => Number.isInteger(k) && k >= 0 && k <= 7)), 'each cell is a number from 0 to 7');
+  ok(JSON.stringify(a) === JSON.stringify(A.sealCells(id('a'))), 'the same id gives the same seal');
+  ok(JSON.stringify(A.sealCells('me/notes')) === JSON.stringify(r), 'the same name gives the same seal');
+  ok(JSON.stringify(a) !== JSON.stringify(b), 'two ids give two seals');
+  ok(JSON.stringify(r) !== JSON.stringify(A.sealCells('me/log')), 'two names give two seals');
+  ok(A.sealCells('sha256-xyz').length === 9, 'a text that is not an id still gives a seal');
+  const distinct = new Set();
+  let x = 12345;
+  for (let i = 0; i < 400; i++) {
+    let hex = '';
+    while (hex.length < 64) { x = (Math.imul(x, 1103515245) + 12345) >>> 0; hex += (x >>> 8).toString(16).padStart(6, '0'); }
+    distinct.add(A.sealCells('sha256-' + hex.slice(0, 64)).join(''));
+  }
+  ok(distinct.size > 395, 'distinct ids rarely share a seal, got ' + distinct.size + ' of 400');
+  console.log('seals: ok');
+}
+
 // ---- the export ------------------------------------------------------------
 const vizPath = process.argv[3];
 let viz = null;
@@ -224,7 +247,7 @@ function makeDom() {
     addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
     fire(t, ev) { for (const f of this.listeners[t] || []) f(Object.assign({ preventDefault() {}, target: this }, ev || {})); }
     scrollTo() {}
-    get classList() { const self = this; return { add: (c) => { self.attrs.class = ((self.attrs.class || '') + ' ' + c).trim(); }, remove: (c) => { self.attrs.class = (self.attrs.class || '').split(' ').filter(x => x !== c).join(' '); } }; }
+    get classList() { const self = this; return { toggle: (c, on) => { const cs = (self.attrs.class || '').split(' ').filter(x => x && x !== c); if (on) cs.push(c); self.attrs.class = cs.join(' '); }, add: (c) => { self.attrs.class = ((self.attrs.class || '') + ' ' + c).trim(); }, remove: (c) => { self.attrs.class = (self.attrs.class || '').split(' ').filter(x => x !== c).join(' '); } }; }
     getBoundingClientRect() { return { left: 0, top: 0 }; }
     querySelector(q) { return this.querySelectorAll(q)[0] || null; }
     querySelectorAll(q) {
@@ -248,8 +271,9 @@ function makeDom() {
       throw new Error('querySelectorAll ' + q);
     },
     addEventListener: () => {},
+    body: new Node('body'),
   };
-  const ids = ['status', 'f-kind', 'f-agent', 'f-ref', 'f-layout', 'w-hops', 'w-limit', 'w-all', 'w-focus', 'graph-notice', 'legend', 'graph-canvas',
+  const ids = ['f-view', 'm-all', 'map-canvas', 'seal-on', 'view-graph', 'status', 'f-kind', 'f-agent', 'f-ref', 'f-layout', 'w-hops', 'w-limit', 'w-all', 'w-focus', 'graph-notice', 'legend', 'graph-canvas',
     'refs-notice', 'refs-list', 'search-form', 's-q', 's-limit', 's-hops', 's-show', 'search-notice', 'search-results',
     'gc-summary', 'gc-notice', 'gc-legend', 'gc-canvas', 'gc-lists', 'h-run', 'h-note', 'health', 'panel',
     'c-kind', 'c-level', 'c-run', 'c-note', 'c-summary', 'check-list', 'check-badge', 'wiki-filter', 'wiki-nav', 'wiki-page'];
@@ -294,6 +318,35 @@ async function runPage(html, label) {
     if (!page) errors.push('the wiki shows no page');
     const links = dom.all.filter(n => n.tagName === 'a' && (n.attrs.href || '').indexOf('#wiki/') === 0).length;
     if (!links && !page.includes('No pages')) errors.push('the wiki tree has no links');
+  }
+  // The graph tab opens on the topic map; the seals are off until they are switched on.
+  {
+    dom.tabs[0].fire('click'); await tick(); await tick();
+    const hasClass = (n, c) => (n.attrs.class || '').split(' ').indexOf(c) >= 0;
+    const cards = dom.all.filter(n => n.tagName === 'button' && hasClass(n, 'topic'));
+    if (!cards.length) errors.push('the topic map has no topics');
+    const stamps = dom.all.filter(n => n.tagName === 'span' && hasClass(n, 'stamp'));
+    if (stamps.length < cards.length) errors.push('a topic has no seal');
+    if (dom.document.body.attrs['data-seals'] !== 'off') errors.push('the seals are not off at the start');
+    if (cards.length) {
+      cards[0].fire('mouseenter'); cards[0].fire('mouseleave');
+      // The panel of the memory of a topic has the seal of the topic.
+      const ds = (n) => (n.attrs && n.attrs.d ? n.attrs.d : '') + (n.children || []).map(ds).join('|');
+      const stampOf = (n) => (n.children || []).find(c => hasClass(c, 'stamp'));
+      const cardSeal = ds(stampOf(cards[0]));
+      cards[0].fire('click'); await tick(); await tick();
+      const panelStamp = stampOf(dom.byId['panel']);
+      if (!panelStamp) errors.push('the memory panel has no seal');
+      else if (ds(panelStamp) !== cardSeal) errors.push('the seal of the panel is not the seal of its topic');
+      const closeBtn = dom.byId['panel'].children.find(c => c.tagName === 'button' && hasClass(c, 'close'));
+      if (closeBtn) closeBtn.fire('click');
+    }
+    dom.byId['seal-on'].checked = true; dom.byId['seal-on'].fire('change');
+    if (dom.document.body.attrs['data-seals'] !== 'on') errors.push('the seals do not switch on');
+    dom.byId['seal-on'].checked = false; dom.byId['seal-on'].fire('change');
+    if (dom.document.body.attrs['data-seals'] !== 'off') errors.push('the seals do not switch off');
+    console.log('  topic map: ' + cards.length + ' topics, ' + stamps.length + ' seals, toggle ok');
+    dom.byId['f-view'].value = 'history'; dom.byId['f-view'].fire('change'); await tick(); await tick();
   }
   const drawn = svgNodes().length;
   for (const t of dom.tabs) { t.fire('click'); await tick(); await tick(); }
