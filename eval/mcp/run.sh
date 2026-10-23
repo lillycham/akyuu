@@ -105,7 +105,7 @@ run_claude() {
     cd "$cwd" || exit 3
     exec "$claude_path" -p \
       --model "$model" \
-      --safe-mode \
+      --setting-sources project \
       --mcp-config "$cfg" --strict-mcp-config \
       --tools "" --allowedTools "mcp__akyuu__*" \
       --permission-mode dontAsk \

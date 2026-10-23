@@ -67,7 +67,10 @@ For each cell (scenario, set, run) the runner:
 The agent must not see the store of the person who runs the evaluation, or
 that person's notes. The runner starts `claude` with:
 
-- `--safe-mode`: no `CLAUDE.md`, hooks, skills, plugins or other MCP servers;
+- `--setting-sources project`: no user settings, so no user hooks and no user
+  `CLAUDE.md`. The working directory is empty, so there are no project ones.
+  (`--safe-mode` was tried first. It also switched off the MCP server of
+  `--mcp-config`, so the agent had no tools.);
 - `--mcp-config` and `--strict-mcp-config`: only the proxy for the test store;
 - `--tools ""` and `--allowedTools "mcp__akyuu__*"`: no shell, no file tools;
 - `--permission-mode dontAsk`, `--no-session-persistence`, and an empty working
@@ -108,10 +111,11 @@ full run, if the pilot looks sound.
 - The self-test (`run.sh selftest`) runs S2 and S3 on both sets with a fake
   agent. It proves the proxy, the other writer, the verifiers, the measures and
   the tally. It checks that an agent that recovers from a stale write is clean.
-- Not tested without a model: the prompts of S1, S6 and S7, the real
-  `claude` flags (`--safe-mode` with `--mcp-config`, `--tools ""`,
-  `--permission-mode dontAsk`), and the shape of the real transcript. The probe
-  tests the flags and the `init` event. The pilot tests the rest.
+- Not tested without a model: the prompts of S1, S6 and S7, and the behaviour
+  of a real agent. The probe tests the flags and the `init` event. The pilot
+  tests the rest.
+- The probe has power: a control call with no isolation flags names the owner
+  of the machine, and a call with the flags answers `unknown`.
 - The answers are read from the last message of the last agent. A line that
   starts with markdown (`**a:**`) is cleaned first, in the same way for both
   sets.
