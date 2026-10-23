@@ -2,7 +2,7 @@
 
 module OpsTests (opsTests, withOpsEnv, note) where
 
-import Akyuu.Amend (Edit (Append))
+import Akyuu.Amend (Edit (Append, Replace))
 import Akyuu.Cache qualified as Cache
 import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadField, BadIdSpec, BadInput, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
 import Akyuu.GC (Policy (gracePeriod, keepGenerations, trashTTL), Tombstone (Tombstone), defaultPolicy)
@@ -72,6 +72,12 @@ plant env i = do
   let p = objectPath (envStore env) i
   createDirectoryIfMissing True (takeDirectory p)
   BS.writeFile p BS.empty
+
+-- The result must be the refusal of a blank body.
+assertBlank :: (Show a) => Either AkyuuError a -> IO ()
+assertBlank r = case r of
+  Left (BadInput t) -> assertBool (T.unpack t) ("The body is empty" `T.isPrefixOf` t)
+  other -> assertFailure ("expected a refusal of a blank body, got " <> show other)
 
 -- About-ref links -----------------------------------------------------
 
@@ -160,7 +166,13 @@ pureCases =
         fmap memCreated (buildMemory (posixSecondsToUTCTime 100.75) (note "x" []))
           @?= Right (posixSecondsToUTCTime 100),
       testCase "buildMemory checks the agent" $
-        isLeft (buildMemory (posixSecondsToUTCTime 0) (note "x" []) {newAgent = "a\n"}) @?= True
+        isLeft (buildMemory (posixSecondsToUTCTime 0) (note "x" []) {newAgent = "a\n"}) @?= True,
+      testCase "buildMemory refuses an empty body" $
+        isLeft (buildMemory (posixSecondsToUTCTime 0) (note "" [])) @?= True,
+      testCase "buildMemory refuses a body of white space" $
+        isLeft (buildMemory (posixSecondsToUTCTime 0) (note " \n\t\n" [])) @?= True,
+      testCase "buildMemory accepts a body with text inside white space" $
+        fmap memBody (buildMemory (posixSecondsToUTCTime 0) (note "\n x \n" [])) @?= Right "\n x \n"
     ]
 
 properties :: TestTree
@@ -201,6 +213,22 @@ opCases =
         withOpsEnv $ \_ env -> do
           r <- addMemory env (note "x" []) {newKind = ""}
           r @?= Left (BadField "kind" ""),
+      testCase "add, add under a ref and append refuse a blank body, and write nothing" $
+        withOpsEnv $ \_ env -> do
+          let blank = note "  " []
+              topic = either (error . show) id (mkName "me/blank")
+          addMemory env blank >>= assertBlank
+          addUnderRef env topic blank >>= assertBlank
+          Ops.appendEpisode env topic blank >>= assertBlank
+          listRefNames env >>= (@?= Right [])
+          Store.list (envStore env) >>= (@?= Right []),
+      testCase "supersede and amend refuse a blank result, and leave the ref where it was" $
+        withOpsEnv $ \_ env -> do
+          let topic = either (error . show) id (mkName "me/topic")
+          i <- right =<< addUnderRef env topic (note "the text" [])
+          supersedeMemory env topic (Just i) (note "" []) >>= assertBlank
+          amendMemory env topic (Just i) Nothing [Replace "the text" " "] >>= assertBlank
+          fmap Refs.current <$> readRef env topic >>= (@?= Right i),
       testCase "get of a missing memory gives NotFound" $
         withOpsEnv $ \_ env -> do
           r <- getMemory env (nid 7)

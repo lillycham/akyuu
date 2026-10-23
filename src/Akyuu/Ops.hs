@@ -217,9 +217,15 @@ checkField header v
 -- The time is cut to whole seconds, because 'Akyuu.Memory.renderMemory'
 -- keeps whole seconds only. The memory then equals what the store reads
 -- back.
+--
+-- The body must have some text that is not white space. Every writer builds
+-- its memory here, so every writer refuses a blank body. A blank memory
+-- that replaced a topic would erase it with no warning.
 buildMemory :: UTCTime -> NewMemory -> Either AkyuuError Memory
-buildMemory t n =
-  withAboutRefs (newAboutRefs n) <$> first (\(InvalidField h v) -> BadField h v) (mkMemory (newKind n) t (newAgent n) (newEdges n) (newBody n))
+buildMemory t n
+  | T.null (T.strip (newBody n)) = Left (BadInput "The body is empty. A memory needs some text. To forget a topic, say what should replace it.")
+  | otherwise =
+      withAboutRefs (newAboutRefs n) <$> first (\(InvalidField h v) -> BadField h v) (mkMemory (newKind n) t (newAgent n) (newEdges n) (newBody n))
 
 -- | 'buildMemory' at the time now.
 buildNow :: NewMemory -> ExceptT AkyuuError IO Memory

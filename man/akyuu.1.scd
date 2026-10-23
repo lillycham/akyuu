@@ -37,7 +37,9 @@ commands below.
 *add* *--kind* _text_ *--agent* _text_ [*--ref* _name_] [_edges_] [_body_]
 	Write a memory and print its id. The _kind_ says what it is (*fact*,
 	*preference*, *decision*, ...) and the _agent_ who wrote it. The _body_ is
-	*--body* _text_, *-f* _file_ or *--file* _file_, or the standard input.
+	*--body* _text_, *-f* _file_ or *--file* _file_, or the standard input. A
+	body that has no text apart from white space is refused, here and in
+	every command that writes a memory.
 	The _edges_ are *--about*, *--derived-from*, *--refines* and *--supersedes*,
 	each with an _id_, each repeatable: the new memory is about the target,
 	comes from it, adds detail to it, or replaces it. With *--ref*, also make the

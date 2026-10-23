@@ -58,6 +58,9 @@ Rules:
 - A header line is the name, a colon, one space, and the value.
 - The body is everything after the first blank line. It is not changed or
   trimmed. Lines end with a line feed only.
+  A reader accepts an empty body, because an old store can have one. The
+  commands that write a memory (`add`, `append`, `note`, `supersede`, `amend`
+  and `summarise`) refuse a body that has no text apart from white space.
 - This is the one canonical form. akyuu refuses a file in another form
   (headers in another order, a repeated edge, an unknown header), because the
   id must be the hash of the file.

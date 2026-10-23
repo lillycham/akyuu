@@ -10,6 +10,9 @@
   Read the current memory before each revision. A stale version causes an error.
 - Ordinary `add` requires a new `ref`. Ordinary `add` and `supersede` use
   the configured agent as the default author. An explicit `agent` overrides it.
+- Every command and MCP tool that writes a memory refuses a body that has no
+  text apart from white space. Before, `supersede` with an empty standard
+  input erased a topic. Reading an old empty memory still works.
 
 - Update all writers and GC jobs together. Old processes do not use the shared
   mutation lock. Restart old MCP servers before concurrent use.
