@@ -3,7 +3,7 @@
 module GCTests (gcTests) where
 
 import Akyuu.Cache (Cache, cachedIds, closeCache, openCache)
-import Akyuu.GC (GCError (CorruptTombstone, GCLocked, GCRefs), Observed (Observed), Policy (Policy, gracePeriod, keepGenerations, trashTTL), Reason (HeldByPin, HeldByRef, HeldByTemp, IsYoung, RetainedBy), Roots (Roots, rootPins, rootRefs, rootTemps), RunReport (planned, swept), SweepReport (SweepReport, deleted, trashed), Tombstone (Tombstone), TombstoneParseError (BadTombstone, TombstoneNotUtf8), Why (Why, whyIsNode, whyLive, whyPath, whyReasons), allRoots, collect, defaultPolicy, dryRun, explain, explainAll, gcLockPath, listPins, listTombstones, listTrash, lookupTombstone, parseTombstone, pin, pinPath, plan, readRoots, recheck, renderTombstone, retains, snapshot, sweep, sweepAndSync, tombstonePath, unpin, withGCLock)
+import Akyuu.GC (GCError (CorruptTombstone, GCLocked, GCRefs), Observed (Observed), Policy (Policy, gracePeriod, keepGenerations, trashTTL), Reason (HeldByPin, HeldByRef, HeldByTemp, IsYoung, RetainedBy), Roots (Roots, rootPins, rootRefs, rootTemps), RunReport (planned, swept), SweepReport (SweepReport, deleted, trashed), Tombstone (Tombstone), TombstoneParseError (BadTombstone, TombstoneNotUtf8), Why (Why, whyIsNode, whyLive, whyPath, whyReasons), allRoots, collect, defaultPolicy, dryRun, explain, explainAll, listPins, listTombstones, listTrash, lookupTombstone, parseTombstone, pin, pinPath, plan, readRoots, recheck, renderTombstone, retains, snapshot, sweep, sweepAndSync, tombstonePath, unpin, withGCLock)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Follows, Refines, Supersedes), Graph, nodes, reachable, singleton, successors)
 import Akyuu.Id (Id)
 import Akyuu.Memory (Memory)
@@ -568,6 +568,30 @@ runTests =
           rep <- right =<< sweep s defaultPolicy t doomed
           trashed rep @?= []
           doesFileExist (objectPath s i) >>= (@?= True),
+      testCase "sweep revalidates a reference added after its candidate plan" $
+        withEnv $ \s rs cache _ -> do
+          i <- oldObject s "candidate"
+          (_, _, doomed, t) <- planNow s rs cache
+          setTo rs "me/kept" [i]
+          rep <- right =<< sweep s defaultPolicy t doomed
+          trashed rep @?= []
+          doesFileExist (objectPath s i) >>= (@?= True),
+      testCase "sweep revalidates a pin added after its candidate plan" $
+        withEnv $ \s rs cache _ -> do
+          i <- oldObject s "candidate"
+          (_, _, doomed, t) <- planNow s rs cache
+          right =<< pin s i
+          rep <- right =<< sweep s defaultPolicy t doomed
+          trashed rep @?= []
+          doesFileExist (objectPath s i) >>= (@?= True),
+      testCase "sweep revalidates a retaining edge added after its candidate plan" $
+        withEnv $ \s rs cache _ -> do
+          i <- oldObject s "candidate"
+          (_, _, doomed, t) <- planNow s rs cache
+          _ <- right =<< add s (memWith "new keeper" [Edge About i])
+          rep <- right =<< sweep s defaultPolicy t doomed
+          trashed rep @?= []
+          doesFileExist (objectPath s i) >>= (@?= True),
       testCase "a dry run writes nothing, not even the cache" $
         withEnv $ \s rs cache dir -> do
           i <- oldObject s "lonely"
@@ -577,11 +601,7 @@ runTests =
           treeAfter <- treeOf dir
           treeAfter @?= treeBefore
           cachedIds cache >>= (@?= Right Set.empty)
-          mapM_ (\k -> doesFileExist (objectPath s k) >>= (@?= True)) [i, j]
-          doesFileExist (gcLockPath s) >>= (@?= False),
-      testCase "the lock file is gc.lock in the root" $
-        withEnv $
-          \s _ _ dir -> gcLockPath s @?= dir </> "gc.lock",
+          mapM_ (\k -> doesFileExist (objectPath s k) >>= (@?= True)) [i, j],
       testCase "a run returns GCLocked while another run holds the lock" $
         withEnv $ \s rs cache _ -> do
           i <- oldObject s "lonely"
@@ -589,7 +609,7 @@ runTests =
           release <- newEmptyMVar
           done <- newEmptyMVar
           _ <- forkIO $ do
-            r <- withGCLock s (putMVar held () >> takeMVar release >> pure (Right ()))
+            r <- withGCLock s (\_ -> putMVar held () >> takeMVar release >> pure (Right ()))
             putMVar done r
           takeMVar held
           collect cache s rs defaultPolicy Set.empty >>= (@?= Left GCLocked) . fmap planned

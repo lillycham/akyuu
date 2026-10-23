@@ -87,6 +87,10 @@ commands below.
 
 A ref keeps its older values as _generations_, for *gc* and for the history.
 
+GC and mutations share one store lock. Reference and pin target checks run
+under that lock. A busy lock causes an error after about one second. Update
+all writers and GC jobs together; old processes do not use this protocol.
+
 ## Logs and notes
 
 A _log_ is a ref whose memories are episodes: things that happened, as opposed
@@ -106,6 +110,9 @@ episodes with one *derived-from* edge; it is still read.)
 *log* _ref_ [*-n* _n_ | *--limit* _n_] [*--full*] [*--since* _duration_] [*--todo* [*--size* _n_] | *--resolution* [*--budget* _chars_]] [*--keep* _n_]
 	Print the episodes of a log, newest first: 20 of them, or _n_, or those of
 	the last _duration_. *--full* prints the bodies too.
+	A normal limit prints *more:* _id_ as a continuation. An unreadable episode
+	instead prints the readable prefix and the failed id with its cause, then
+	returns failure. The MCP result sets *isError*.
 
 	*--todo* prints the oldest stretches that need a summary: runs of _n_ (8)
 	memories that no summary covers, at level 1 (episodes) and above (level-1
@@ -124,6 +131,8 @@ episodes with one *derived-from* edge; it is still read.)
 	_n_ the oldest summaries of level _n_ - 1. The summary gets a *derived-from*
 	edge to each source and goes to the log _ref_*.l*_n_. The episodes stay. The
 	kind is *summary*, or *--kind*.
+	Every existing source chain must be complete. An unreadable episode or
+	level ref causes an error before the summary is written.
 
 *unfold* _id_
 	Print the sources of a summary, newest first, whole: the exact words that it
@@ -185,7 +194,7 @@ be *\**, and *~* is the home directory).
 	Collect the memories that nothing needs. A memory stays if a ref points at
 	it now or in its last _n_ generations (5), if it is pinned, if it is
 	younger than the grace period (*1h*), or if a memory that stays has an
-	*about*, *derived-from* or *refines* edge to it. A *supersedes* edge keeps
+	*about*, *derived-from*, *refines* or *follows* edge to it. A *supersedes* edge keeps
 	nothing. Collected memories go to the trash, and a tombstone records
 	each deleted id; *gc* deletes trash older than the trash TTL (*7d*).
 	*--dry-run* prints the plan and writes nothing.
@@ -412,8 +421,9 @@ The documents in the source: *docs/install.md*, *docs/agent-install.md*,
 There is no access control. Any client of the MCP server can add memories and
 move refs, and *serve* shows every memory to anyone on the machine.
 
-*gc* does not hold the lock of the refs. A ref that moves to a new memory
-during a sweep keeps it only because of the grace period.
+An object write and a reference replacement are not one crash-atomic
+transaction. A crash or I/O failure between them can leave a searchable,
+unreferenced object. Stale expectations reject before the object write.
 
 A log keeps every episode. Summaries make it short to read (*log --resolution*),
 but an agent must write them (*summarise*): akyuu runs no model.

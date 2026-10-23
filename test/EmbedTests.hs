@@ -3,21 +3,27 @@
 module EmbedTests (embedTests) where
 
 import Akyuu.Config (Config (cfgEmbed), EmbedSettings (esCommand, esCommandEnv, esKey, esQueryPrefix), loadConfig)
-import Akyuu.Embed (Embedder (Embedder, embArgs, embDocumentPrefix, embQueryPrefix, embTimeout), Role (Document, QueryText), chunkText, closeVectors, cosine, decodeVector, encodeVector, fingerprint, fuse, loadVectors, openVectors, parseVector, pruneVectors, putVectors, rankBySimilarity, recordFingerprint, runEmbedder, storedFingerprint)
+import Akyuu.Embed (Embedder (Embedder, embArgs, embDocumentPrefix, embMaxChars, embQueryPrefix, embTimeout), Role (Document, QueryText), chunkText, closeVectors, cosine, decodeVector, encodeVector, fingerprint, fuse, loadVectors, openVectors, parseVector, pruneVectors, putVectors, rankBySimilarity, recordFingerprint, runEmbedder, storedFingerprint)
 import Akyuu.Embed qualified
 import Akyuu.Ops (EmbedReport (embedChanged, embedded), SearchMode (MeaningOnly, TextOnly), addMemory, embedMissing, searchMemoriesMode)
 import Akyuu.Query (Match (matchId), SearchResult (corrections, matches), defaultSearchOptions)
 import Akyuu.SearchEval (Case (Case, caseCategory, caseExpect, caseGuess, caseQuery), parseCases, passes)
-import Control.Exception (bracket_)
+import Control.Concurrent (forkFinally, killThread, threadDelay)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (AsyncException (ThreadKilled), bracket, bracket_, fromException)
+import Control.Monad (unless)
 import Data.Either (isLeft)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
+import Database.SQLite.Simple (execute_, withConnection)
 import OpsTests (note, withOpsEnv)
-import Support (nid, right)
+import Support (nid, right, withTempDir)
+import System.Directory (doesFileExist)
 import System.Environment (getEnvironment, setEnv, unsetEnv)
 import System.FilePath ((</>))
+import System.Timeout (timeout)
 import Test.Tasty (DependencyType (AllFinish), TestTree, dependentTestGroup, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
@@ -28,6 +34,7 @@ embedTests =
     [ pureCases,
       evalSetCases,
       commandCases,
+      optionalCases,
       tableCases,
       chunkCases,
       searchCases
@@ -121,6 +128,64 @@ commandCases =
         e <- (\x -> x {embTimeout = 1}) <$> fake "sleep 5; echo '[1]'"
         r <- runEmbedder e Document "x"
         assertBool "timeout" (isLeft r),
+      testCase "an outer timeout cancels a command even after its stdout closes" $ do
+        e <- (\x -> x {embTimeout = 10}) <$> fake "exec 1>&-; sleep 2"
+        r <- timeout 100000 (runEmbedder e Document "x")
+        r @?= Nothing,
+      testCase "a successful command can leave a persistent model process running" $
+        withTempDir $ \dir -> do
+          let pid = dir </> "pid"
+              alive = dir </> "alive"
+              command =
+                "(sleep 0.2; printf alive > "
+                  <> shellQuote alive
+                  <> "; exec sleep 20) </dev/null >/dev/null 2>&1 & printf '%s' \"$!\" > "
+                  <> shellQuote pid
+                  <> "; echo '[1]'"
+              cleanup = do
+                _ <- runFake ("kill -KILL $(cat " <> shellQuote pid <> ") 2>/dev/null; echo '[1]'") Document ""
+                pure ()
+          e <- fake command
+          bracket_ (pure ()) cleanup $ do
+            runEmbedder e Document "x" >>= (@?= Right [1])
+            awaitFile alive
+            readFile alive >>= (@?= "alive"),
+      testCase "a failed command still stops its detached-stdio background children" $
+        withTempDir $ \dir -> do
+          let survived = dir </> "survived"
+              command =
+                "(sleep 1; printf survived > "
+                  <> shellQuote survived
+                  <> ") </dev/null >/dev/null 2>&1 & exit 3"
+          e <- fake command
+          r <- runEmbedder e Document "x"
+          assertBool "the command failed" (isLeft r)
+          threadDelay 1200000
+          doesFileExist survived >>= (@?= False),
+      testCase "cancellation kills children that ignore TERM and propagates to the caller" $
+        withTempDir $ \dir -> do
+          let ready = dir </> "ready"
+              survived = dir </> "survived"
+              command =
+                "trap '' TERM; (sleep 1; printf survived > "
+                  <> shellQuote survived
+                  <> ") & printf ready > "
+                  <> shellQuote ready
+                  <> "; wait"
+          e <- (\x -> x {embTimeout = 10}) <$> fake command
+          done <- newEmptyMVar
+          bracket (forkFinally (runEmbedder e Document "x") (putMVar done)) killThread $ \tid -> do
+            awaitFile ready
+            t0 <- getCurrentTime
+            killThread tid
+            result <- timeout 1000000 (takeMVar done)
+            t1 <- getCurrentTime
+            case result of
+              Just (Left ex) -> fromException ex @?= Just ThreadKilled
+              _ -> assertFailure ("cancellation did not propagate: " ++ show result)
+            assertBool "cleanup is bounded" (diffUTCTime t1 t0 < 1)
+          threadDelay 1200000
+          doesFileExist survived >>= (@?= False),
       testCase "the fingerprint leaves out the hashes of Nix store paths" $ do
         a <- fake "/nix/store/0123456789abcdfghijklmnpqrsvwxyz-akyuu-embed-llama/bin/akyuu-embed-llama"
         b <- fake "/nix/store/zyxwvsrqpnmlkjihgfdcba9876543210-akyuu-embed-llama/bin/akyuu-embed-llama"
@@ -186,6 +251,74 @@ chunkCases =
         rankBySimilarity [1, 0] [(nid 1, [0, 1]), (nid 1, [1, 0]), (nid 2, [1, 1])] @?= [(nid 1, 1), (nid 2, cosine [1, 0] [1, 1])]
     ]
 
+-- Shell paths in these tests can contain spaces or apostrophes.
+shellQuote :: FilePath -> Text
+shellQuote p = "'" <> T.replace "'" "'\\''" (T.pack p) <> "'"
+
+awaitFile :: FilePath -> IO ()
+awaitFile path = do
+  r <- timeout 2000000 waitForFile
+  assertBool "the process marker appeared" (r == Just ())
+  where
+    waitForFile = do
+      exists <- doesFileExist path
+      unless exists (threadDelay 10000 >> waitForFile)
+
+optionalCases :: TestTree
+optionalCases =
+  testGroup
+    "optional embeddings"
+    [ testCase "the first failed chunk prevents later command invocations" $
+        withTempDir $ \dir -> do
+          let calls = dir </> "calls"
+          e <- (\x -> x {embMaxChars = 4}) <$> fake ("cat >> " <> shellQuote calls <> "; exit 3")
+          r <- Akyuu.Embed.embedText e Document "abcdefghijkl"
+          assertBool "the memory failed" (isLeft r)
+          readFile calls >>= (@?= "abcd"),
+      testCase "all chunks share the configured deadline and no partial vectors are stored" $
+        withTempDir $ \dir -> do
+          let path = dir </> "embeddings.sqlite"
+              completed = dir </> "completed"
+              command = "cat >/dev/null; sleep 0.4; printf x >> " <> shellQuote completed <> "; echo '[1]'"
+          e <- (\x -> x {embTimeout = 1, embMaxChars = 4}) <$> fake command
+          t0 <- getCurrentTime
+          Akyuu.Embed.embedOptional path e (nid 1) "abcdefghijklmnop"
+          t1 <- getCurrentTime
+          assertBool "one deadline, not one timeout per chunk" (diffUTCTime t1 t0 < 1.5)
+          completedChunks <- readFile completed
+          assertBool "some chunks completed but not the memory" (not (null completedChunks) && length completedChunks < 4)
+          bracket (right =<< openVectors path) closeVectors $ \vs ->
+            loadVectors vs "fake" >>= (@?= []),
+      testCase "a longer configured timeout is capped at five seconds for the whole memory" $
+        withTempDir $ \dir -> do
+          let path = dir </> "embeddings.sqlite"
+          e <- (\x -> x {embTimeout = 30, embMaxChars = 1}) <$> fake "cat >/dev/null; sleep 1; echo '[1]'"
+          t0 <- getCurrentTime
+          Akyuu.Embed.embedOptional path e (nid 3) "abcdefgh"
+          t1 <- getCurrentTime
+          assertBool "the optional deadline is capped" (diffUTCTime t1 t0 < 5.5)
+          bracket (right =<< openVectors path) closeVectors $ \vs ->
+            loadVectors vs "fake" >>= (@?= []),
+      testCase "explicit embedding retains a separate timeout for each chunk" $ do
+        e <- (\x -> x {embTimeout = 1, embMaxChars = 4}) <$> fake "cat >/dev/null; sleep 0.4; echo '[1]'"
+        Akyuu.Embed.embedText e Document "abcdefghijkl" >>= (@?= Right [[1], [1], [1]]),
+      testCase "vector write contention cannot add a SQLite busy wait to the deadline" $
+        withTempDir $ \dir -> do
+          let path = dir </> "embeddings.sqlite"
+              completed = dir </> "completed"
+          bracket (right =<< openVectors path) closeVectors (const (pure ()))
+          e <- (\x -> x {embTimeout = 1}) <$> fake ("cat >/dev/null; printf done > " <> shellQuote completed <> "; echo '[1]'")
+          withConnection path $ \other ->
+            bracket_ (execute_ other "BEGIN IMMEDIATE") (execute_ other "ROLLBACK") $ do
+              t0 <- getCurrentTime
+              Akyuu.Embed.embedOptional path e (nid 2) "one chunk"
+              t1 <- getCurrentTime
+              assertBool "contention is bounded by the whole operation" (diffUTCTime t1 t0 < 1.5)
+              readFile completed >>= (@?= "done")
+          bracket (right =<< openVectors path) closeVectors $ \vs ->
+            loadVectors vs "fake" >>= (@?= [])
+    ]
+
 -- A command that puts a text with "tea" at [1,0] and the rest at [0,1], and a
 -- query always at [1,0].
 teaCommand :: String
@@ -222,6 +355,16 @@ searchCases =
             second <- right =<< embedMissing env e
             pure (embedded first, embedded second)
           rep @?= (2, 0),
+      testCase "an outer deadline cancels explicit embedding through its vector-store action" $
+        withOpsEnv $ \dir env -> do
+          _ <- right =<< addMemory env (note "one memory" [])
+          e <- (\x -> x {embTimeout = 10}) <$> fake "sleep 2; echo '[1]'"
+          r <- timeout 100000 (embedMissing env e)
+          case r of
+            Nothing -> pure ()
+            Just _ -> assertFailure "the outer deadline did not cancel embedding"
+          bracket (right =<< openVectors (dir </> "embeddings.sqlite")) closeVectors $ \vs ->
+            loadVectors vs "fake" >>= (@?= []),
       testCase "the older embed.env still works, and the environment wins over it" $
         withOpsEnv $ \dir _ -> do
           let file = dir </> "embed.env"

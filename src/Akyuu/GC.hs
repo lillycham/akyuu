@@ -26,7 +26,7 @@
 -- > trash/sha256-9f3a….md      an object that phase 1 of 'sweep' moved
 -- > tombstones/sha256-9f3a…    one file for each object that phase 2 deleted
 -- > pins/sha256-9f3a…          one empty file for each pin
--- > gc.lock                    the lock of a run (see 'withGCLock')
+-- > store.lock                the shared mutation lock (see 'withGCLock')
 --
 -- = What GC trusts
 --
@@ -37,31 +37,17 @@
 -- enough to collect, so 'snapshot' adds the objects that the cache does not
 -- have yet.
 --
--- = One run at a time
+-- = Mutations and collection
 --
--- 'collect', 'sweep' and 'sweepAndSync' run under an exclusive lock on
--- @gc.lock@. A second run that cannot get the lock in about one second
--- returns 'GCLocked' and changes nothing. 'dryRun' does not take the lock,
--- because it writes nothing.
+-- Object writes, reference updates, pins and collection share an exclusive
+-- @store.lock@. Collection holds it from the snapshot through the sweep and
+-- cache sync. No writer can make a planned object live between the last
+-- root check and its move to trash. Public sweep entry points also validate
+-- their candidate set against current roots and retaining edges.
 --
--- = The window that is not closed
---
--- GC and the agents do not share a lock, so an agent can change the store
--- during a run. 'collect' looks again just before the sweep ('recheck'), and
--- 'sweep' checks the file time of each object just before it moves it. This
--- makes the window small, but it does not close it. Let @O@ be an old object
--- in the plan. It goes to @trash@ although something now needs it, if one of
--- these happens:
---
--- * Between the 'Akyuu.Store.list' of 'recheck' and the move of @O@, an agent
---   writes a new memory with a retaining edge to @O@ (or to a memory that
---   retains @O@), or moves a ref to @O@, or pins @O@.
--- * Between the check of the file time of @O@ in 'sweep' and its move, an
---   agent adds @O@ again. 'Akyuu.Store.add' then returns, and the object
---   is in @trash@ just after.
---
--- In each case @O@ stays in @trash@ for 'trashTTL', so it can be put back by
--- hand. After that, a link to it says "pruned".
+-- The lock waits for about one second, then reports contention. All writers
+-- and GC processes must use this protocol; older clients do not participate.
+-- Reads and dry runs do not take the mutation lock.
 --
 -- Functions return @IO (Either GCError a)@. A caller never has to catch an
 -- exception from this module.
@@ -84,6 +70,7 @@ module Akyuu.GC
     -- * Pins
     pinPath,
     pin,
+    pinWith,
     unpin,
     listPins,
 
@@ -138,10 +125,10 @@ import Akyuu.Graph (EdgeType (About, DerivedFrom, Follows, Refines, Supersedes),
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memEdges), timeFormat)
-import Akyuu.Refs (RefError (NoSuchRef), Refs, getRef, listRefs, retained)
+import Akyuu.Mutation (Mutation, checkMutation, mutationLockPath, withMutation)
+import Akyuu.Refs (RefError (NoSuchRef), Refs, getRef, listRefs, openRefs, retained)
 import Akyuu.Store (Store, StoreError (NotFound), objectPath, storeRoot, trashPath)
 import Akyuu.Store qualified as Store
-import Control.Concurrent (threadDelay)
 import Control.Exception (IOException)
 import Control.Monad (unless)
 import Control.Monad.IO.Class (liftIO)
@@ -176,7 +163,6 @@ import System.Directory
     removeFile,
     setModificationTime,
   )
-import System.FileLock (SharedExclusive (Exclusive), withTryFileLock)
 import System.FilePath ((</>))
 
 -- Liveness -------------------------------------------------------------
@@ -317,13 +303,18 @@ pinPath s i = pinsDir s </> T.unpack (Id.render i)
 -- | Pin an object, so that GC keeps it and what it retains. Pinning an object
 -- twice is the same as once. The object does not have to be in the store.
 pin :: Store -> Id -> IO (Either GCError ())
-pin s i = tryIO $ do
+pin s i = withGCLock s $ \held -> pinWith held s i
+
+-- | Pin under the mutation lock of a compound operation.
+pinWith :: Mutation -> Store -> Id -> IO (Either GCError ())
+pinWith held s i = tryIO $ do
+  checkMutation held (storeRoot s)
   createDirectoryIfMissing True (pinsDir s)
   atomicWrite (pinPath s i) BS.empty
 
 -- | Remove a pin. If the object is not pinned, the function does nothing.
 unpin :: Store -> Id -> IO (Either GCError ())
-unpin s i = tryIO $ ifMissing () (removeFile (pinPath s i))
+unpin s i = withGCLock s $ \_ -> tryIO $ ifMissing () (removeFile (pinPath s i))
 
 -- | All the pins. If there is no @pins@ directory, there are no pins. The
 -- function skips each name that is not an 'Id', for example a temporary
@@ -611,8 +602,8 @@ data GCError
     GCCache CacheError
   | -- | The tombstone of this 'Id' is not a valid tombstone.
     CorruptTombstone Id TombstoneParseError
-  | -- | Another run of GC held the lock for more than about one second. This
-    -- run changed nothing. Try again later.
+  | -- | A writer or GC run held the mutation lock for about one second.
+    -- This run changed nothing. Try again later.
     GCLocked
   deriving (Eq, Show)
 
@@ -637,7 +628,7 @@ data SweepReport = SweepReport
 --
 -- Just before it moves an object, phase 1 reads its file time again. If the
 -- object is younger than 'gracePeriod' now (an agent added it again since the
--- plan), it is skipped. See the module header for the gap that is left.
+-- plan), it is skipped. The mutation lock prevents changes during the sweep.
 --
 -- Phase 2 deletes each file in @trash@ whose file time is more than
 -- 'trashTTL' before the time of the run. This includes files of earlier runs.
@@ -656,11 +647,23 @@ data SweepReport = SweepReport
 --
 -- This function does not tell the cache. Use 'sweepAndSync'.
 sweep :: Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError SweepReport)
-sweep s p t doomed = withGCLock s (sweepUnlocked s p t doomed)
+sweep s p t doomed = withGCLock s $ \held -> runExceptT $ do
+  safe <- ExceptT (validateSweep s p t doomed)
+  ExceptT (sweepUnlocked held s p t safe)
+
+-- | A caller may have made its candidate set before another mutation.
+-- Rebuild liveness under the lock, without trusting that earlier plan.
+validateSweep :: Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError (Set Id))
+validateSweep s p t doomed = runExceptT $ do
+  rs <- withExceptT GCRefs (ExceptT (openRefs (storeRoot s)))
+  g <- ExceptT (extendGraph s mempty)
+  ages <- ExceptT (storedTimes s)
+  roots <- ExceptT (readRoots p rs s)
+  pure (doomed `Set.intersection` plan p (Observed t ages) roots g)
 
 -- | 'sweep' without the lock. The caller holds it.
-sweepUnlocked :: Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError SweepReport)
-sweepUnlocked s p t doomed = runExceptT $ do
+sweepUnlocked :: Mutation -> Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError SweepReport)
+sweepUnlocked held s p t doomed = runExceptT $ do
   moved <- catMaybes <$> traverse (ExceptT . moveOne) (Set.toList doomed)
   gone <- ExceptT (purge s p t)
   pure SweepReport {trashed = moved, deleted = gone}
@@ -672,7 +675,7 @@ sweepUnlocked s p t doomed = runExceptT $ do
         Right Nothing -> pure (Right Nothing) -- not in the store
         Right (Just m) | diffUTCTime t m < gracePeriod p -> pure (Right Nothing) -- young again
         Right (Just _) -> do
-          r <- Store.trash s i
+          r <- Store.trashWith held s i
           case r of
             Left (NotFound _) -> pure (Right Nothing)
             Left e -> pure (Left (GCStore e))
@@ -710,12 +713,14 @@ trashId n = do
 -- The sync runs also if the sweep fails, because a sweep that stops in the
 -- middle can still have moved some objects. The first error is the result.
 sweepAndSync :: Cache -> Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError (SweepReport, SyncReport))
-sweepAndSync c s p t doomed = withGCLock s (sweepAndSyncUnlocked c s p t doomed)
+sweepAndSync c s p t doomed = withGCLock s $ \held -> runExceptT $ do
+  safe <- ExceptT (validateSweep s p t doomed)
+  ExceptT (sweepAndSyncUnlocked held c s p t safe)
 
 -- | 'sweepAndSync' without the lock. The caller holds it.
-sweepAndSyncUnlocked :: Cache -> Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError (SweepReport, SyncReport))
-sweepAndSyncUnlocked c s p t doomed = do
-  r <- sweepUnlocked s p t doomed
+sweepAndSyncUnlocked :: Mutation -> Cache -> Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError (SweepReport, SyncReport))
+sweepAndSyncUnlocked held c s p t doomed = do
+  r <- sweepUnlocked held s p t doomed
   synced <- Cache.sync c s
   pure $ (,) <$> r <*> first GCCache synced
 
@@ -733,36 +738,14 @@ data RunReport = RunReport
   }
   deriving (Eq, Show)
 
--- | The path of the lock file of GC: @\<root\>/gc.lock@.
+-- | The shared mutation lock used by GC and writers.
 gcLockPath :: Store -> FilePath
-gcLockPath s = storeRoot s </> "gc.lock"
+gcLockPath = mutationLockPath . storeRoot
 
--- | Run an action with the lock of GC, so that only one run sweeps at a time.
---
--- The lock is an exclusive @flock@ on 'gcLockPath'. The OS releases it when
--- the holder ends, so a crash cannot leave it held. The lock file stays on
--- disk. This is normal.
---
--- Like the locks of "Akyuu.Refs" and "Akyuu.Cache", the function does not
--- wait inside the lock call, because a blocked call would also block the
--- other Haskell threads of the program. It tries the lock, and if it is
--- taken, waits 10 ms with 'threadDelay' and tries again, up to 100 times
--- (about one second). Then it returns 'GCLocked'. A run takes much longer
--- than that, so a second run gives up and does not wait for the first.
---
--- The lock is not re-entrant: do not call 'sweep' or 'sweepAndSync' inside
--- this function. An 'IOException' from the lock, or from the action, becomes
--- 'GCIO'.
-withGCLock :: Store -> IO (Either GCError a) -> IO (Either GCError a)
-withGCLock s act = go (100 :: Int)
-  where
-    go 0 = pure (Left GCLocked) -- tried 100 times: give up
-    go k = do
-      got <- tryIO (withTryFileLock (gcLockPath s) Exclusive (const act))
-      case got of
-        Left e -> pure (Left e)
-        Right Nothing -> threadDelay 10000 >> go (k - 1)
-        Right (Just v) -> pure v
+-- | Hold the mutation lock for a whole collection. The token lets internal
+-- mutation helpers participate without recursively acquiring the lock.
+withGCLock :: Store -> (Mutation -> IO (Either GCError a)) -> IO (Either GCError a)
+withGCLock s = withMutation (storeRoot s) GCLocked GCIO
 
 -- | Read the inputs and make the plan, for a run at this time. The roots
 -- get these temporary roots. This writes nothing.
@@ -789,13 +772,13 @@ dryRun c s rs p temps = do
 -- 2. Look again with 'recheck', and drop what is live now.
 -- 3. 'sweep', then 'Akyuu.Cache.sync'.
 --
--- Returns 'GCLocked' if another run holds the lock.
+-- Returns 'GCLocked' if a writer or another GC run holds the mutation lock.
 collect :: Cache -> Store -> Refs -> Policy -> Set Id -> IO (Either GCError RunReport)
-collect c s rs p temps = withGCLock s $ runExceptT $ do
+collect c s rs p temps = withGCLock s $ \held -> runExceptT $ do
   t <- liftIO getCurrentTime
   (r, g, doomed) <- ExceptT (planAt c s rs p temps t)
   doomed' <- ExceptT (recheck s rs p t r g doomed)
-  (rep, syn) <- ExceptT (sweepAndSyncUnlocked c s p t doomed')
+  (rep, syn) <- ExceptT (sweepAndSyncUnlocked held c s p t doomed')
   pure RunReport {planned = doomed', swept = rep, synced = syn}
 
 -- Tombstones -----------------------------------------------------------

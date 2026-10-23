@@ -37,6 +37,8 @@ module Akyuu.Embed
     fingerprint,
     runEmbedder,
     embedText,
+    embedOptional,
+    embedOptionalFromConfig,
 
     -- * The table
     VectorStore,
@@ -53,10 +55,12 @@ module Akyuu.Embed
 where
 
 import Akyuu.Config (Config (cfgEmbed), EmbedSettings (esArgs, esCommand, esCommandEnv, esDocumentPrefix, esKey, esMaxChars, esMin, esProfile, esQueryPrefix, esTimeout), loadConfig)
+import Akyuu.Fs (ignoreIO, tryAs, tryWith)
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Control.Exception (IOException, SomeException, bracketOnError, onException, try)
-import Control.Monad (forM_)
+import Control.Concurrent (threadDelay)
+import Control.Exception (IOException, bracket, bracketOnError, evaluate, finally, mask, mask_, onException, try)
+import Control.Monad (forM_, void, when)
 import Data.Aeson (Value (Array, Number, Object))
 import Data.Aeson qualified as A
 import Data.Aeson.KeyMap qualified as KM
@@ -75,13 +79,16 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
-import Database.SQLite.Simple (Connection, Only (Only), close, execute, execute_, open, query, query_, withTransaction)
+import Data.Word (Word64)
+import Database.SQLite.Simple (Connection, Only (Only), SQLError, close, execute, execute_, open, query, query_, withTransaction)
+import GHC.Clock (getMonotonicTimeNSec)
 import GHC.Float (castWord32ToFloat)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.IO (hClose, hSetBinaryMode)
-import System.Posix.Signals (sigTERM, signalProcessGroup)
-import System.Process (CreateProcess (create_group, env, std_err, std_in, std_out), ProcessHandle, StdStream (CreatePipe, NoStream), getPid, shell, waitForProcess, withCreateProcess)
+import System.Posix.Signals (sigKILL, sigTERM, signalProcessGroup)
+import System.Posix.Types (ProcessID)
+import System.Process (CreateProcess (create_group, env, std_err, std_in, std_out), ProcessHandle, StdStream (CreatePipe, NoStream), createProcess, getPid, getProcessExitCode, shell)
 import System.Timeout (timeout)
 
 -- | A vector of one model.
@@ -278,9 +285,8 @@ withoutStoreHashes t = case T.breakOn store t of
     store = "/nix/store/"
 
 -- | Run the command on a text and read the vector. The prefix of the role
--- goes before the text. A failure of any kind (the command is missing, it
--- exits with an error, it takes too long, its output is not a vector) is a
--- 'Left' with a text, never an exception.
+-- goes before the text. Command failures become 'Left'; cancellation and
+-- a deadline imposed by the caller still propagate.
 runEmbedder :: Embedder -> Role -> Text -> IO (Either Text Vector)
 runEmbedder e role t = do
   let (role', prefix) = case role of
@@ -297,29 +303,88 @@ runEmbedder e role t = do
             create_group = True
           }
       input = encodeUtf8 (prefix <> T.take (embMaxChars e) t)
-      go = withCreateProcess proc' $ \mi mo _ ph -> flip onException (stopGroup ph) $ case (mi, mo) of
-        (Just hin, Just hout) -> do
-          hSetBinaryMode hin True
-          hSetBinaryMode hout True
-          -- A command that exits before it reads its input closes the pipe.
-          _ <- try (BS.hPut hin input) :: IO (Either IOException ())
-          _ <- try (hClose hin) :: IO (Either IOException ())
-          out <- BS.hGetContents hout
-          code <- waitForProcess ph
-          pure (code, out)
-        _ -> ioError (userError "no pipes")
-  r <- try (timeout (embTimeout e * 1000000) go) :: IO (Either SomeException (Maybe (ExitCode, ByteString)))
+      start = do
+        p@(_, _, _, ph) <- createProcess proc'
+        pid <- getPid ph
+        pure (p, pid)
+      clean ((mi, mo, me, _), _) =
+        forM_ [mi, mo, me] (mapM_ (ignoreIO . hClose))
+      go = mask $ \restore -> do
+        resource@((mi, mo, _, ph), pid) <- start
+        flip finally (clean resource) $
+          flip onException (stopGroup pid ph) $ do
+            result <- restore $ case (mi, mo) of
+              (Just hin, Just hout) -> do
+                hSetBinaryMode hin True
+                hSetBinaryMode hout True
+                -- A command that exits before it reads its input closes the pipe.
+                _ <- try (BS.hPut hin input) :: IO (Either IOException ())
+                _ <- try (hClose hin) :: IO (Either IOException ())
+                out <- BS.hGetContents hout
+                code <- waitForExit ph
+                evaluate $
+                  if code /= ExitSuccess
+                    then Left ("The embedding command failed (" <> T.pack (show code) <> ").")
+                    else either (Left . ("The embedding command: " <>)) Right (parseVector out)
+              _ -> ioError (userError "no pipes")
+            case result of
+              Left _ -> stopGroup pid ph
+              -- Successful commands may intentionally start a persistent model
+              -- server. Leave their detached-stdio background children alive.
+              Right _ -> pure ()
+            pure result
+  r <- try (timeout (embTimeout e * 1000000) go) :: IO (Either IOException (Maybe (Either Text Vector)))
   pure $ case r of
     Left ex -> Left ("The embedding command could not run: " <> T.pack (show ex))
     Right Nothing -> Left ("The embedding command took more than " <> T.pack (show (embTimeout e)) <> " seconds.")
-    Right (Just (code, out))
-      | code /= ExitSuccess -> Left ("The embedding command failed (" <> T.pack (show code) <> ").")
-      | otherwise -> either (Left . ("The embedding command: " <>)) Right (parseVector out)
+    Right (Just result) -> result
 
 -- | The vectors of a whole memory: one for each chunk ('chunkText'), at most
 -- 'maxChunks'. The first failure is the result.
 embedText :: Embedder -> Role -> Text -> IO (Either Text [Vector])
-embedText e role t = sequence <$> mapM (runEmbedder e role) (take maxChunks (chunkText (embMaxChars e) t))
+embedText e role t = go (take maxChunks (chunkText (embMaxChars e) t))
+  where
+    go [] = pure (Right [])
+    go (c : cs) = do
+      r <- runEmbedder e role c
+      case r of
+        Left why -> pure (Left why)
+        Right v -> fmap (v :) <$> go cs
+
+-- | Best-effort vectors after a store write. All chunks and their persistence
+-- share one deadline, capped at five seconds. Contention skips this optional
+-- write rather than spending the deadline inside SQLite's busy handler.
+-- 'embedText' and the explicit embed command keep their per-call timeout.
+embedOptional :: FilePath -> Embedder -> Id -> Text -> IO ()
+embedOptional path e i body = do
+  start <- getMonotonicTimeNSec
+  embedOptionalSince start path e i body
+
+-- | Load configuration within the optional operation's five-second deadline.
+-- Once known, a shorter configured timeout is measured from the same start.
+embedOptionalFromConfig :: FilePath -> Id -> Text -> IO ()
+embedOptionalFromConfig path i body = do
+  start <- getMonotonicTimeNSec
+  void $ timeout (5000000 - 2 * cleanupWait) $ do
+    me <- loadEmbedder
+    forM_ me $ \e -> embedOptionalSince start path e i body
+
+embedOptionalSince :: Word64 -> FilePath -> Embedder -> Id -> Text -> IO ()
+embedOptionalSince start path e i body = do
+  now <- getMonotonicTimeNSec
+  let elapsed = fromIntegral ((now - start) `div` 1000)
+      -- Configuration, all calls and persistence use the same starting time.
+      -- Leave room for TERM/KILL and reaping if a command is cancelled.
+      budget = min 5 (embTimeout e) * 1000000 - elapsed - 2 * cleanupWait
+  when (budget > 0) $ void $ timeout budget $ tryVectorIO $ do
+    r <- embedText e Document body
+    case r of
+      Left _ -> pure ()
+      Right vs ->
+        bracket (openVectorsWithWait False path) (either (const (pure ())) closeVectors) $
+          either (const (pure ())) $ \s -> do
+            putVectors s (embModel e) i vs
+            recordFingerprint s (embModel e) (fingerprint e)
 
 -- The table ------------------------------------------------------------
 
@@ -336,20 +401,28 @@ vectorsPath root = root </> "embeddings.sqlite"
 -- not read and not changed here, so an older akyuu on the same store keeps
 -- working. @akyuu embed --prune@ drops it.
 openVectors :: FilePath -> IO (Either Text VectorStore)
-openVectors path = do
-  r <- try $ bracketOnError (open path) close $ \c -> do
-    -- Two processes can write at once (akyuu embed and a server): wait.
-    execute_ c "PRAGMA busy_timeout = 5000"
+openVectors = openVectorsWithWait True
+
+openVectorsWithWait :: Bool -> FilePath -> IO (Either Text VectorStore)
+openVectorsWithWait wait path =
+  tryVectorIO $ bracketOnError (open path) close $ \c -> do
+    execute_ c (if wait then "PRAGMA busy_timeout = 5000" else "PRAGMA busy_timeout = 0")
     execute_ c "PRAGMA journal_mode = WAL"
     execute_ c "CREATE TABLE IF NOT EXISTS chunks (id TEXT NOT NULL, model TEXT NOT NULL, chunk INTEGER NOT NULL, dim INTEGER NOT NULL, vec BLOB NOT NULL, PRIMARY KEY (id, model, chunk)) WITHOUT ROWID"
     -- The fingerprint of the embedder that made the first vectors of each key
     -- (see 'fingerprint').
     execute_ c "CREATE TABLE IF NOT EXISTS models (key TEXT PRIMARY KEY NOT NULL, fingerprint TEXT NOT NULL) WITHOUT ROWID"
     pure (VectorStore c)
-  pure (either (\e -> Left (T.pack (show (e :: SomeException)))) Right r)
 
 closeVectors :: VectorStore -> IO ()
 closeVectors (VectorStore c) = close c
+
+-- Only expected database and filesystem failures become data. In particular,
+-- an outer timeout must not be converted into an embedding failure.
+tryVectorIO :: IO a -> IO (Either Text a)
+tryVectorIO act = do
+  r <- tryAs (\e -> T.pack (show (e :: SQLError))) (tryWith (T.pack . show) act)
+  pure (either Left id r)
 
 -- | Keep the vectors of a memory, one for each chunk. They replace the vectors
 -- that the memory had for the model.
@@ -381,12 +454,25 @@ loadVectors (VectorStore c) model = do
 storedIds :: VectorStore -> Text -> IO (Set Id)
 storedIds s model = Set.fromList . map fst <$> loadVectors s model
 
--- | Stop the process group of a command (its shell and the children).
--- An error (the group is gone) is ignored.
-stopGroup :: ProcessHandle -> IO ()
-stopGroup ph = do
-  mp <- getPid ph
-  forM_ mp (\p -> (try (signalProcessGroup sigTERM p) :: IO (Either SomeException ())))
+-- | Stop the shell and its children, even if they ignore TERM. Keep the group
+-- id captured at spawn: 'getPid' loses it once the shell has been reaped.
+stopGroup :: Maybe ProcessID -> ProcessHandle -> IO ()
+stopGroup mp ph = mask_ $ do
+  forM_ mp $ \p -> do
+    ignoreIO (signalProcessGroup sigTERM p)
+    void (timeout cleanupWait (waitForExit ph))
+      `finally` ignoreIO (signalProcessGroup sigKILL p)
+  void (timeout cleanupWait (waitForExit ph))
+
+cleanupWait :: Int
+cleanupWait = 50000
+
+-- Poll rather than blocking in waitpid: both the command deadline and the
+-- cleanup grace period must remain interruptible after stdout closes.
+waitForExit :: ProcessHandle -> IO ExitCode
+waitForExit ph = do
+  code <- getProcessExitCode ph
+  maybe (threadDelay 10000 >> waitForExit ph) pure code
 
 -- | Keep the fingerprint of the embedder that writes vectors of a key, if the
 -- key has none yet. The first one stays: a later embedder with another

@@ -24,13 +24,11 @@
 --
 -- * A write is atomic ('Akyuu.Fs.atomicWrite'). A reader sees the whole old
 --   file or the whole new file.
--- * A change takes a lock, and 'setRef' can check the current value under that
---   lock (compare and set). Two agents that move the same ref cannot lose
---   each other's update.
--- * A read does not take the lock. It does not need to.
--- * The lock is an OS file lock (@flock@) on @refs/.lock@. The OS releases it
---   when the process ends, also after a crash, so no lock can be left behind.
---   The file itself stays on the disk. This is normal.
+-- * A change takes the shared store mutation lock, then @refs/.lock@, and
+--   checks the current value under both locks (compare and set).
+-- * A read takes neither lock: it sees one atomically replaced ref file.
+-- * Both locks use OS file locks (@flock@). The OS releases them when the
+--   process ends, also after a crash. The lock files stay on disk.
 -- * This module does not look at the store. A ref can point to an 'Id' that
 --   is not in the store. 'Akyuu.Store' and this module are joined one layer
 --   above, in @supersede@.
@@ -67,12 +65,14 @@ module Akyuu.Refs
     Expected (..),
     getRef,
     setRef,
+    updateRef,
     listRefs,
   )
 where
 
 import Akyuu.Fs (atomicWrite, tryWith)
 import Akyuu.Id (Id, IdParseError, parse, render)
+import Akyuu.Mutation (Mutation, checkMutation, withMutation)
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException)
 import Data.Bifunctor (first)
@@ -89,6 +89,7 @@ import GHC.IO.Exception (IOErrorType (InappropriateType))
 import System.Directory
   ( createDirectoryIfMissing,
     doesDirectoryExist,
+    doesFileExist,
     listDirectory,
   )
 import System.FileLock (SharedExclusive (Exclusive), withTryFileLock)
@@ -335,13 +336,13 @@ getRef r n = do
 -- The function releases the lock when the action ends, also if the action
 -- returns 'Left' or throws. An 'IOException' from the lock, or from the
 -- action, becomes 'RefIO'.
-withLock :: Refs -> IO (Either RefError a) -> IO (Either RefError a)
-withLock r act = go (100 :: Int)
+withLock :: Refs -> (RefError -> e) -> IO (Either e a) -> IO (Either e a)
+withLock r wrap act = go (100 :: Int)
   where
     lock = refsRoot r </> "refs" </> ".lock"
-    go 0 = pure (Left Locked) -- tried 100 times: give up
+    go 0 = pure (Left (wrap Locked))
     go k = do
-      got <- tryIO (withTryFileLock lock Exclusive (const act))
+      got <- tryWith (wrap . RefIO) (withTryFileLock lock Exclusive (const act))
       case got of
         Left e -> pure (Left e)
         Right Nothing -> threadDelay 10000 >> go (k - 1)
@@ -394,21 +395,44 @@ isConflict e = isAlreadyExistsError e || ioeGetErrorType e == InappropriateType
 -- Returns 'Locked' if it cannot get the lock in about one second, and
 -- 'NameConflict' if the name clashes with another ref.
 setRef :: Refs -> Name -> Expected -> Id -> IO (Either RefError Ref)
-setRef rs n ex i = withLock rs $ do
+setRef rs n ex i =
+  withMutation (refsRoot rs) Locked RefIO $ \held ->
+    updateRef held rs n ex id (pure (Right i))
+
+-- | Validate and publish a reference update under a store mutation lock.
+-- The producer runs only after the expectation and destination checks pass,
+-- while both the mutation and refs locks remain held. It must not acquire
+-- either lock again. This prevents rejected proposals entering the store.
+updateRef :: Mutation -> Refs -> Name -> Expected -> (RefError -> e) -> IO (Either e Id) -> IO (Either e Ref)
+updateRef held rs n ex wrap produce = withLock rs wrap $ do
+  checkMutation held (refsRoot rs)
   cur <- getRef rs n
-  case (absentIsNothing cur >>= \mr -> checkExpected n ex mr >> Right mr) of
-    Left err -> pure (Left err)
-    Right mr ->
-      let new = maybe (Ref i []) (advance i) mr
-       in (new <$) <$> (write n new)
+  case absentIsNothing cur >>= \mr -> checkExpected n ex mr >> Right mr of
+    Left err -> pure (Left (wrap err))
+    Right mr -> do
+      ready <- tryWith writeError $ do
+        directory <- doesDirectoryExist path
+        if directory then pure True else parentConflict (takeDirectory path)
+      case ready of
+        Left err -> pure (Left err)
+        Right True -> pure (Left (wrap (NameConflict n)))
+        Right False -> do
+          made <- produce
+          case made of
+            Left err -> pure (Left err)
+            Right i -> do
+              let new = maybe (Ref i []) (advance i) mr
+              (new <$) <$> tryWith writeError (createDirectoryIfMissing True (takeDirectory path) >> atomicWrite path (renderRef new))
   where
-    write :: Name -> Ref -> IO (Either RefError ())
-    write n' r = do
-      tryWith
-        (\e -> if isConflict e then NameConflict n' else (RefIO e))
-        $ (createDirectoryIfMissing True (takeDirectory path))
-          >> atomicWrite path (renderRef r)
+    writeError e = wrap (if isConflict e then NameConflict n else RefIO e)
     path = refPath rs n
+    -- Check namespace conflicts without reserving empty directories for a
+    -- producer that may fail. Only publication creates parent directories.
+    parentConflict dir = do
+      file <- doesFileExist dir
+      if file || dir == refsRoot rs </> "refs"
+        then pure file
+        else parentConflict (takeDirectory dir)
 
 -- | The names of all the refs.
 --

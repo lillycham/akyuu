@@ -106,8 +106,28 @@ current memory. The others are the older values, newest first (the
 generations that GC keeps, `--keep-generations`).
 
 A name is parts of `a-z`, `0-9`, `-`, `_` and `.`, joined with `/`. A part is
-a directory, so a name cannot be the start of another name. Writes are atomic,
-and a change takes a lock (`refs/.lock`) and can check the current value.
+a directory, so a name cannot be the start of another name. Each replacement
+is atomic. A change takes `store.lock`, then `refs/.lock`, and checks the
+expected value before it publishes a new memory.
+
+## Concurrent writes
+
+Object additions, reference changes, pins and GC share the exclusive
+`store.lock`. GC holds it from the snapshot through the sweep and cache sync.
+Reference and pin target checks run under this lock. A writer or GC run
+reports contention if the lock stays busy for about one second.
+
+Reference updates also take `refs/.lock`, after `store.lock`. Cache and
+SQLite locks come last. External embedding commands run after publication
+releases the mutation lock.
+
+Update every writer and GC job together. Old processes do not use this
+protocol, even though memory bytes, IDs and reference files remain compatible.
+
+The lock prevents concurrent validation and publication races. It does not
+make two file replacements a crash-atomic transaction. A crash or I/O failure
+after the object write can leave a searchable, unreferenced object. Its
+version edges can also affect resolution. The reference is written last.
 
 ## Other files
 

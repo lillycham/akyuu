@@ -60,7 +60,7 @@
       embedLlamaFor = pkgs:
         pkgs.writeShellApplication {
           name = "akyuu-embed-llama";
-          runtimeInputs = [ pkgs.llama-cpp pkgs.curl pkgs.jq pkgs.coreutils ];
+          runtimeInputs = [ pkgs.llama-cpp pkgs.curl pkgs.jq pkgs.coreutils pkgs.flock ];
           text = builtins.readFile ./nix/embed-llama.sh;
         };
 
@@ -116,6 +116,17 @@
             nativeBuildInputs = [ (akyuuFor pkgs) (backupFor pkgs) pkgs.coreutils ];
           }
           (builtins.readFile ./nix/backup-check.sh);
+        # Live model identity, concurrent startup and failed/stale state, using
+        # fake servers only: this check never fetches or loads model weights.
+        embed-llama = pkgs.runCommand "akyuu-embed-llama-check"
+          {
+            nativeBuildInputs = [ pkgs.bash pkgs.curl pkgs.jq pkgs.coreutils pkgs.flock pkgs.python3 ];
+            __darwinAllowLocalNetworking = true;
+          }
+          ''
+            python3 ${./nix/embed-llama-check.py} ${./nix/embed-llama.sh}
+            touch $out
+          '';
         # The versioning script: the repository, one commit for a change, none for
         # no change, the ignore list, and a removed memory that stays in the history.
         # The Haskell sources are formatted with ormolu (the same version as in

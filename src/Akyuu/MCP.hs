@@ -46,6 +46,7 @@ where
 
 import Akyuu.Amend qualified as Amend
 import Akyuu.Check (CheckOptions (hubDegree, longLog, nearThreshold), FindingKind, Severity, defaultCheckOptions, filterFindings, kindName, severityName)
+import Akyuu.Episode (Walk (walkEnd), WalkEnd (Interrupted))
 import Akyuu.Error (AkyuuError (BadId, BadInput, BadName), describe)
 import Akyuu.Fuzzy qualified as Fuzzy
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
@@ -762,7 +763,10 @@ runTool cfg env c = either failed id <$> go
       CallRefGet n h -> fmap (lines' "" . refLines h) <$> readRef env n
       CallRefSet n e i -> fmap (lines' "" . refLines False) <$> setRefTo env n e i
       CallAppend n m -> fmap (\i -> okText (Id.render i) False) <$> appendEpisode env n m
-      CallLog n lim full since Plain -> fmap (\w -> (if full then id else shorten) (okText (T.intercalate "\n" (logLines full w)) False)) <$> maybe (readLog env n (maybe 20 id lim)) (readLogSince env n (maybe 200 id lim)) since
+      CallLog n lim full since Plain ->
+        fmap
+          (\w -> (if full then id else shorten) (okText (T.intercalate "\n" (logLines full w)) (case walkEnd w of Interrupted _ _ -> True; _ -> False)))
+          <$> maybe (readLog env n (maybe 20 id lim)) (readLogSince env n (maybe 200 id lim)) since
       CallLog n _ full _ view -> do
         levels <- readLevels env n
         pure $

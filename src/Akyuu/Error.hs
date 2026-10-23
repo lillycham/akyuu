@@ -21,7 +21,7 @@ import Akyuu.GC (GCError (CorruptTombstone, GCCache, GCIO, GCLocked, GCRefs, GCS
 import Akyuu.Id (Id, IdParseError (BadHex, BadLength, BadPrefix), render)
 import Akyuu.Memory (MemoryParseError (BadEncoding, BadHeaderValue, BadLink, BadRefName, DuplicateHeader, MalformedHeader, MissingBlankLine, MissingHeader, NotCanonical, UnknownHeader))
 import Akyuu.Refs (Name, NameError (BadSegment, EmptyName), RefError (CorruptRef, Locked, NameConflict, NoSuchRef, RefIO, Stale), RefParseError (BadRefLine, EmptyRef, NotUtf8), nameText)
-import Akyuu.Store (StoreError (BadMemory, Corrupt, NotFound, StoreIO))
+import Akyuu.Store (StoreError (BadMemory, Corrupt, NotFound, StoreIO, StoreLocked))
 import Akyuu.Supersede (SupersedeError (SupersedeRef, SupersedeStore))
 import Control.Exception (IOException, displayException)
 import Data.Set (Set)
@@ -35,6 +35,8 @@ import Database.SQLite.Simple (SQLError (sqlErrorDetails))
 data AkyuuError
   = -- | A store function failed.
     StoreFailed StoreError
+  | -- | A log stopped before its end because an episode could not be read.
+    LogInterrupted Id StoreError
   | -- | A refs function failed.
     RefFailed RefError
   | -- | A cache function failed.
@@ -83,6 +85,7 @@ fromSupersede (SupersedeStore e) = StoreFailed e
 describe :: AkyuuError -> Text
 describe err = case err of
   StoreFailed e -> describeStore e
+  LogInterrupted i e -> "The log is interrupted at " <> render i <> ": " <> describeStore e
   RefFailed e -> describeRef e
   CacheFailed e -> describeCache e
   GCFailed e -> describeGC e
@@ -122,6 +125,7 @@ describe err = case err of
 describeStore :: StoreError -> Text
 describeStore e = case e of
   StoreIO x -> "The store could not be read or written: " <> io x
+  StoreLocked -> "The store is locked by another mutation. Try again."
   NotFound i -> "There is no memory " <> render i <> " in the store."
   Corrupt i -> "The memory " <> render i <> " is damaged: its content does not match its id."
   BadMemory i p -> "The file of " <> render i <> " is not a valid memory: " <> describeParse p
@@ -155,7 +159,7 @@ describeGC e = case e of
   GCRefs r -> describeRef r
   GCCache c -> describeCache c
   CorruptTombstone i p -> "The tombstone of " <> render i <> " is damaged: " <> tomb p
-  GCLocked -> "Another GC run holds the lock. Try again later."
+  GCLocked -> "The store is locked by another mutation or GC run. Try again later."
   where
     tomb TombstoneNotUtf8 = "it is not UTF-8 text."
     tomb (BadTombstone t) = "it holds " <> quote t <> "."

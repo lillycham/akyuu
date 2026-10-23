@@ -2,14 +2,16 @@
 
 module LevelsTests (levelsTests) where
 
-import Akyuu.Error (AkyuuError (BadInput))
+import Akyuu.Error (AkyuuError (BadInput, LogInterrupted, RefFailed))
 import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom, Follows))
 import Akyuu.Id (Id)
 import Akyuu.Levels (Chain, Item (Brief, Episode, Summary), Run (runFrom, runLevel, runMemories, runTo), chainOrder, checkSources, fit, levelRef, resolution, todo)
 import Akyuu.Memory (Memory (memBody, memCreated, memEdges))
-import Akyuu.Ops (appendEpisode, readLevels, summariseLog, unfoldMemory)
-import Akyuu.Refs (mkName, nameText)
+import Akyuu.Ops (Env (envRefs, envStore), appendEpisode, readLevels, readRef, summariseLog, unfoldMemory)
+import Akyuu.Refs (RefError (CorruptRef, NoSuchRef, RefIO), mkName, nameText, refPath)
+import Akyuu.Store (StoreError (Corrupt, NotFound), objectPath)
 import Control.Monad (forM)
+import Data.ByteString qualified as BS
 import Data.Either (isLeft)
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -17,6 +19,7 @@ import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import OpsTests (withOpsEnv)
 import Support (newMem, nid, right, testMemory)
+import System.Directory (createFileLink, removeFile)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
@@ -148,7 +151,67 @@ storeCases =
           n <- right (mkName "me/log")
           e <- right =<< appendEpisode env n (newMem "note" "claude" Set.empty "alone")
           r <- unfoldMemory env e
-          isBadInput r @?= True
+          isBadInput r @?= True,
+      testCase "a missing oldest episode cannot become a new summary prefix" $
+        withOpsEnv $ \_ env -> do
+          n <- right (mkName "me/log")
+          first : rest <- forM ["oldest", "middle", "newest"] $ \body -> right =<< appendEpisode env n (newMem "note" "agent" Set.empty body)
+          removeFile (objectPath (envStore env) first)
+          levels <- readLevels env n
+          levels @?= Left (LogInterrupted first (NotFound first))
+          summaryResult <- summariseLog env n 1 rest (newMem "summary" "agent" Set.empty "must not publish")
+          summaryResult @?= Left (LogInterrupted first (NotFound first))
+          l1 <- right (levelRef n 1)
+          readRef env l1 >>= (@?= Left (RefFailed (NoSuchRef l1))),
+      testCase "corrupt base history is rejected before a summary is published" $
+        withOpsEnv $ \_ env -> do
+          n <- right (mkName "me/log")
+          first : rest <- forM ["oldest", "middle", "newest"] $ \body -> right =<< appendEpisode env n (newMem "note" "agent" Set.empty body)
+          BS.writeFile (objectPath (envStore env) first) "damaged"
+          readLevels env n >>= (@?= Left (LogInterrupted first (Corrupt first)))
+          summariseLog env n 1 rest (newMem "summary" "agent" Set.empty "must not publish")
+            >>= (@?= Left (LogInterrupted first (Corrupt first)))
+          l1 <- right (levelRef n 1)
+          readRef env l1 >>= (@?= Left (RefFailed (NoSuchRef l1))),
+      testCase "an incomplete summary chain cannot be summarised at the next level" $
+        withOpsEnv $ \_ env -> do
+          n <- right (mkName "me/log")
+          es <- forM [1 .. 6 :: Int] $ \k -> right =<< appendEpisode env n (newMem "note" "agent" Set.empty (T.pack (show k)))
+          first : rest <- forM [0, 2, 4] $ \offset ->
+            right =<< summariseLog env n 1 (take 2 (drop offset es)) (newMem "summary" "agent" Set.empty (T.pack (show offset)))
+          removeFile (objectPath (envStore env) first)
+          readLevels env n >>= (@?= Left (LogInterrupted first (NotFound first)))
+          summariseLog env n 2 rest (newMem "summary" "agent" Set.empty "must not publish")
+            >>= (@?= Left (LogInterrupted first (NotFound first)))
+          l2 <- right (levelRef n 2)
+          readRef env l2 >>= (@?= Left (RefFailed (NoSuchRef l2))),
+      testCase "a corrupt higher-level ref is an error, not an absent level" $
+        withOpsEnv $ \_ env -> do
+          n <- right (mkName "me/log")
+          es <- forM ["first", "second"] $ \body -> right =<< appendEpisode env n (newMem "note" "agent" Set.empty body)
+          l1 <- right (levelRef n 1)
+          let path = refPath (envRefs env) l1
+          BS.writeFile path "damaged"
+          levels <- readLevels env n
+          case levels of
+            Left (RefFailed (CorruptRef failed _)) -> failed @?= l1
+            other -> fail ("expected corrupt level ref, got " <> show other)
+          published <- summariseLog env n 1 es (newMem "summary" "agent" Set.empty "must not publish")
+          case published of
+            Left (RefFailed (CorruptRef failed _)) -> failed @?= l1
+            other -> fail ("expected corrupt level ref, got " <> show other)
+          BS.readFile path >>= (@?= "damaged"),
+      testCase "a higher-level ref IO failure is an error, not an absent level" $
+        withOpsEnv $ \_ env -> do
+          n <- right (mkName "me/log")
+          _ <- right =<< appendEpisode env n (newMem "note" "agent" Set.empty "first")
+          l1 <- right (levelRef n 1)
+          let path = refPath (envRefs env) l1
+          createFileLink path path
+          levels <- readLevels env n
+          case levels of
+            Left (RefFailed (RefIO _)) -> pure ()
+            other -> fail ("expected level ref IO error, got " <> show other)
     ]
   where
     isBadInput :: Either AkyuuError a -> Bool

@@ -52,7 +52,7 @@ import Akyuu.Cache (Correction (AddedByMeaning, MeaningUnavailable, PrefixOf, Sp
 import Akyuu.Check (Finding (findingIds, findingKind, findingRelated, findingSeverity, findingWhy), kindName, severityName)
 import Akyuu.Compare (Comparison (cmpOnlyA, cmpOnlyB, cmpShared), canDropA, canDropB)
 import Akyuu.Config (Config (cfgAgent, cfgEmbed, cfgFile, cfgNotes, cfgPolicyRef, cfgRoot, cfgTiersRef), EmbedSettings (esArgs, esCommand, esDocumentPrefix, esKey, esMaxChars, esMin, esProfile, esQueryPrefix, esSource, esTimeout), Source (Default), Sourced (sSource, sValue), sourceText)
-import Akyuu.Episode (Walk (Walk))
+import Akyuu.Episode (Walk (Walk), WalkEnd (Complete, Interrupted, Limited))
 import Akyuu.Error (describe, describeParse)
 import Akyuu.Error qualified as Error
 import Akyuu.GC (RunReport (swept), SweepReport (deleted, trashed))
@@ -528,7 +528,12 @@ contextBrief a = contextEntry a
 -- body follows, indented. A last line @more: ID@ says that the log goes on
 -- from that episode.
 logLines :: Bool -> Walk -> [Text]
-logLines full (Walk es more) = concatMap (episodeLines full) es <> maybe [] (\i -> ["more: " <> render i]) more
+logLines full (Walk es end) = concatMap (episodeLines full) es <> ending
+  where
+    ending = case end of
+      Complete -> []
+      Limited i -> ["more: " <> render i]
+      Interrupted i e -> ["interrupted: " <> describe (Error.LogInterrupted i e)]
 
 -- | One memory of a log: a line with its id, time, agent, kind and first line,
 -- and with 'True' its body too, indented by two spaces.

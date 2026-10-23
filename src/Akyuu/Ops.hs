@@ -101,7 +101,8 @@ import Akyuu.Config qualified as Config
 import Akyuu.Embed qualified as Embed
 import Akyuu.Episode (Walk)
 import Akyuu.Episode qualified as Episode
-import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadConfig, BadField, BadIdSpec, BadInput, BadName, CacheFailed, GCFailed, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
+import Akyuu.Error (AkyuuError (AmbiguousPrefix, BadConfig, BadField, BadIdSpec, BadInput, BadName, CacheFailed, GCFailed, LogInterrupted, NoRoot, NoSuchPrefix, Pruned, RefFailed, RootMissing, StoreFailed), describe, fromSupersede)
+import Akyuu.Fs (tryAs, tryWith)
 import Akyuu.GC (Policy, RunReport)
 import Akyuu.GC qualified as GC
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Follows, Supersedes), Graph)
@@ -111,6 +112,7 @@ import Akyuu.Id qualified as Id
 import Akyuu.Init qualified as Init
 import Akyuu.Levels qualified as Levels
 import Akyuu.Memory (Memory (memAboutRefs, memAgent, memBody, memCreated, memEdges, memKind), MemoryError (InvalidField), MemoryParseError, mkMemory, validField, withAboutRefs)
+import Akyuu.Mutation (withMutation)
 import Akyuu.Query (Neighbour, RefLink, SearchOptions, SearchResult)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (Expected, Name, Ref (current), RefError, Refs, openRefs)
@@ -122,7 +124,7 @@ import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), o
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (supersede, supersedeFrom)
 import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), parseManifest, placeLines, placeLog, placeRefs, tierNames, tierRefs)
-import Control.Exception (SomeException, displayException, finally, try)
+import Control.Exception (bracket, finally)
 import Control.Monad (forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE, withExceptT)
@@ -137,6 +139,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
+import Database.SQLite.Simple (SQLError)
 import System.Directory (doesDirectoryExist)
 import System.FilePath ((</>))
 
@@ -255,13 +258,17 @@ addMemory env n = runExceptT $ do
 -- first, so a refused call adds nothing.
 addUnderRef :: Env -> Name -> NewMemory -> IO (Either AkyuuError Id)
 addUnderRef env n new = runExceptT $ do
-  there <- liftIO (readRef env n)
-  case there of
-    Right _ -> throwE (BadInput ("The ref " <> Refs.nameText n <> " exists. Use supersede to change its memory."))
-    Left _ -> pure ()
-  i <- ExceptT (addMemory env new)
-  _ <- ExceptT (setRefTo env n Refs.MustBeAbsent i)
+  linkable env new
+  m <- buildNow new
+  ref <- ExceptT $
+    withMutation (Store.storeRoot (envStore env)) (RefFailed Refs.Locked) (RefFailed . Refs.RefIO) $ \held ->
+      Refs.updateRef held (envRefs env) n Refs.MustBeAbsent createError (fmap (first StoreFailed) (Store.addWith held (envStore env) m))
+  let i = current ref
+  liftIO (embedNew env i (newBody new))
   pure i
+  where
+    createError (Refs.Stale _ _) = BadInput ("The ref " <> Refs.nameText n <> " exists. Use supersede to change its memory.")
+    createError e = RefFailed e
 
 -- | The error for an 'Id' that is not in the store: 'Pruned' if GC left a
 -- tombstone for it, or else 'NotFound'.
@@ -353,10 +360,11 @@ readRef env n = runExceptT (refs (Refs.getRef (envRefs env) n))
 -- "Akyuu.Refs" does not look at the store. This function does: the 'Id' must
 -- be in the store, so that no ref points at nothing.
 setRefTo :: Env -> Name -> Expected -> Id -> IO (Either AkyuuError Ref)
-setRefTo env n ex i = runExceptT $ do
-  there <- store (Store.exists (envStore env) i)
-  unless there (missing env i)
-  refs (Refs.setRef (envRefs env) n ex i)
+setRefTo env n ex i =
+  withMutation (Store.storeRoot (envStore env)) (RefFailed Refs.Locked) (RefFailed . Refs.RefIO) $ \held -> runExceptT $ do
+    there <- store (Store.exists (envStore env) i)
+    unless there (missing env i)
+    ExceptT (Refs.updateRef held (envRefs env) n ex RefFailed (pure (Right i)))
 
 -- | The names of all the refs, sorted.
 listRefNames :: Env -> IO (Either AkyuuError [Name])
@@ -393,10 +401,11 @@ firstLines env is = do
 -- function does not: the person gave an id, and an id that nothing has is
 -- most likely a typo. It gives the same error as 'setRefTo'.
 pinMemory :: Env -> Id -> IO (Either AkyuuError ())
-pinMemory env i = runExceptT $ do
-  there <- store (Store.exists (envStore env) i)
-  unless there (missing env i)
-  gc (GC.pin (envStore env) i)
+pinMemory env i =
+  withMutation (Store.storeRoot (envStore env)) (GCFailed GC.GCLocked) (GCFailed . GC.GCIO) $ \held -> runExceptT $ do
+    there <- store (Store.exists (envStore env) i)
+    unless there (missing env i)
+    gc (GC.pinWith held (envStore env) i)
 
 -- | Remove a pin. An id that is not pinned is not an error. The memory does
 -- not have to be in the store, so a person can remove the pin of a memory
@@ -483,21 +492,13 @@ synced env = () <$ cache (Cache.sync (envCache env) (envStore env))
 searchMemories :: Env -> SearchOptions -> Text -> IO (Either AkyuuError SearchResult)
 searchMemories env = searchMemoriesMode env Fused
 
--- | Give a new memory a vector, if an embedding command is set. This is for
--- the next search, so it is best effort: a failure of any kind is ignored,
--- and the wait is at most 5 seconds. @akyuu embed@ fills what this missed.
+-- | Give a new memory a vector for the next search, if a command is set.
+-- Command and persistence failures are best effort; cancellation propagates.
+-- Configuration, all chunks and the write share at most 5 seconds.
+-- @akyuu embed@ fills what this missed.
 embedNew :: Env -> Id -> Text -> IO ()
-embedNew env i body = do
-  me <- Embed.loadEmbedder
-  forM_ me $ \e0 -> do
-    let e = e0 {Embed.embTimeout = min 5 (Embed.embTimeout e0)}
-    r <- try (Embed.embedText e Embed.Document body) :: IO (Either SomeException (Either Text [Embed.Vector]))
-    case r of
-      Right (Right vs') -> do
-        let write vs = Embed.putVectors vs (Embed.embModel e) i vs' >> Embed.recordFingerprint vs (Embed.embModel e) (Embed.fingerprint e)
-        _ <- try (withVectors env write) :: IO (Either SomeException (Either Text ()))
-        pure ()
-      _ -> pure ()
+embedNew env i body =
+  Embed.embedOptionalFromConfig (Embed.vectorsPath (Store.storeRoot (envStore env))) i body
 
 -- | What a search uses: only the words ('TextOnly'), the words and the
 -- meaning together ('Fused'), or only the meaning ('MeaningOnly'). The last
@@ -532,14 +533,16 @@ linkedFrom env is = do
 -- | Open the table of vectors of this store for an action.
 withVectors :: Env -> (Embed.VectorStore -> IO a) -> IO (Either Text a)
 withVectors env act = do
-  r <- Embed.openVectors (Embed.vectorsPath (Store.storeRoot (envStore env)))
-  case r of
-    Left why -> pure (Left why)
-    Right vs -> do
-      -- An error of SQLite (busy, disk full) is a Left: the caller falls back
-      -- to a text search, and a run of embed keeps its report.
-      r' <- try (act vs `finally` Embed.closeVectors vs)
-      pure (either (\e -> Left (T.pack (displayException (e :: SomeException)))) Right r')
+  -- Only expected I/O and SQLite failures become a fallback; cancellation
+  -- must still reach the caller. Bracket the open result to close on timeout.
+  r <-
+    tryAs (\e -> T.pack (show (e :: SQLError))) $
+      tryWith (T.pack . show) $
+        bracket
+          (Embed.openVectors (Embed.vectorsPath (Store.storeRoot (envStore env))))
+          (either (const (pure ())) Embed.closeVectors)
+          (either (pure . Left) (fmap Right . act))
+  pure (either Left (either Left id) r)
 
 -- | The memories nearest to a query in meaning, if the embedding command is
 -- set and works. The other result is the notes for the person.
@@ -1089,31 +1092,40 @@ appendEpisode :: Env -> Name -> NewMemory -> IO (Either AkyuuError Id)
 appendEpisode env n nm = runExceptT $ do
   let count k = length [() | Edge k' _ <- Set.toList (newEdges nm), k' == k]
   unless (count Follows == 0) (throwE (BadInput "An episode links to the one before it with follows, and append adds that edge."))
-  there <- liftIO (readRef env n)
-  case there of
-    Left _
-      | count DerivedFrom == 1 ->
-          throwE (BadInput "The first episode of a log cannot have exactly one derived_from edge: older logs link their episodes that way. Give it in the next episode, or use about or refines.")
-    _ -> pure ()
   linkable env nm
   m <- buildNow nm
-  i <- withExceptT fromSupersede (ExceptT (Episode.append (envStore env) (envRefs env) n m))
+  i <- ExceptT $
+    withMutation (Store.storeRoot (envStore env)) (RefFailed Refs.Locked) (RefFailed . Refs.RefIO) $ \held -> runExceptT $ do
+      there <- liftIO (readRef env n)
+      case there of
+        Left (RefFailed (Refs.NoSuchRef _))
+          | count DerivedFrom == 1 ->
+              throwE (BadInput "The first episode of a log cannot have exactly one derived_from edge: older logs link their episodes that way. Give it in the next episode, or use about or refines.")
+        Left (RefFailed (Refs.NoSuchRef _)) -> pure ()
+        Left e -> throwE e
+        Right _ -> pure ()
+      withExceptT fromSupersede (ExceptT (Episode.appendWith held (envStore env) (envRefs env) n m))
   liftIO (embedNew env i (newBody nm))
   pure i
 
--- | Read a log, newest episode first, up to a limit of episodes
--- ('Akyuu.Episode.walk'). A ref that does not exist is an error.
 -- | 'readLog' for the episodes of the last length of time only, newest
--- first, at most @limit@ of them. The walk stops at the first older episode, and
--- @more@ then names it.
+-- first, at most @limit@ of them. The first older episode is a continuation,
+-- unless traversal was interrupted: filtering must not hide damage.
 readLogSince :: Env -> Name -> Int -> NominalDiffTime -> IO (Either AkyuuError Walk)
 readLogSince env n limit age = runExceptT $ do
   now <- liftIO getCurrentTime
-  Episode.Walk es more <- ExceptT (readLog env n limit)
+  Episode.Walk es end <- ExceptT (readLog env n limit)
   let cutoff = addUTCTime (negate age) now
       (recent, older) = span (\(_, m) -> memCreated m >= cutoff) es
-  pure (Episode.Walk recent (case older of ((i, _) : _) -> Just i; [] -> more))
+      filteredEnd = case (end, older) of
+        (Episode.Interrupted _ _, _) -> end
+        (_, (i, _) : _) -> Episode.Limited i
+        _ -> end
+  pure (Episode.Walk recent filteredEnd)
 
+-- | Read a log, newest episode first, up to a limit of episodes.
+-- A missing ref is an error; an unreadable episode is retained as an
+-- interruption alongside the readable prefix.
 readLog :: Env -> Name -> Int -> IO (Either AkyuuError Walk)
 readLog env n limit = runExceptT $ do
   ref <- ExceptT (readRef env n)
@@ -1123,7 +1135,8 @@ readLog env n limit = runExceptT $ do
 
 -- | Every level of a log, from level 0 (the log), each one oldest first
 -- ('Akyuu.Levels'). The list stops at the first level whose ref does not
--- exist. The log must exist.
+-- exist. Every chain must be complete; unreadable episodes and ref errors
+-- other than absence are errors.
 readLevels :: Env -> Name -> IO (Either AkyuuError [Levels.Chain])
 readLevels env n = runExceptT $ do
   base <- chainOf n
@@ -1133,13 +1146,17 @@ readLevels env n = runExceptT $ do
     chainOf r = do
       ref <- ExceptT (readRef env r)
       w <- liftIO (Episode.walk (envStore env) maxBound (current ref))
-      pure (reverse (Episode.walkEntries w))
+      case Episode.walkEnd w of
+        Episode.Complete -> pure (reverse (Episode.walkEntries w))
+        Episode.Interrupted i e -> throwE (LogInterrupted i e)
+        Episode.Limited _ -> throwE (BadInput "The log exceeds the traversal limit; its history is incomplete.")
     above :: Int -> ExceptT AkyuuError IO [Levels.Chain]
     above k = do
       r <- levelName n k
       there <- liftIO (readRef env r)
       case there of
-        Left _ -> pure []
+        Left (RefFailed (Refs.NoSuchRef _)) -> pure []
+        Left e -> throwE e
         Right _ -> (:) <$> chainOf r <*> above (k + 1)
 
 -- | The ref of a level of a log ('Akyuu.Levels.levelRef').
