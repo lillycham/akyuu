@@ -566,6 +566,11 @@ topicSetCases =
           Just (String t) -> do
             assertBool "recall" ("recall" `T.isInfixOf` t)
             assertBool "no supersede" (not ("supersede" `T.isInfixOf` t))
+            assertBool "old text stays" ("does not delete the old text" `T.isInfixOf` t && "the old text stays" `T.isInfixOf` t)
+          other -> assertFailure (show other),
+      testCase "remember asks for one topic for each thing that can change on its own" $
+        case [d | t <- MCP.toolsFor MCP.Topic, at ["name"] t == Just (String "remember"), Just (String d) <- [at ["description"] t]] of
+          [d] -> assertBool "granularity" ("one topic for each fact about a person" `T.isInfixOf` d)
           other -> assertFailure (show other),
       testCase "the verbs work end to end, and no answer shows an id" $
         withOpsEnv $ \_ env -> do
@@ -597,6 +602,11 @@ topicSetCases =
           replacedFailed @?= False
           (found, _) <- call "recall" [("query", "grill")]
           assertBool "the topic is found" ("topic kitchen/oven" `T.isInfixOf` found)
+          -- The hit shows the version, and the agent can rewrite with it.
+          let hitVersion = T.takeWhile (/= ';') (T.drop (T.length "(version ") (snd (T.breakOn "(version " found)))
+          assertBool ("the hit shows a version: " <> T.unpack found) (T.length hitVersion == 12)
+          (_, viaHitFailed) <- call "replace" [("topic", "kitchen/oven"), ("text", "The oven is 60 cm. It has a grill and a fan."), ("version", String hitVersion)]
+          viaHitFailed @?= False
           (none, noneFailed) <- call "recall" [("query", "zeppelin")]
           (none, noneFailed) @?= ("No topic matches.", False),
       testCase "a note goes to the log, and a log is refused by the writers" $

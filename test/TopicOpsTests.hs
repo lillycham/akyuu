@@ -287,9 +287,11 @@ recallCases =
           _ <- right =<< supersedeMemory env oven Nothing (note "The oven is 60 cm now, say the lighthouse keeper." [])
           es <- right =<< recallQuery env 5 "lighthouse"
           case es of
-            [Entry (Just n) m] -> do
+            [Entry (Just n) i m] -> do
               n @?= oven
               memBody m @?= "The oven is 60 cm now, say the lighthouse keeper."
+              ref <- right =<< readRef env oven
+              i @?= current ref
             other -> assertFailure (show other),
       testCase "a query with no hit gives no entries" $
         withOpsEnv $ \_ env -> do
@@ -301,7 +303,7 @@ recallCases =
           _ <- right =<< appendEpisode env (name "me/log") (note "the weather was calm" [])
           es <- right =<< recallQuery env 5 "lighthouse"
           case es of
-            [Entry Nothing m] -> memBody m @?= "the lighthouse keeper arrived"
+            [Entry Nothing _ m] -> memBody m @?= "the lighthouse keeper arrived"
             other -> assertFailure (show other),
       testCase "the limit applies to the entries" $
         withOpsEnv $ \_ env -> do

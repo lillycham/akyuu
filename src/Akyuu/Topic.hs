@@ -122,9 +122,11 @@ suggestNames wanted names =
 -- Showing a topic ------------------------------------------------------
 
 -- | A memory that a search found, with the topic that holds it. A memory
--- that no ref holds, such as an episode of a log, has no topic.
+-- that no ref holds, such as an episode of a log, has no topic. The id is the
+-- source of the version that a topic shows ('versionToken').
 data Entry = Entry
   { entryTopic :: Maybe Name,
+    entryId :: Id,
     entryMemory :: Memory
   }
   deriving (Eq, Show)
@@ -139,14 +141,15 @@ cutText n t
     h = T.take n t
     atSpace = T.dropWhileEnd (not . isSpace) h
 
--- | One hit of a query. The text is cut at the given length, and a line says
--- how to read the whole topic.
+-- | One hit of a query. A topic shows its version, so that the agent can
+-- rewrite it without another call. The text is cut at the given length, and a
+-- line says how to read the whole topic.
 renderEntry :: Int -> Entry -> Text
-renderEntry n (Entry topic m) =
+renderEntry n (Entry topic i m) =
   T.intercalate "\n" (header : text : [hint | cut, Just hint <- [more]])
   where
     header = case topic of
-      Just t -> "topic " <> nameText t <> " (" <> facts m <> ")"
+      Just t -> "topic " <> nameText t <> " (version " <> versionToken i <> "; " <> facts m <> ")"
       Nothing -> "not held by a topic (" <> facts m <> ")"
     (text, cut) = cutText n (T.strip (memBody m))
     more = (\t -> "[cut: call recall with topic " <> nameText t <> " to read the whole text]") <$> topic

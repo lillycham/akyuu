@@ -1291,8 +1291,8 @@ recallQuery env limit q = runExceptT $ do
   entries <- forM (take limit ids) $ \i -> do
     m <- ExceptT (getMemory env i)
     pure $ case [n | (n, hi) <- heads, hi == i] of
-      [] -> [Entry Nothing m]
-      ns -> map (\n -> Entry (Just n) m) ns
+      [] -> [Entry Nothing i m]
+      ns -> map (\n -> Entry (Just n) i m) ns
   pure (take limit (concat entries))
 
 -- | Make a new topic, and return the id of its memory and the topics whose

@@ -118,15 +118,15 @@ showCases =
       testCase "cutText cuts a long word where it is" $
         cutText 5 "abcdefghijkl mno" @?= ("abcde", True),
       testCase "an entry shows its topic, kind, author and the text" $ do
-        let t = renderEntry 100 (Entry (Just (name "kitchen/oven")) (mem [] "The oven is 90 cm."))
-        assertBool "topic" ("topic kitchen/oven (fact, by claude, 2026-10-05 12:00Z)" `T.isPrefixOf` t)
+        let t = renderEntry 100 (Entry (Just (name "kitchen/oven")) (nid 7) (mem [] "The oven is 90 cm."))
+        assertBool "topic" (("topic kitchen/oven (version " <> versionToken (nid 7) <> "; fact, by claude, 2026-10-05 12:00Z)") `T.isPrefixOf` t)
         assertBool "text" ("The oven is 90 cm." `T.isInfixOf` t)
         assertBool "no cut hint" (not ("[cut" `T.isInfixOf` t)),
       testCase "a cut entry says how to read the whole topic" $ do
-        let t = renderEntry 10 (Entry (Just (name "kitchen/oven")) (mem [] "The oven in the kitchen is 90 cm wide."))
+        let t = renderEntry 10 (Entry (Just (name "kitchen/oven")) (nid 7) (mem [] "The oven in the kitchen is 90 cm wide."))
         assertBool "hint" ("[cut: call recall with topic kitchen/oven to read the whole text]" `T.isSuffixOf` t),
       testCase "an entry that no topic holds says so, and has no hint" $ do
-        let t = renderEntry 10 (Entry Nothing (mem [] "The oven in the kitchen is 90 cm wide."))
+        let t = renderEntry 10 (Entry Nothing (nid 7) (mem [] "The oven in the kitchen is 90 cm wide."))
         assertBool "loose" ("not held by a topic" `T.isPrefixOf` t)
         assertBool "no hint" (not ("[cut" `T.isInfixOf` t)),
       testCase "a topic shows its version, text and links, and no full id" $ do

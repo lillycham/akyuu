@@ -401,7 +401,7 @@ topicTools :: [Value]
 topicTools =
   [ topicTool
       "recall"
-      "Find topics, or read one. With query: search the text. Each hit is a topic with its current text, cut if it is long. With topic: the whole text of the topic, its version, and the topics it links to. Give exactly one of query and topic."
+      "Find topics, or read one. With query: search the text. Each hit is a topic with its version and its current text, cut if it is long. With topic: the whole text of the topic, its version, and the topics it links to. Give exactly one of query and topic."
       ( objectSchema
           [ ("query", stringSchema "The words to find. A topic matches if its text has all of them."),
             ("topic", topicSchema "The topic to read."),
@@ -411,7 +411,7 @@ topicTools =
       ),
     topicTool
       "remember"
-      "Make a new topic with its first text. The topic must not exist: to change one, use add_to, revise or replace. The answer names topics with similar text, in case this repeats one."
+      "Make a new topic with its first text. Make one topic for each thing that can change on its own, for example one topic for each fact about a person, and not one topic for the whole person. The topic must not exist: to change one, use add_to, revise or replace. The answer names topics with similar text, in case this repeats one."
       ( objectSchema
           [ ("topic", topicSchema "The new topic, for example kitchen/oven."),
             ("text", stringSchema "What is true about the topic. It can have many lines."),
@@ -1055,6 +1055,8 @@ initializeResult cfg asked =
         \Use recall to find a topic or to read one, remember to make a topic, add_to to add a line, \
         \revise to change a part of the text, replace to rewrite the whole text (give the version that recall showed), \
         \and note for what happened. A topic is never an id: you do not need one. \
+        \A change does not delete the old text: the store keeps the old versions of a topic until a clean-up removes them, which can take days. \
+        \If a person asks you to forget something, remove it from the topic, and tell them that the old text stays until then. \
         \If the store has the ref "
           <> mcpPolicyRef cfg
           <> ", it says how this store is used for memory. \
