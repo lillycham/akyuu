@@ -234,7 +234,7 @@ Decided:
 - `verify` reads and hashes every object itself, and builds the graph from them, not from the cache. It reports corrupt and unreadable objects,
   missing edge targets, bad refs, and refs to a missing object. A target with a tombstone is "pruned". That is normal, so it is not a problem.
 - `optparse-applicative` is a new library dependency. The Nix shell already had it. `akyuu.nix` is edited by hand to add it.
-  A new run of `cabal2nix` would also add the test dependencies, and `nix build` would then run the tests. Lilly should decide that.
+  A new run of `cabal2nix` would also add the test dependencies, and `nix build` would then run the tests. This remained a maintainer decision.
 
 - [x] `add`, `get`, `supersede`, `ref set|get|list`, `search`, `neighbours`, `gc [--dry-run]`, `reindex`, `verify`, `pin`, `unpin`, `pins`.
 - [x] The flags of the GC policy.
@@ -269,7 +269,7 @@ Decided:
 - A tool that throws (a bug) gives an error result, and the server goes on. Async exceptions are not caught.
 - `aeson` comes from Nix (2.2.4.1). It links QuickCheck 2.15.0.1, so the test suite now builds with that QuickCheck, and not 2.19 from Hackage.
   QuickCheck 2.15 has no `withNumTests`, so `StoreTests`, `RefsTests` and `CacheTests` use `withMaxSuccess`, the older name of the same function.
-  To go back to 2.19, aeson must be built from Hackage. That needs the network and is outside Nix. Lilly should decide.
+  To go back to 2.19, aeson must be built from Hackage. That needs the network and is outside Nix. This remained a maintainer decision.
 
 - [x] Wrap the same library functions. Do this after the CLI works.
 - [x] Tests: the pure handler (initialize, list, calls that work and fail, protocol errors) and `runTool` on a temp store.
@@ -473,7 +473,7 @@ Give a stronger connection more weight in search context and in the graph view:
 - [x] `docs/hooks.md`: a SessionStart hook that runs `akyuu context`.
 - [x] Fuzzy search: a stem is near a long word only if it has 5 characters or more and starts like the word (no more `perl` for `persnoa`).
 - [x] `check` finding `long-log`: a log with more than 30 episodes (`--long-log N`, `long_log`).
-- [x] The memories repo has a private remote (github.com/lillycham/akyuu-mem). `akyuu-version` still never pushes.
+- [x] Versioned memories can use a private remote. `akyuu-version` still never pushes without explicit configuration.
 - [ ] **Per-log retention.** (Open: see ROADMAP.md.) Needs a decision first: should a log summarise itself (a procedure memory that an agent runs when
       `long-log` shows), or keep only the newest N episodes (GC would then need to cut a chain)? Today the answer is the first one, by hand.
 - [x] `akyuu-version` could push after it commits, when a remote exists and the person turns it on (`versioning.push = true`).
