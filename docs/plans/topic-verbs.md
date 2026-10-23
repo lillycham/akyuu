@@ -71,15 +71,17 @@ This is advice only. It does not block the write.
 
 Arguments: `topic`, `text`.
 
-Append a line to a topic. The server reads the ref, applies `Append`, and writes with the read id as the expected value.
-On `Stale` or `Locked` it reads again and repeats, up to five times. The agent needs no version.
+Append a line to a topic. The server reads the ref, applies `Append`, and moves the ref, all under the store mutation lock.
+No other writer can move the ref in between, so a write never loses a race and leaves no spare object.
+This replaces the retry loop that the first draft had: a retry on `Stale` can fail more than five times when many writers meet.
+Only a busy lock (`Locked`, after the one-second wait of the lock) is retried, up to five times. The agent needs no version.
 A topic that does not exist is an error that lists the closest topic names and names `remember`. A typo must not make a new topic.
 
 ### `revise`
 
 Arguments: `topic`, `replace` (a list of `{from, to}`, as in `amend`).
 
-Apply the patch to the current memory. It uses the same retry loop as `add_to`.
+Apply the patch to the current memory. It reads, patches and moves the ref under the lock, as `add_to` does.
 `from` must occur exactly once. When it does not, the error includes the current text of the topic, so the agent can fix its patch in one more call.
 The result shows the changed lines, so the agent can see what it produced.
 
@@ -92,7 +94,7 @@ The shown result is the mitigation. `replace` keeps the strict rule.
 
 Arguments: `topic`, `text`, `version`.
 
-Rewrite the whole text. It uses `supersedeFrom` with the token as the expected id and does not retry.
+Rewrite the whole text. Under the lock, it compares the token with the current id and refuses on a difference.
 A stale token is an error that carries the current text and the current token, so the agent can merge and call again.
 The kind and the links of the old memory stay, as in `amend`. An optional `about` replaces the topic links.
 
@@ -115,16 +117,25 @@ Open: fold `log` and `unfold` into `recall`.
 - Refuse a blank body (empty or only white space) in `Ops`, for every writer, CLI and MCP.
   This is finding A1 of the evaluation. It is a behaviour change of the CLI: put it in its own commit and in the changelog.
   The error says: "The body is empty. To forget a topic, say what should replace it."
-- Refuse `add_to`, `revise` and `replace` on a log. A log head must stay in its chain.
-  The check is: the head memory has a `follows` edge. A first episode has none, so the predicate needs a second rule.
-  Decide it in the first commit of the Ops work, with a test for a one-episode log. The error names `note`.
+- Refuse `add_to`, `revise` and `replace` on a log. A log head must stay in its chain. The error names `note`.
+  Settled 2026-10-23. A ref is a log when one of these holds:
+  1. Its memory has a `follows` edge. Every episode after the first has one.
+  2. The manifest names it in a `log` line. This covers a log with one episode that `note` made.
+  3. Its name ends in `.l` and a number (`me/log.l1`). These are the summary levels of a log.
+
+  An old log that links episodes with one `derived_from` edge does not count.
+  `Akyuu.Episode.previous` reads that form as an episode, but a fact with one evidence link looks the same, and a wrong refusal is worse here.
+  A one-episode log that no `log` line names has no mark at all. The verbs treat it as a topic.
+  The cost is small: the next `append` still chains to the new head. A test records this limit.
 - A refused call writes nothing.
 
 ## Design
 
 - Add the operations to `Akyuu.Ops`, where the CLI and the MCP server share them:
-  `rememberTopic`, `addToTopic`, `reviseTopic`, `replaceTopic`, `recallQuery`, `recallTopic`, and one `retryStale` helper.
-  The helper takes a limit and an action, and repeats on `Stale` and `Locked` only.
+  `rememberTopic`, `addToTopic`, `reviseTopic`, `replaceTopic`, `recallQuery`, `recallTopic`, and one `retryLocked` helper.
+  The helper takes a limit and an action, and repeats on `Locked` only.
+  The three writers that change a topic share one function in `Akyuu.Supersede`, `supersedeBy`.
+  It reads the memory of the ref, lets a pure function make the new memory, and moves the ref, under one hold of the lock.
 - Put the pure parts in a new module `Akyuu.Topic`: the version token, the rendering of `recall`, the choice of similar topics, the log predicate.
   They get unit tests that need no store.
 - In `Akyuu.MCP`, add `Topic` to `ToolSet` and the flag `--tool-set topic`.
@@ -141,7 +152,7 @@ Scripted tests prove the constraints. A model trial can show usability, not safe
 
 - The Topic set lists exactly its tools. A maintenance tool called by name is refused. Each schema has the arguments above and no others.
 - No result of any verb contains `sha256-`.
-- `add_to`: twenty concurrent writers (processes, as the existing helper scenarios do) to one topic leave all twenty lines.
+- `add_to`: twenty concurrent writers (threads, as the existing publication tests do) to one topic leave all twenty lines.
   Afterwards `check` shows no fork and no unreferenced memory, and `verify` is clean.
 - `add_to` and `revise` on a missing topic, a log, and a blank text fail and write nothing.
 - `revise` applies to a newer version when `from` occurs once, and fails with the current text when it does not.
