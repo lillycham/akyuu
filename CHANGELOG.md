@@ -34,6 +34,8 @@ Memory bytes, IDs and the ref file format do not change.
   all chunks and vector writes. The first failed chunk stops the operation.
   SQLite contention skips optional vectors. Cancellation stops command
   children without stopping successful persistent model servers.
+- Helper checks keep a live process-group owner until cleanup finishes.
+  This avoids macOS permission errors for groups with only zombie processes.
 
 Object publication and reference replacement are still separate file writes.
 A crash or I/O failure between them can leave a searchable, unreferenced
