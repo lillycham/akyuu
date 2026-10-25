@@ -57,7 +57,7 @@ where
 import Akyuu.Embed (Vector, cosine)
 import Akyuu.Refs (Name, nameText)
 import Data.Char (isAlphaNum)
-import Data.List (sortOn, tails)
+import Data.List (find, sortOn, tails)
 import Data.Map qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.Ord (Down (Down))
@@ -172,42 +172,60 @@ siblingPenalty = 2
 -- caller that already shows some topics (the ones that a topic is about) asks
 -- for the others.
 relatedTo :: Config -> Stats -> Set Name -> Name -> [Topic] -> [Related]
-relatedTo cfg stats leaveOut self topics = case filter ((== self) . rtName) topics of
-  [] -> []
-  me : _ ->
-    take relatedLimit
-      . sortOn (\r -> (Down (quantise (relScore r)), relName r))
-      $ mapMaybe (candidate me) (filter shown topics)
+relatedTo cfg stats leaveOut self topics = case find ((== self) . rtName) topics of
+  Nothing -> []
+  Just me ->
+    take relatedLimit . sortOn rankKey $
+      mapMaybe (candidate (rtVector me)) (filter shown topics)
   where
     shown t = rtName t /= self && rtName t `Set.notMember` leaveOut
-    -- Scores that differ only in the last digits, because the sums ran in
-    -- another order, are equal: the name decides, as the order of the topics
-    -- must not.
-    quantise x = round (x * 1e9) :: Integer
-    names = Set.fromList (map rtName topics)
-    -- Lazy maps: a value is worked out only for a topic that is asked about.
-    linksOf =
-      Map.fromList
-        [(rtName t, Set.delete (rtName t) (rtLinks t) `Set.intersection` names) | t <- topics]
-    mentionsOf =
-      Map.fromList
-        [(rtName t, Set.fromList [n | n <- Set.toList names, n /= rtName t, mentions n (rtText t)]) | t <- topics]
-    candidate me b
-      | not hasEvidence && null sim = Nothing
-      | score <= 0 = Nothing
-      | otherwise = Just (Related (rtName b) reason score)
+    g = graph topics
+    candidate v b
+      | s > 0 = Just (Related (rtName b) (reason ev) s)
+      | otherwise = Nothing
       where
-        a = rtName me
-        link = evidence linksOf a (rtName b)
-        mention = evidence mentionsOf a (rtName b)
-        hasEvidence = link > 0 || mention > 0
-        sim = cosine <$> rtVector me <*> rtVector b
-        penalty = if siblings cfg a (rtName b) && not hasEvidence then siblingPenalty else 0
-        score = maybe 0 (zScore stats) sim + linkWeight * link + mentionWeight * mention - penalty
-        reason
-          | link > 0 = Linked
-          | mention > 0 = Mentioned
-          | otherwise = SimilarText
+        ev = evidenceBetween g self (rtName b)
+        s = score cfg stats self (rtName b) (cosine <$> v <*> rtVector b) ev
+
+-- | The best first. Scores that differ only in the last digits, because the
+-- sums ran in another order, are equal: the name decides, as the order of the
+-- topics must not.
+rankKey :: Related -> (Down Integer, Name)
+rankKey r = (Down (round (relScore r * 1e9)), relName r)
+
+-- | For each topic, the other topics that it points at: through a link, and
+-- through a mention of the name. Only the names of topics count.
+--
+-- Every set is used, because the strength of a pointer depends on the size of
+-- its source's set and a candidate is looked up in both directions. So the
+-- graph costs one 'mentions' for each pair of topics.
+data Graph = Graph
+  { gLinks :: Map.Map Name (Set Name),
+    gMentions :: Map.Map Name (Set Name)
+  }
+
+graph :: [Topic] -> Graph
+graph topics =
+  Graph
+    { gLinks = Map.fromList [(rtName t, Set.delete (rtName t) (rtLinks t) `Set.intersection` names) | t <- topics],
+      gMentions = Map.fromList [(rtName t, Set.filter (\n -> n /= rtName t && mentions n (rtText t)) names) | t <- topics]
+    }
+  where
+    names = Set.fromList (map rtName topics)
+
+-- | How strongly two topics point at each other, in the stronger direction.
+data Evidence = Evidence
+  { evLink :: Double,
+    evMention :: Double
+  }
+
+evidenceBetween :: Graph -> Name -> Name -> Evidence
+evidenceBetween g a b = Evidence (stronger (gLinks g)) (stronger (gMentions g))
+  where
+    stronger m = max (strength m a b) (strength m b a)
+
+hasEvidence :: Evidence -> Bool
+hasEvidence ev = evLink ev > 0 || evMention ev > 0
 
 -- | How strongly a source points at a target: 1 / sqrt of the number of
 -- topics that the source points at, or 0 if it does not.
@@ -216,9 +234,23 @@ strength m from to = case Map.lookup from m of
   Just s | to `Set.member` s -> 1 / sqrt (fromIntegral (Set.size s))
   _ -> 0
 
--- | The stronger of the two directions.
-evidence :: Map.Map Name (Set Name) -> Name -> Name -> Double
-evidence m a b = max (strength m a b) (strength m b a)
+-- | The score in the module header, for a topic @a@ and a candidate @b@, with
+-- their cosine if both have a vector. Without a cosine and without evidence
+-- the score is at most zero, so such a candidate is never listed.
+score :: Config -> Stats -> Name -> Name -> Maybe Double -> Evidence -> Double
+score cfg stats a b sim ev =
+  maybe 0 (zScore stats) sim + linkWeight * evLink ev + mentionWeight * evMention ev - penalty
+  where
+    penalty
+      | siblings cfg a b && not (hasEvidence ev) = siblingPenalty
+      | otherwise = 0
+
+-- | The strongest reason that applies.
+reason :: Evidence -> Reason
+reason ev
+  | evLink ev > 0 = Linked
+  | evMention ev > 0 = Mentioned
+  | otherwise = SimilarText
 
 -- | Do two topics sit directly under one namespace that is listed as parallel?
 siblings :: Config -> Name -> Name -> Bool
