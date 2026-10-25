@@ -77,6 +77,7 @@ library
                    , Akyuu.SearchEval
                    , Akyuu.Tier
                    , Akyuu.Topic
+                   , Akyuu.Related
                    , Akyuu.Supersede
                    , Akyuu.GC
                    , Akyuu.Query
@@ -120,6 +121,7 @@ test-suite akyuu-test
                     , TierTests
                     , TopicTests
                     , TopicOpsTests
+                    , RelatedTests
                     , RecallTests
                     , EmbedTests
                     , EpisodeTests
