@@ -56,9 +56,10 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep, defaultSize)
 import Akyuu.Memory (Memory (memBody))
-import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), TopicView (tvAbout, tvId, tvMemory, tvMentionedBy, tvName), addMemory, addToTopic, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLevels, readLog, readLogSince, readRef, recallQuery, recallTopic, refLinksOf, rememberTopic, replaceTopic, resolveId, reviewPair, reviseTopic, searchMemoriesMode, setRefTo, summariseLog, supersedeMemory, unfoldMemory)
+import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), TopicView (tvAbout, tvId, tvMemory, tvMentionedBy, tvName), addMemory, addToTopic, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLevels, readLog, readLogSince, readRef, recallQuery, recallTopic, refLinksOf, relatedTopics, rememberTopic, replaceTopic, resolveId, reviewPair, reviseTopic, searchMemoriesMode, setRefTo, summariseLog, supersedeMemory, unfoldMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
+import Akyuu.Related qualified as Related
 import Akyuu.Render (compareLines, edgeName, episodeLines, findingLines, heldBy, idLine, logLines, memoryText, neighbourLines, refLines, refLinkLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage, viewLines)
 import Akyuu.Tier (Place (Place), defaultPolicyRef, defaultTiersRef)
 import Akyuu.Topic qualified as Topic
@@ -961,8 +962,13 @@ runTool cfg env c = either failed id <$> go
           pure (fmap (\(n, i) -> okText (if mcpToolSet cfg == Topic then Topic.renderNoted n else "noted in " <> nameText n <> " " <> Id.render i) False) r)
       CallRecallQuery q l ->
         fmap (\es -> okText (if null es then Topic.noMatch else T.intercalate "\n\n" (map (Topic.renderEntry 600) es)) False) <$> recallQuery env l q
-      CallRecallTopic n ->
-        fmap (\v -> okText (Topic.renderTopic (tvName v) (tvId v) (tvMemory v) (tvAbout v) (tvMentionedBy v)) False) <$> recallTopic env n
+      CallRecallTopic n -> do
+        r <- recallTopic env n
+        case r of
+          Left e -> pure (Left e)
+          Right v -> do
+            rel <- relatedFor v
+            pure (Right (okText (Topic.renderTopic (tvName v) (tvId v) (tvMemory v) (tvAbout v) (tvMentionedBy v) rel) False))
       CallRemember a ->
         fmap (\(i, close) -> okText (Topic.renderMade (remTopic a) i close) False) <$> rememberTopic env (remTopic a) author (remKind a) (remText a) (remAbout a)
       CallAddTo n t -> withManifest $ \mf ->
@@ -981,6 +987,11 @@ runTool cfg env c = either failed id <$> go
       pure (fmap (shorten . lines' "No matches." . searchLinesWith held) r)
     -- The default author of a write: the name that the server was given.
     author = if T.null (mcpAgent cfg) then "agent" else mcpAgent cfg
+    -- The topics that go with a topic, unless the setting is off. The topics
+    -- that the view shows already are not listed again.
+    relatedFor v = case (mcpRelated cfg, mkName (mcpTiersRef cfg)) of
+      (Just rc, Right mf) -> relatedTopics env mf rc (Set.fromList (tvAbout v <> tvMentionedBy v)) (tvName v)
+      _ -> pure []
     -- The topic writers need the manifest, to find the logs that it names.
     withManifest act = case mkName (mcpTiersRef cfg) of
       Left e -> pure (Left (BadName (mcpTiersRef cfg) e))
@@ -1029,7 +1040,10 @@ data McpConfig = McpConfig
     mcpAgent :: Text,
     -- | Where the server runs, to find the refs and the log of this place.
     mcpPlace :: Maybe Place,
-    mcpToolSet :: ToolSet
+    mcpToolSet :: ToolSet,
+    -- | Show the topics that are related to a topic when it is recalled
+    -- ("Akyuu.Related"). 'Nothing': do not.
+    mcpRelated :: Maybe Related.Config
   }
   deriving (Eq, Show)
 
@@ -1037,7 +1051,7 @@ data McpConfig = McpConfig
 -- one agent. A store that uses another name sets it with @--policy-ref@ or
 -- @AKYUU_POLICY_REF@.
 defaultMcpConfig :: McpConfig
-defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing Ordinary
+defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing Ordinary Nothing
 
 -- | The result of @initialize@.
 initializeResult :: McpConfig -> Maybe Text -> Value

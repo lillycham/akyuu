@@ -51,7 +51,7 @@ where
 import Akyuu.Cache (Correction (AddedByMeaning, MeaningUnavailable, PrefixOf, SpelledAs), SyncReport (added, removed), snippetClose, snippetOpen)
 import Akyuu.Check (Finding (findingIds, findingKind, findingRelated, findingSeverity, findingWhy), kindName, severityName)
 import Akyuu.Compare (Comparison (cmpOnlyA, cmpOnlyB, cmpShared), canDropA, canDropB)
-import Akyuu.Config (Config (cfgAgent, cfgEmbed, cfgFile, cfgNotes, cfgPolicyRef, cfgRoot, cfgTiersRef), EmbedSettings (esArgs, esCommand, esDocumentPrefix, esKey, esMaxChars, esMin, esProfile, esQueryPrefix, esSource, esTimeout), Source (Default), Sourced (sSource, sValue), sourceText)
+import Akyuu.Config (Config (cfgAgent, cfgEmbed, cfgFile, cfgNotes, cfgParallel, cfgPolicyRef, cfgRelated, cfgRoot, cfgTiersRef), EmbedSettings (esArgs, esCommand, esDocumentPrefix, esKey, esMaxChars, esMin, esProfile, esQueryPrefix, esSource, esTimeout), Source (Default), Sourced (sSource, sValue), sourceText)
 import Akyuu.Episode (Walk (Walk), WalkEnd (Complete, Interrupted, Limited))
 import Akyuu.Error (describe, describeParse)
 import Akyuu.Error qualified as Error
@@ -295,7 +295,9 @@ configLines c =
     <> [ setting "root" (maybe ("(not set)", Default) (\s -> (T.pack (sValue s), sSource s)) (cfgRoot c)),
          sourced "policy-ref" (cfgPolicyRef c),
          sourced "tiers-ref" (cfgTiersRef c),
-         sourced "agent" (cfgAgent c)
+         sourced "agent" (cfgAgent c),
+         setting "topic.related" (if sValue (cfgRelated c) then "true" else "false", sSource (cfgRelated c)),
+         setting "topic.parallel" (if null (sValue (cfgParallel c)) then "(none)" else T.intercalate ", " (sValue (cfgParallel c)), sSource (cfgParallel c))
        ]
     <> case cfgEmbed c of
       Nothing -> ["embed: off (no profile)"]

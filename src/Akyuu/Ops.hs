@@ -80,6 +80,7 @@ module Akyuu.Ops
     reviseTopic,
     replaceTopic,
     recallTopic,
+    relatedTopics,
     recallQuery,
 
     -- * Init
@@ -126,6 +127,7 @@ import Akyuu.Query (Neighbour, RefLink, SearchOptions, SearchResult)
 import Akyuu.Query qualified as Query
 import Akyuu.Refs (Expected, Name, Ref (current), RefError, Refs, openRefs)
 import Akyuu.Refs qualified as Refs
+import Akyuu.Related qualified as Related
 import Akyuu.Review (Review (Review))
 import Akyuu.Review qualified as Review
 import Akyuu.SearchEval qualified as SearchEval
@@ -1271,6 +1273,51 @@ recallTopic env n = runExceptT $ do
   links <- ExceptT (aboutRefLinks env)
   let mentions = [h | (h, hi) <- heads, h /= n, Just ns <- [Map.lookup hi links], n `Set.member` ns]
   pure TopicView {tvName = n, tvId = i, tvMemory = m, tvAbout = Set.toAscList (memAboutRefs m), tvMentionedBy = mentions}
+
+-- | The topics that are related to one topic, the best first
+-- ('Akyuu.Related.relatedTo'). The names in the set are left out: the caller
+-- shows them already.
+--
+-- This reads the current memory of every ref, the about-ref links from the
+-- cache and, if an embedder is set, the vectors of those memories. Every
+-- failure gives fewer inputs, not an error: a store without vectors gets the
+-- list that links and mentions give, and a store that cannot be read gets an
+-- empty list. The list is worked out on each call and is never written.
+relatedTopics :: Env -> Name -> Related.Config -> Set Name -> Name -> IO [Related.Related]
+relatedTopics env manifestRef cfg leaveOut self = either (const []) id <$> runExceptT go
+  where
+    go = do
+      heads <- ExceptT (listRefValues env)
+      logs <- liftIO (topicLogs env manifestRef)
+      mems <- liftIO (forM heads (\(n, i) -> fmap (\m -> (n, i, m)) <$> getMemory env i))
+      let held = [h | Right h@(n, _, m) <- mems, not (Topic.isLogTopic logs n m)]
+          holders = Map.fromListWith (<>) [(i, Set.singleton n) | (n, i, _) <- held]
+      aboutRefs <- ExceptT (aboutRefLinks env)
+      snap <- liftIO (GC.snapshot (envCache env) (envStore env))
+      let graph = either (const Nothing) (Just . fst) snap
+          -- The topics that an edge reaches: the target, or what replaced it.
+          reached (Edge k t)
+            | k `elem` [About, DerivedFrom, Graph.Refines] = Set.unions [Map.findWithDefault Set.empty c holders | c <- Set.toList (maybe (Set.singleton t) (Query.resolve t) graph)]
+            | otherwise = Set.empty
+          linksOf i m = Map.findWithDefault Set.empty i aboutRefs `Set.union` Set.unions (map reached (Set.toList (memEdges m)))
+      vectors <- liftIO (chunkVectors env (map (\(_, i, _) -> i) held))
+      let topics =
+            [ Related.Topic n (Related.topicVector (Map.findWithDefault [] i vectors)) (linksOf i m) (memBody m)
+            | (n, i, m) <- held
+            ]
+      pure (Related.relatedTo cfg (Related.similarityStats topics) leaveOut self topics)
+
+-- | The vectors of the chunks of these memories, for the embedder that is set.
+-- Without an embedder, or when the table cannot be read, there are none.
+chunkVectors :: Env -> [Id] -> IO (Map.Map Id [Embed.Vector])
+chunkVectors env ids = do
+  rc <- Config.loadConfig
+  case Embed.embedderFromConfig <$> rc of
+    Right (Just e) -> do
+      stored <- withVectors env (\vs -> Embed.loadVectors vs (Embed.embModel e))
+      let wanted = Set.fromList ids
+      pure (either (const Map.empty) (Map.fromListWith (<>) . map (\(i, v) -> (i, [v])) . filter ((`Set.member` wanted) . fst)) stored)
+    _ -> pure Map.empty
 
 -- | Search, and show the hits as topics, at most this many.
 --

@@ -47,7 +47,11 @@ closeTo got want = do
 
 -- The list of related topics for one topic, with the statistics of all.
 related :: Config -> [Topic] -> Text -> [Related]
-related cfg ts n = relatedTo cfg (similarityStats ts) (name n) ts
+related cfg ts = relatedWithout cfg [] ts
+
+-- The same, with some topics left out.
+relatedWithout :: Config -> [Text] -> [Topic] -> Text -> [Related]
+relatedWithout cfg out ts n = relatedTo cfg (similarityStats ts) (Set.fromList (map name out)) (name n) ts
 
 -- Their names and reasons.
 shown :: [Related] -> [(Text, Reason)]
@@ -91,6 +95,19 @@ cosineCases =
               "notes/a"
           )
           @?= [("notes/b", Linked)],
+      testCase "a topic that is left out is skipped" $
+        shown (relatedWithout defaultConfig ["notes/a"] population "notes/q") @?= [("notes/b", SimilarText)],
+      testCase "the limit counts what is left after the topics that are left out" $ do
+        let near = [[0.99, 0.1], [0.98, 0.2], [0.97, 0.24], [0.96, 0.28]]
+            far = [[-1, 0], [0, 1], [0, -1], [-0.7, 0.7]]
+            ts =
+              topic "notes/0" (Just [1, 0]) [] ""
+                : [topic ("notes/n" <> T.pack (show i)) (Just v) [] "" | (i, v) <- zip [1 :: Int ..] near]
+                  <> [topic ("notes/f" <> T.pack (show i)) (Just v) [] "" | (i, v) <- zip [1 :: Int ..] far]
+        map fst (shown (relatedWithout defaultConfig ["notes/n1"] ts "notes/0")) @?= ["notes/n2", "notes/n3", "notes/n4"],
+      testCase "a topic that is left out can still be the only one with evidence elsewhere" $ do
+        let ts = [topic "notes/t" Nothing [] "", topic "notes/l" Nothing ["notes/t"] "", topic "notes/m" Nothing [] "see notes/t"]
+        shown (relatedWithout defaultConfig ["notes/l"] ts "notes/t") @?= [("notes/m", Mentioned)],
       testCase "the list holds at most relatedLimit topics" $ do
         -- Four topics close to the first one, and four far from it that pull the mean down.
         let near = [[0.99, 0.1], [0.98, 0.2], [0.97, 0.24], [0.96, 0.28]]
@@ -274,7 +291,7 @@ propertyCases =
     [ testProperty "at most relatedLimit topics, never the topic itself, best first, all above zero" $
         forAll genTopics $ \ts ->
           conjoin
-            [ let rs = relatedTo defaultConfig (similarityStats ts) (nameOf t) ts
+            [ let rs = relatedTo defaultConfig (similarityStats ts) Set.empty (nameOf t) ts
                in conjoin
                     [ assertBool' (length rs <= relatedLimit),
                       assertBool' (nameOf t `notElem` map relName rs),
@@ -287,8 +304,8 @@ propertyCases =
         forAll genTopics $ \ts ->
           forAll (shuffle ts) $ \ts' ->
             conjoin
-              [ shown (relatedTo defaultConfig (similarityStats ts) (nameOf t) ts)
-                  === shown (relatedTo defaultConfig (similarityStats ts') (nameOf t) ts')
+              [ shown (relatedTo defaultConfig (similarityStats ts) Set.empty (nameOf t) ts)
+                  === shown (relatedTo defaultConfig (similarityStats ts') Set.empty (nameOf t) ts')
               | t <- ts
               ]
     ]

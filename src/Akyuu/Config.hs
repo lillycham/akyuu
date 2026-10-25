@@ -63,7 +63,7 @@ import Akyuu.Tier (defaultPolicyRef, defaultTiersRef, policyRefVar, tiersRefVar)
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, try)
 import Data.ByteString qualified as BS
-import Data.Char (isAlphaNum, toUpper)
+import Data.Char (isAlphaNum, toLower, toUpper)
 import Data.List (isPrefixOf, isSuffixOf)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -141,6 +141,11 @@ data Config = Config
     cfgPolicyRef :: Sourced Text,
     cfgTiersRef :: Sourced Text,
     cfgAgent :: Sourced Text,
+    -- | Show related topics when a topic is recalled ("Akyuu.Related").
+    cfgRelated :: Sourced Bool,
+    -- | Namespaces whose topics are parallel instances of one kind
+    -- ('Akyuu.Related.cfgParallel'), without a trailing slash.
+    cfgParallel :: Sourced [Text],
     -- | 'Nothing' when search by meaning is off.
     cfgEmbed :: Maybe EmbedSettings,
     -- | Things to tell the person: unknown keys, values that were left out,
@@ -179,6 +184,8 @@ data FileConfig = FileConfig
     fcPolicyRef :: Maybe Text,
     fcTiersRef :: Maybe Text,
     fcAgent :: Maybe Text,
+    fcRelated :: Maybe Bool,
+    fcParallel :: Maybe [Text],
     fcProfile :: Maybe Text,
     fcProfiles :: Map Text Profile
   }
@@ -197,6 +204,9 @@ data Profile = Profile
   }
   deriving (Eq, Show)
 
+-- | The @[topic]@ table.
+data TopicTable = TopicTable (Maybe Bool) (Maybe [Text])
+
 -- | The @[embed]@ table.
 data EmbedTable = EmbedTable (Maybe Text) (Map Text Profile)
 
@@ -209,8 +219,12 @@ instance FromValue FileConfig where
     policy <- optKey "policy-ref"
     tiers <- optKey "tiers-ref"
     agent <- optKey "agent"
+    TopicTable related parallel <- fromMaybe (TopicTable Nothing Nothing) <$> optKey "topic"
     EmbedTable profile profiles <- fromMaybe (EmbedTable Nothing Map.empty) <$> optKey "embed"
-    pure (FileConfig root policy tiers agent profile profiles)
+    pure (FileConfig root policy tiers agent related parallel profile profiles)
+
+instance FromValue TopicTable where
+  fromValue = parseTableFromValue (TopicTable <$> optKey "related" <*> optKey "parallel")
 
 instance FromValue EmbedTable where
   fromValue = parseTableFromValue (EmbedTable <$> optKey "profile" <*> (fromMaybe Map.empty <$> optKey "profiles"))
@@ -366,8 +380,10 @@ resolve env file legacy = do
         cfgPolicyRef = textSetting policyRefVar fcPolicyRef defaultPolicyRef,
         cfgTiersRef = textSetting tiersRefVar fcTiersRef defaultTiersRef,
         cfgAgent = textSetting "AKYUU_AGENT" fcAgent "agent",
+        cfgRelated = relatedSetting,
+        cfgParallel = parallelSetting,
         cfgEmbed = embed,
-        cfgNotes = numberNotes
+        cfgNotes = numberNotes <> relatedNotes
       }
   where
     home = nonEmpty "HOME"
@@ -380,6 +396,28 @@ resolve env file legacy = do
     textSetting var get def =
       fromMaybe (Sourced def Default) $
         (sourced var . T.pack <$> nonEmpty var) <|> fileValue get
+
+    -- The settings of related topics. A value of the environment that is not
+    -- a truth value is left out, and the notes say so.
+    relatedVar = nonEmpty "AKYUU_TOPIC_RELATED"
+    relatedSetting =
+      fromMaybe (Sourced True Default) $
+        ((\b -> Sourced b (FromEnv "AKYUU_TOPIC_RELATED")) <$> (relatedVar >>= truth))
+          <|> (file >>= \(p, fc) -> (\b -> Sourced b (FromFile p)) <$> fcRelated fc)
+    relatedNotes =
+      [ "$AKYUU_TOPIC_RELATED is not true or false, so it is left out: " <> T.pack v
+      | Just v <- [relatedVar],
+        Nothing <- [truth v]
+      ]
+    truth v = case map toLower v of
+      s | s `elem` ["true", "1", "yes", "on"] -> Just True
+      s | s `elem` ["false", "0", "no", "off"] -> Just False
+      _ -> Nothing
+    parallelSetting =
+      fromMaybe (Sourced [] Default) $
+        ((\v -> Sourced (namespaces (T.splitOn "," (T.pack v))) (FromEnv "AKYUU_TOPIC_PARALLEL")) <$> nonEmpty "AKYUU_TOPIC_PARALLEL")
+          <|> (file >>= \(p, fc) -> (\v -> Sourced (namespaces v) (FromFile p)) <$> fcParallel fc)
+    namespaces = filter (not . T.null) . map (T.dropWhileEnd (== '/') . T.strip)
 
     -- The variables of the older way: the environment, with embed.env under
     -- it. A variable of the environment wins.

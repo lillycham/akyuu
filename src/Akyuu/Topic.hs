@@ -48,6 +48,7 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memEdges, memKind))
 import Akyuu.Refs (Name, nameText)
+import Akyuu.Related (Related (relName, relReason), reasonText)
 import Data.Char (isDigit, isHexDigit, isSpace, toLower)
 import Data.List (sortOn)
 import Data.Ord (Down (Down))
@@ -155,18 +156,22 @@ renderEntry n (Entry topic i m) =
     more = (\t -> "[cut: call recall with topic " <> nameText t <> " to read the whole text]") <$> topic
 
 -- | A topic with its whole text, its version, and the topics that it is
--- about and that are about it.
-renderTopic :: Name -> Id -> Memory -> [Name] -> [Name] -> Text
-renderTopic n i m about mentions =
+-- about and that are about it, and the topics that are related to it, each
+-- with the reason ("Akyuu.Related"). Only names and reasons are shown, so no
+-- memory can put text of its own into the lines.
+renderTopic :: Name -> Id -> Memory -> [Name] -> [Name] -> [Related] -> Text
+renderTopic n i m about mentions related =
   T.intercalate
     "\n"
     ( ["topic " <> nameText n, "version: " <> versionToken i, facts m, "", T.stripEnd (memBody m)]
-        <> ["" | not (null about && null mentions)]
+        <> ["" | not (null about && null mentions && null related)]
         <> ["about: " <> names about | not (null about)]
         <> ["mentioned by: " <> names mentions | not (null mentions)]
+        <> ["related: " <> T.intercalate ", " (map one related) | not (null related)]
     )
   where
     names = T.intercalate ", " . map nameText
+    one r = nameText (relName r) <> " (" <> reasonText (relReason r) <> ")"
 
 -- | The answer of a query that finds nothing.
 noMatch :: Text

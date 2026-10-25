@@ -1,6 +1,11 @@
 # Related topics for agents
 
-Status as of 2026-10-25: step 1 of the delivery order is written, and not committed: the pure module `Akyuu.Related` (`src/Akyuu/Related.hs`) and its 31 tests (`test/RelatedTests.hs`, two of them properties). The full suite and `ormolu` pass. Steps 2 to 7 are not started. The ranking was tried on a copy of the maintainer's own store (below).
+Status as of 2026-10-25: steps 1 and 2 of the delivery order are written.
+Step 1 is committed: the pure module `Akyuu.Related` and its tests.
+Step 2 is not committed: `Ops.relatedTopics` reads the inputs, `Topic.renderTopic` shows a `related:` line, `recall` of a topic in the topic tool set calls it, and `[topic] related` and `[topic] parallel` are settings (with `AKYUU_TOPIC_RELATED` and `AKYUU_TOPIC_PARALLEL`).
+The man page and the changelog describe it. The full suite (1127 tests) and `ormolu` pass.
+The cost of the `z` term on a large store is not measured. Steps 3 to 7 are not started.
+The ranking was tried on a copy of the maintainer's own store (below).
 
 ## Goal
 

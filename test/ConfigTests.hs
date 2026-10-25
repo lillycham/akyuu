@@ -2,7 +2,7 @@
 
 module ConfigTests (configTests) where
 
-import Akyuu.Config (Config (cfgAgent, cfgEmbed, cfgFile, cfgNotes, cfgPolicyRef, cfgRoot, cfgTiersRef), ConfigError (ConfigInvalid, UnknownProfile), EmbedSettings (esArgs, esCommand, esCommandEnv, esKey, esMin, esProfile, esQueryPrefix, esSource, esTimeout), FileConfig (fcProfiles), Profile (prArgs, prKey), Source (Default, FromEnv, FromFile), Sourced (Sourced), expandHome, parseConfigText, parseLegacy, resolve)
+import Akyuu.Config (Config (cfgAgent, cfgEmbed, cfgFile, cfgNotes, cfgParallel, cfgPolicyRef, cfgRelated, cfgRoot, cfgTiersRef), ConfigError (ConfigInvalid, UnknownProfile), EmbedSettings (esArgs, esCommand, esCommandEnv, esKey, esMin, esProfile, esQueryPrefix, esSource, esTimeout), FileConfig (fcProfiles), Profile (prArgs, prKey), Source (Default, FromEnv, FromFile), Sourced (Sourced), expandHome, parseConfigText, parseLegacy, resolve)
 import Data.Either (isLeft)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -98,6 +98,22 @@ resolveCases =
       testCase "an empty variable is no value" $ do
         c <- ok =<< withFull [("AKYUU_ROOT", ""), ("HOME", "/h")]
         cfgRoot c @?= Just (Sourced "/h/notes" (FromFile "/c.toml")),
+      testCase "related topics are on by default, and no namespace is parallel" $ do
+        c <- ok (resolve [] Nothing Nothing)
+        cfgRelated c @?= Sourced True Default
+        cfgParallel c @?= Sourced [] Default,
+      testCase "the [topic] table of the file sets both, and the environment wins" $ do
+        fc <- parsed "[topic]\nrelated = false\nparallel = [\"work/projects/\", \" lab \", \"\"]\n"
+        c <- ok (resolve [] (Just ("/c.toml", fc)) Nothing)
+        cfgRelated c @?= Sourced False (FromFile "/c.toml")
+        cfgParallel c @?= Sourced ["work/projects", "lab"] (FromFile "/c.toml")
+        e <- ok (resolve [("AKYUU_TOPIC_RELATED", "Yes"), ("AKYUU_TOPIC_PARALLEL", "a/b, c/d/")] (Just ("/c.toml", fc)) Nothing)
+        cfgRelated e @?= Sourced True (FromEnv "AKYUU_TOPIC_RELATED")
+        cfgParallel e @?= Sourced ["a/b", "c/d"] (FromEnv "AKYUU_TOPIC_PARALLEL"),
+      testCase "a value of the environment that is no truth value is left out, with a note" $ do
+        c <- ok (resolve [("AKYUU_TOPIC_RELATED", "maybe")] Nothing Nothing)
+        cfgRelated c @?= Sourced True Default
+        assertBool "note" (any ("AKYUU_TOPIC_RELATED" `T.isInfixOf`) (cfgNotes c)),
       testCase "the profile of the file is used, with its defaults filled in" $ do
         c <- ok =<< withFull []
         e <- maybe (assertFailure "no profile") pure (cfgEmbed c)

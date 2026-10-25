@@ -7,6 +7,7 @@ import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom, Follows))
 import Akyuu.Id (render)
 import Akyuu.Memory (Memory)
 import Akyuu.Refs (Name, mkName)
+import Akyuu.Related (Reason (Linked, Mentioned, SimilarText), Related (Related))
 import Akyuu.Topic (Entry (Entry), changedLines, closeTopics, cutText, isLogTopic, noMatch, renderAdded, renderEntry, renderMade, renderNoted, renderReplaced, renderRevised, renderTopic, suggestNames, tokenPrefix, versionToken)
 import Data.Either (isLeft)
 import Data.Set qualified as Set
@@ -130,7 +131,7 @@ showCases =
         assertBool "loose" ("not held by a topic" `T.isPrefixOf` t)
         assertBool "no hint" (not ("[cut" `T.isInfixOf` t)),
       testCase "a topic shows its version, text and links, and no full id" $ do
-        let t = renderTopic (name "kitchen/oven") (nid 7) (mem [] "The oven is 90 cm.\n") [name "kitchen/rota"] [name "garden/plan", name "kitchen/shop"]
+        let t = renderTopic (name "kitchen/oven") (nid 7) (mem [] "The oven is 90 cm.\n") [name "kitchen/rota"] [name "garden/plan", name "kitchen/shop"] [Related (name "kitchen/fridge") Linked 2.5, Related (name "garden/shed") SimilarText 0.4]
         T.lines t
           @?= [ "topic kitchen/oven",
                 "version: " <> versionToken (nid 7),
@@ -139,13 +140,19 @@ showCases =
                 "The oven is 90 cm.",
                 "",
                 "about: kitchen/rota",
-                "mentioned by: garden/plan, kitchen/shop"
+                "mentioned by: garden/plan, kitchen/shop",
+                "related: kitchen/fridge (linked), garden/shed (similar text)"
               ]
-        assertBool "no sha256-" (not ("sha256-" `T.isInfixOf` t)),
+        assertBool "no sha256-" (not ("sha256-" `T.isInfixOf` t))
+        assertBool "no score" (not ("2.5" `T.isInfixOf` t)),
       testCase "a topic with no links shows no link lines" $ do
-        let t = renderTopic (name "kitchen/oven") (nid 7) (mem [] "The oven is 90 cm.") [] []
+        let t = renderTopic (name "kitchen/oven") (nid 7) (mem [] "The oven is 90 cm.") [] [] []
         assertBool "no about" (not ("about:" `T.isInfixOf` t))
-        assertBool "no mentions" (not ("mentioned by:" `T.isInfixOf` t)),
+        assertBool "no mentions" (not ("mentioned by:" `T.isInfixOf` t))
+        assertBool "no related" (not ("related:" `T.isInfixOf` t)),
+      testCase "a topic with only related topics has a blank line, then the related line" $ do
+        let t = renderTopic (name "kitchen/oven") (nid 7) (mem [] "The oven is 90 cm.") [] [] [Related (name "kitchen/fridge") Mentioned 1]
+        drop 4 (T.lines t) @?= ["The oven is 90 cm.", "", "related: kitchen/fridge (mentioned)"],
       testCase "noMatch is a sentence, not an empty text" $
         assertBool "text" (not (T.null noMatch))
     ]

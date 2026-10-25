@@ -33,6 +33,17 @@ Memory bytes, IDs and the ref file format do not change.
   `recall` shows. A stale version is refused with the current text. The
   tools refuse a log. The list of tools is about 8 KB, against 13 KB for
   the ordinary set. The default stays `ordinary`.
+- `recall` of a topic in the topic tool set ends with a `related:` line. It
+  lists up to three other topics that belong with the topic, each with a
+  reason: `linked`, `mentioned` or `similar text`. The list is computed when
+  `recall` runs and is never stored. It uses the vectors if an embedding
+  profile is set. Without vectors it lists only topics that are linked or
+  mentioned. Topics that the topic is about, or that are about it, are not
+  listed again. Set `[topic] related = false` (or `AKYUU_TOPIC_RELATED=false`)
+  to turn it off. `[topic] parallel` (or `AKYUU_TOPIC_PARALLEL`, a list
+  separated by commas) names namespaces whose topics are parallel instances
+  of one kind, such as `work/projects`. Two such topics are then related only
+  if they are linked or mentioned.
 - The web UI Graph tab opens on a topic map: one box for each ref, grouped by
   namespace, with the number of versions or episodes. Point at a box to see
   its links to other topics. The old view of every memory stays as "history".

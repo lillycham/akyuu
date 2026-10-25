@@ -167,14 +167,19 @@ siblingPenalty = 2
 
 -- | The topics that are related to one topic, the best first. An empty list
 -- for a name that is not among the topics.
-relatedTo :: Config -> Stats -> Name -> [Topic] -> [Related]
-relatedTo cfg stats self topics = case filter ((== self) . rtName) topics of
+--
+-- The names in the set are left out, and the limit counts what is left. A
+-- caller that already shows some topics (the ones that a topic is about) asks
+-- for the others.
+relatedTo :: Config -> Stats -> Set Name -> Name -> [Topic] -> [Related]
+relatedTo cfg stats leaveOut self topics = case filter ((== self) . rtName) topics of
   [] -> []
   me : _ ->
     take relatedLimit
       . sortOn (\r -> (Down (quantise (relScore r)), relName r))
-      $ mapMaybe (candidate me) (filter ((/= self) . rtName) topics)
+      $ mapMaybe (candidate me) (filter shown topics)
   where
+    shown t = rtName t /= self && rtName t `Set.notMember` leaveOut
     -- Scores that differ only in the last digits, because the sums ran in
     -- another order, are equal: the name decides, as the order of the topics
     -- must not.

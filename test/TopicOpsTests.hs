@@ -5,9 +5,12 @@ module TopicOpsTests (topicOpsTests) where
 import Akyuu.Amend (Edit (Replace))
 import Akyuu.Check (Finding (findingKind), FindingKind (Fork, Unreferenced), defaultCheckOptions)
 import Akyuu.Error (AkyuuError (BadInput))
+import Akyuu.Graph (Edge (Edge), EdgeType (About))
+import Akyuu.MCP (McpConfig (mcpRelated, mcpToolSet), ToolCall (CallRecallTopic), ToolResult (resultText), ToolSet (Topic), defaultMcpConfig, runTool)
 import Akyuu.Memory (Memory (memAboutRefs, memBody, memKind))
-import Akyuu.Ops (Env, NewMemory (newAboutRefs, newKind), TopicView (tvAbout, tvId, tvMemory, tvMentionedBy), addToTopic, addUnderRef, appendEpisode, checkStore, getMemory, listRefNames, listRefValues, readRef, recallQuery, recallTopic, rememberTopic, replaceTopic, reviseTopic, supersedeMemory, verifyOk, verifyStore)
-import Akyuu.Refs (Name, Ref (current), mkName)
+import Akyuu.Ops (Env, NewMemory (newAboutRefs, newKind), TopicView (tvAbout, tvId, tvMemory, tvMentionedBy), addToTopic, addUnderRef, appendEpisode, checkStore, getMemory, listRefNames, listRefValues, readRef, recallQuery, recallTopic, relatedTopics, rememberTopic, replaceTopic, reviseTopic, supersedeMemory, verifyOk, verifyStore)
+import Akyuu.Refs (Name, Ref (current), mkName, nameText)
+import Akyuu.Related (Reason (Linked, Mentioned), Related (relName, relReason), defaultConfig)
 import Akyuu.Topic (Entry (Entry), versionToken)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
@@ -29,6 +32,7 @@ topicOpsTests =
       reviseCases,
       replaceCases,
       logCases,
+      relatedCases,
       recallCases,
       concurrentCases
     ]
@@ -261,13 +265,78 @@ logCases =
           textOf env (name "me/unnamed") >>= (@?= "the only episode\nA line.")
     ]
 
+-- related topics -------------------------------------------------------
+
+shop :: Name
+shop = name "kitchen/shop"
+
+-- The related topics of a topic, as (name, reason), with nothing left out.
+relatedOf :: Env -> Name -> IO [(Text, Reason)]
+relatedOf env n = map (\r -> (nameText (relName r), relReason r)) <$> relatedTopics env manifest defaultConfig Set.empty n
+
+relatedCases :: TestTree
+relatedCases =
+  testGroup
+    "related topics"
+    [ testCase "a topic that names another in its text is related to it, without vectors" $
+        withOpsEnv $ \_ env -> do
+          made env oven "The oven is 90 cm."
+          made env shop "Buy a grill pan for kitchen/oven."
+          relatedOf env oven >>= (@?= [("kitchen/shop", Mentioned)])
+          relatedOf env shop >>= (@?= [("kitchen/oven", Mentioned)]),
+      testCase "an about-ref link is a link, in both directions" $
+        withOpsEnv $ \_ env -> do
+          made env oven "The oven is 90 cm."
+          _ <- right =<< rememberTopic env shop "claude" "fact" "Buy a grill pan." (Set.singleton oven)
+          relatedOf env oven >>= (@?= [("kitchen/shop", Linked)])
+          relatedOf env shop >>= (@?= [("kitchen/oven", Linked)]),
+      testCase "an edge to an old version of a topic still counts as a link" $
+        withOpsEnv $ \_ env -> do
+          old <- right =<< addUnderRef env oven (note "The oven is 90 cm." [])
+          _ <- right =<< supersedeMemory env oven Nothing (note "The oven is 60 cm now." [])
+          _ <- right =<< addUnderRef env shop (note "Buy a grill pan." [Edge About old])
+          relatedOf env oven >>= (@?= [("kitchen/shop", Linked)]),
+      testCase "the topics that are left out are not listed" $
+        withOpsEnv $ \_ env -> do
+          made env oven "The oven is 90 cm."
+          made env shop "Buy a grill pan for kitchen/oven."
+          rs <- relatedTopics env manifest defaultConfig (Set.singleton shop) oven
+          rs @?= [],
+      testCase "a log is not a topic" $
+        withOpsEnv $ \_ env -> do
+          made env oven "The oven is 90 cm."
+          -- The second episode has a follows edge. A log of one episode is a
+          -- log only if the manifest names it.
+          _ <- right =<< appendEpisode env (name "me/log") (note "The first episode." [])
+          _ <- right =<< appendEpisode env (name "me/log") (note "Looked at kitchen/oven." [])
+          relatedOf env oven >>= (@?= []),
+      testCase "a topic with nothing in common has none, and a name that does not exist has none" $
+        withOpsEnv $ \_ env -> do
+          made env oven "The oven is 90 cm."
+          made env shop "Buy a grill pan."
+          relatedOf env oven >>= (@?= [])
+          relatedOf env (name "kitchen/nothing") >>= (@?= [])
+    ]
+
 -- recall ---------------------------------------------------------------
 
 recallCases :: TestTree
 recallCases =
   testGroup
     "recall"
-    [ testCase "a topic shows the topics that it is about and that are about it" $
+    [ testCase "the recall tool lists related topics, each once, and only when the setting is on" $
+        withOpsEnv $ \_ env -> do
+          made env oven "The oven is 90 cm."
+          made env shop "Buy a grill pan for kitchen/oven."
+          made env (name "kitchen/rota") "Clean the oven on Monday."
+          let cfg = defaultMcpConfig {mcpToolSet = Topic, mcpRelated = Just defaultConfig}
+              recallWith c = resultText <$> runTool c env (CallRecallTopic oven)
+          on <- recallWith cfg
+          assertBool ("related line: " <> T.unpack on) ("related: kitchen/shop (mentioned)" `T.isInfixOf` on)
+          assertBool "no id" (not ("sha256-" `T.isInfixOf` on))
+          off <- recallWith cfg {mcpRelated = Nothing}
+          assertBool "no related line" (not ("related:" `T.isInfixOf` off)),
+      testCase "a topic shows the topics that it is about and that are about it" $
         withOpsEnv $ \_ env -> do
           made env oven "The oven is 90 cm."
           _ <- right =<< rememberTopic env (name "kitchen/shop") "claude" "fact" "Buy a grill pan." (Set.singleton oven)

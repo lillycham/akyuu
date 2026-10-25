@@ -5,8 +5,10 @@ module EmbedTests (embedTests) where
 import Akyuu.Config (Config (cfgEmbed), EmbedSettings (esCommand, esCommandEnv, esKey, esQueryPrefix), loadConfig)
 import Akyuu.Embed (Embedder (Embedder, embArgs, embDocumentPrefix, embMaxChars, embQueryPrefix, embTimeout), Role (Document, QueryText), chunkText, closeVectors, cosine, decodeVector, encodeVector, fingerprint, fuse, loadVectors, openVectors, parseVector, pruneVectors, putVectors, rankBySimilarity, recordFingerprint, runEmbedder, storedFingerprint)
 import Akyuu.Embed qualified
-import Akyuu.Ops (EmbedReport (embedChanged, embedded), SearchMode (MeaningOnly, TextOnly), addMemory, embedMissing, searchMemoriesMode)
+import Akyuu.Ops (EmbedReport (embedChanged, embedded), SearchMode (MeaningOnly, TextOnly), addMemory, addUnderRef, embedMissing, relatedTopics, searchMemoriesMode)
 import Akyuu.Query (Match (matchId), SearchResult (corrections, matches), defaultSearchOptions)
+import Akyuu.Refs (mkName, nameText)
+import Akyuu.Related (Reason (SimilarText), Related (relName, relReason), defaultConfig)
 import Akyuu.SearchEval (Case (Case, caseCategory, caseExpect, caseGuess, caseQuery), parseCases, passes)
 import Control.Concurrent (forkFinally, killThread, threadDelay)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
@@ -384,6 +386,15 @@ searchCases =
           first <- right =<< embedMissing env e
           again <- right =<< embedMissing env e {embQueryPrefix = "search_query: "}
           (embedChanged first, embedChanged again) @?= (False, True),
+      testCase "related topics: text that is alike is listed as similar text, and only above the average" $
+        withOpsEnv $ \_ env -> do
+          let topic n body = right =<< addUnderRef env (either (error . show) id (mkName n)) (note body [])
+          mapM_ (uncurry topic) [("notes/a", "tea at breakfast"), ("notes/b", "tea in the evening"), ("notes/c", "the compiler is GHC"), ("notes/d", "the linker is lld")]
+          e <- withFakeModel (maybe (assertFailure "no embedder") pure =<< embedderNow)
+          _ <- right =<< embedMissing env e
+          let related n = withFakeModel (map (\r -> (nameText (relName r), relReason r)) <$> relatedTopics env (either (error . show) id (mkName "policy/tiers")) defaultConfig Set.empty (either (error . show) id (mkName n)))
+          related "notes/a" >>= (@?= [("notes/b", SimilarText)])
+          related "notes/c" >>= (@?= [("notes/d", SimilarText)]),
       testCase "a command that fails leaves a text search, with a note" $
         withOpsEnv $ \_ env -> do
           _ <- right =<< addMemory env (note "plain text about tea" [])

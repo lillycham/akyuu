@@ -47,6 +47,7 @@ import Akyuu.Memory (renderMemory)
 import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLevels, readLog, readLogSince, readRef, refLinksOf, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, summariseLog, supersedeMemory, unfoldMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
+import Akyuu.Related qualified as Related
 import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, episodeLines, evalLines, findingJSON, findingLines, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refLinkLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines, viewLines)
 import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
@@ -678,7 +679,10 @@ runCommand env c = runExceptT $ case c of
     let agent = case Config.cfgAgent cfg of
           Config.Sourced _ Config.Default -> ""
           s -> Config.sValue s
-    mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place) toolSet) <$> policy <*> tiers))
+    let related
+          | Config.sValue (Config.cfgRelated cfg) = Just (Related.Config (Config.sValue (Config.cfgParallel cfg)))
+          | otherwise = Nothing
+    mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place) toolSet related) <$> policy <*> tiers))
     liftIO (MCP.serve mcpConfig env)
     pure (Output BS.empty True False)
   Serve port -> do
