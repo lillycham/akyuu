@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               akyuu
-version:            0.3.0.0
+version:            0.4.0.0
 synopsis:           A content-addressed memory store for AI agents
 description:
   Akyuu keeps memories as immutable plain-text files named by their hash,

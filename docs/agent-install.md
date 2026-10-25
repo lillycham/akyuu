@@ -15,7 +15,7 @@ passes, skip the step, so that a second run of the guide changes nothing.
 - Read this guide from a release tag, and install that same tag. If the person
   gave you a link to `main`, tell them, and use the newest tag:
   `git ls-remote --tags https://github.com/lillycham/akyuu`. Below, `TAG` is
-  that tag, for example `v0.3.0.0`.
+  that tag, for example `v0.4.0.0`.
 - Before step 2, ask the person where the store goes. The usual place is
   `~/.local/share/akyuu`. Below, `ROOT` is that place as a full path, for
   example `/Users/NAME/.local/share/akyuu` or `/home/NAME/.local/share/akyuu`.
