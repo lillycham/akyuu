@@ -48,6 +48,14 @@ It installs the binary, writes the settings to `~/.config/akyuu/config.toml`
 See [docs/install.md](docs/install.md) for both, the daily jobs, `akyuu-backup`
 and `akyuu-version`.
 
+For Claude Code, a plugin connects the MCP server, loads the context at the
+start of each session, and adds a status line
+([contrib/claude-code](contrib/claude-code)):
+
+```
+/plugin install akyuu --marketplace lillycham/akyuu
+```
+
 
 
 ## Trust and safety

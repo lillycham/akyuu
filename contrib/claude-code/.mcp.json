@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "akyuu": {
+      "command": "akyuu",
+      "args": ["mcp"]
+    }
+  }
+}

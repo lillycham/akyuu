@@ -222,7 +222,11 @@ Tell the person about each extra, and ask which ones they want. Do only those.
 The policy tells an agent to call `context` first. A client can also do this by
 itself:
 
-- **Claude Code.** Check: `~/.claude/settings.json` has a `SessionStart` hook
+- **Claude Code.** If the person installed the plugin
+  (`/plugin install akyuu --marketplace lillycham/akyuu`, see
+  [contrib/claude-code](../contrib/claude-code)), it has these hooks and the
+  MCP server: skip this item, and remove an `akyuu` server that step 4 added.
+  Otherwise check: `~/.claude/settings.json` has a `SessionStart` hook
   that runs `context`. **Ask**, then add the hooks below. If the file is not
   there, make it with only this. If it is there, add to it and keep the hooks
   that are there. Then check that the file is valid JSON

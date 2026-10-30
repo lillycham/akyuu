@@ -52,6 +52,9 @@ The tools accept the first 8 or more hex digits of an id, with or without
 
 ## A hook for the start of a session
 
+The Claude Code plugin in [contrib/claude-code](../contrib/claude-code) has
+these hooks. Install it, or add them yourself.
+
 Claude Code can run a command at the start of a session and add its output to
 the context. In `~/.claude/settings.json`:
 
@@ -86,4 +89,4 @@ knowledge of what happened. Do not write a note from a script that has only the
 transcript: let the agent write notes during the work.
 
 Akyuu does not change the settings file. Add the lines yourself if you want
-them.
+them, or use the plugin.

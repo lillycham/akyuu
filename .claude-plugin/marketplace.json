@@ -1,0 +1,12 @@
+{
+  "name": "akyuu",
+  "owner": { "name": "Lilly Cham" },
+  "metadata": { "description": "Plugins that connect agents to an akyuu memory store." },
+  "plugins": [
+    {
+      "name": "akyuu",
+      "source": "./contrib/claude-code",
+      "description": "Memories from an akyuu store in every Claude Code session."
+    }
+  ]
+}
