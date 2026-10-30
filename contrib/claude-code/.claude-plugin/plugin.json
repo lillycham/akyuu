@@ -1,0 +1,8 @@
+{
+  "name": "akyuu",
+  "version": "0.1.0",
+  "description": "Memories from an akyuu store in every session: the MCP server, the context at session start and after compaction, a status line, and /akyuu-note.",
+  "author": { "name": "Lilly Cham" },
+  "license": "MIT",
+  "homepage": "https://github.com/lillycham/akyuu"
+}

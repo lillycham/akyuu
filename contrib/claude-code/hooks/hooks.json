@@ -1,0 +1,14 @@
+{
+  "modules": ["./register.ts"],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "akyuu context --page 1" },
+          { "type": "command", "command": "akyuu context --page 2" },
+          { "type": "command", "command": "akyuu context --page 3" }
+        ]
+      }
+    ]
+  }
+}

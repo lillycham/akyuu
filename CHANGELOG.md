@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A Claude Code plugin in `contrib/claude-code`, with a marketplace at the
+  root of the repository. It adds the MCP server and the `SessionStart` hooks.
+  It also adds a `memory` skill, a status line and `/akyuu-note`.
+
 ## 0.4.0.0 (2026-10-25)
 
 ### Compatibility
