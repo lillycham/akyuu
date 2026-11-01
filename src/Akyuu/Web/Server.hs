@@ -30,6 +30,7 @@
 module Akyuu.Web.Server
   ( defaultPort,
     serve,
+    serveApplication,
     application,
     hostAllowed,
     toWebRequest,
@@ -66,6 +67,11 @@ serve :: Env -> Int -> (Int -> IO ()) -> IO ()
 serve env port ready = do
   lock <- newMVar ()
   let run e = withMVar lock (\_ -> runEndpoint env e)
+  serveApplication port (\p -> application p run) ready
+
+-- | Shared loopback binding for read-only front ends with different read models.
+serveApplication :: Int -> (Int -> Application) -> (Int -> IO ()) -> IO ()
+serveApplication port makeApplication ready = do
   bracket (bindPortTCP port "127.0.0.1") close $ \sock -> do
     p <- loopbackPort sock
     let settings =
@@ -74,7 +80,7 @@ serve env port ready = do
             . Warp.setServerName ""
             . Warp.setBeforeMainLoop (ready p)
             $ Warp.defaultSettings
-    Warp.runSettingsSocket settings sock (application p run)
+    Warp.runSettingsSocket settings sock (makeApplication p)
 
 -- | The port of a socket that is bound to 127.0.0.1. Any other address is
 -- an error: the server must not listen where another machine can reach it.

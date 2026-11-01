@@ -24,7 +24,7 @@ replicaInterfaceTests =
     "replica interfaces"
     [ testCase "replicated tool discovery excludes legacy tools" $ do
         let names = [name | Object tool <- toolsFor Replicated, Just (String name) <- [KM.lookup "name" tool]]
-        names @?= ["topic_read", "topic_create", "topic_replace", "topic_resolve", "topic_conflicts", "topic_context"]
+        names @?= ["topic_read", "topic_create", "topic_replace", "topic_resolve", "topic_conflicts", "topic_context", "configured_context", "topic_search"]
         parseToolCallFor cfg "add" KM.empty @?= Left (UnknownTool "add")
         parseToolCallFor (cfg {mcpToolSet = Ordinary}) "topic_read" (args ["ref" .= ("me/topic" :: Text)]) @?= Left (UnknownTool "topic_read"),
       testCase "unknown arguments and missing versions fail before dispatch" $ do

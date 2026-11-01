@@ -112,8 +112,9 @@
 
       checks = forAllSystems (pkgs: {
         replica = pkgs.runCommand "akyuu-replica-check"
-          { nativeBuildInputs = [ pkgs.nodejs ]; }
+          { nativeBuildInputs = [ pkgs.nodejs ]; __darwinAllowLocalNetworking = true; }
           ''
+            node ${./test/check-replica-page.cjs} ${./web/replica.html}
             node ${./test/smoke-replica.cjs} ${akyuuFor pkgs}/bin/akyuu
             touch $out
           '';

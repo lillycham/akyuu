@@ -122,15 +122,43 @@ all writers and GC jobs together; old processes do not use this protocol.
 
 *replica context* *--ref* _name_ ... [*--json*]
 	Read explicit topics from one checkpoint. Include missing and conflict
-	markers. Configured policy and tier expansion is not available yet.
+	markers.
+
+*replica configured-context* [*--policy-ref* _name_] [*--tiers-ref* _name_] [*--tier* _tier_] [*--cwd* _dir_] [*--ref* _name_] ... [*--json*]
+	Read policy, tier, directory and extra refs from one checkpoint. The tier
+	defaults to *always*. Unresolved controls suspend manifest expansion.
+	The result includes readiness and diagnostics. Missing members retain
+	explicit markers. Policy-dependent resolution checks control versions
+	again under the mutation lock. Control refs themselves remain repairable.
+	Resolution uses the policy and tier names from configuration. Context
+	flags override names for that read only.
+
+*replica search* _words_ ... [*--limit* _n_] [*--json*]
+	Search current topic heads with SQLite FTS. The limit is from 1 to 100;
+	the default is 10. A match in one conflict head returns every alternative.
+	Words from different heads do not combine into one match. Superseded and
+	unaccepted objects are absent. This command does not use embeddings.
+
+*replica serve* [*--port* _n_] [_context-options_]
+	Serve the read-only topic browser on loopback. Port 0, the default, chooses
+	a free port. Print its URL. Context options are as for
+	*replica configured-context*. Each API response contains one checkpoint.
+
+*replica viz* [_context-options_]
+	Print a static topic browser with an embedded checkpoint. The export has
+	a literal text filter; live search uses SQLite FTS. It loads no external
+	assets. Memory bodies remain plain text.
 
 With *--json*, errors have a code and a message on stdout. Stale-write and
 conflict errors also include the current heads. The exit code is 1 for a
 failed operation. A successful read of a conflict has exit code 0.
 
 Use *mcp --tool-set replicated* for the experimental topic tools. Results
-include structured content and text. This set has no legacy raw tools,
-logs, search, configured tiers, web view, GC, migration, or remote sync.
+include the same JSON in structured content and text. The set includes
+*configured_context* and *topic_search*. Unresolved or invalid control refs
+block unrelated resolution, but permit repairs to the controls themselves.
+Missing controls permit initial setup. This set has no legacy raw tools,
+log traversal, GC, migration, or remote sync.
 Legacy commands refuse checkpoint repositories.
 
 ## Logs and notes

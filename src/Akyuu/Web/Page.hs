@@ -16,6 +16,8 @@ module Akyuu.Web.Page
     fontsMarker,
     vizPage,
     scriptSafeJSON,
+    withFonts,
+    dataPage,
   )
 where
 
@@ -30,7 +32,10 @@ import Data.FileEmbed (embedFile)
 -- | The page, as the build read it from @web/index.html@, with the fonts of
 -- @web/fonts.css@ in place of 'fontsMarker'.
 indexPage :: ByteString
-indexPage = splice fontsMarker $(embedFile "web/fonts.css") $(embedFile "web/index.html")
+indexPage = withFonts $(embedFile "web/index.html")
+
+withFonts :: ByteString -> ByteString
+withFonts = splice fontsMarker $(embedFile "web/fonts.css")
 
 -- | The place in the page's @\<style\>@ element where the @\@font-face@
 -- rules go. The fonts are @data:@ URIs, so the page still loads nothing
@@ -57,7 +62,10 @@ dataMarker = "<!--AKYUU-DATA-->"
 -- for that place with 'scriptSafeJSON'. If the page has no marker, the
 -- element goes at the end.
 vizPage :: Value -> ByteString
-vizPage v = splice dataMarker element indexPage
+vizPage = dataPage indexPage
+
+dataPage :: ByteString -> Value -> ByteString
+dataPage page v = splice dataMarker element page
   where
     element =
       "<script type=\"application/json\" id=\"akyuu-data\">"
