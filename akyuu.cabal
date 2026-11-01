@@ -79,6 +79,9 @@ library
                    , Akyuu.Topic
                    , Akyuu.Related
                    , Akyuu.Supersede
+                   , Akyuu.Sync.Types
+                   , Akyuu.Sync.Event
+                   , Akyuu.Sync.State
                    , Akyuu.GC
                    , Akyuu.Query
                    , Akyuu.Error
@@ -135,6 +138,7 @@ test-suite akyuu-test
                     , SourceMcpTests
                     , SourceTests
                     , SupersedeTests
+                    , SyncTests
                     , WebTests
                     , Support
     build-depends:    base >=4 && <5
