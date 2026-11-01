@@ -10,6 +10,7 @@ module Akyuu.Sync.State
     fromEvents,
     fromBytes,
     events,
+    storeId,
     merge,
     resourceHeads,
     interpret,
@@ -77,6 +78,9 @@ empty store = State store Map.empty
 
 events :: State -> Map EventId Event
 events (State _ es) = es
+
+storeId :: State -> StoreId
+storeId (State store _) = store
 
 fromEvents :: StoreId -> [Event] -> Either StateError State
 fromEvents store es = do
