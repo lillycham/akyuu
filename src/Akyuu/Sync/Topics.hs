@@ -10,12 +10,18 @@ module Akyuu.Sync.Topics
     initialiseLocal,
     openLocal,
     readTopic,
+    captureSnapshot,
+    topicViewAt,
+    topicNames,
     contextTopics,
     conflicts,
     createTopic,
     replaceTopic,
     resolveTopic,
     selectTopic,
+    resolveTopicGuarded,
+    selectTopicGuarded,
+    ResolutionGuard,
     viewJSON,
     contextJSON,
     errorJSON,
@@ -36,7 +42,9 @@ import Akyuu.Refs (Name, nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Event (eventAction, eventReplica, eventTime, mkEvent)
 import Akyuu.Sync.Repository (Repository, RepositoryError (CorruptData, IdentityMismatch, InvalidCheckpoint, InvalidMemory, InvalidPointer, InvalidState, MissingCurrent, MissingPayload, MissingRetainedTarget, NotRepository, OversizedData, PublicationUncertain, RepositoryBusy, RepositoryIO, UnacceptedObject), Snapshot, commitLocal, initialise, loadSnapshot, openRepository, readMemory, readStoreIdentity, snapshotId, snapshotState)
+import Akyuu.Sync.Repository qualified as Repository
 import Akyuu.Sync.State (RefKind (LogKind, TopicKind), ResourceState (Absent, LogHeads, RefTypeConflict, Registered, TopicHeads), StateError (StaleVersion), Version, events, interpret, resourceHeads, storeId, version, versionText)
+import Akyuu.Sync.State qualified as State
 import Akyuu.Sync.Types (Action (AppendLog, RegisterReplica, ResolveLog, ResolveTopic, SetTopic), EventId (EventId), Identifier, Nonce (Nonce), ReplicaId (ReplicaId), Resource (RefResource, RegistryResource), StoreId (StoreId), mkIdentifier, parseIdentifier, renderIdentifier, resourceOf)
 import Control.Exception (IOException, displayException)
 import Control.Monad (join, unless, when)
@@ -93,6 +101,8 @@ data TopicError
   | IsLog Name
   | InvalidSelection Id
   | UnregisteredReplica ReplicaId
+  | ConfigurationChanged
+  | TextIndexFailed Text
   deriving (Eq, Show)
 
 storage :: IO (Either RepositoryError a) -> ExceptT TopicError IO a
@@ -172,6 +182,15 @@ parseLocal bytes = do
 readTopic :: LocalReplica -> Name -> IO (Either TopicError TopicView)
 readTopic (LocalReplica repo _) name = runExceptT $ storage (loadSnapshot repo) >>= (`viewAt` name)
 
+captureSnapshot :: LocalReplica -> IO (Either TopicError Snapshot)
+captureSnapshot (LocalReplica repo _) = runExceptT (storage (loadSnapshot repo))
+
+topicViewAt :: Snapshot -> Name -> IO (Either TopicError TopicView)
+topicViewAt snapshot name = runExceptT (viewAt snapshot name)
+
+topicNames :: Snapshot -> [Name]
+topicNames snapshot = Set.toAscList (Set.fromList [name | event <- Map.elems (events (snapshotState snapshot)), RefResource name <- [resourceOf (eventAction event)]])
+
 viewAt :: Snapshot -> Name -> ExceptT TopicError IO TopicView
 viewAt snapshot name = do
   heads <- traverse readHead (Map.toAscList (resourceHeads state (RefResource name)))
@@ -221,10 +240,21 @@ resolveTopic local name expected new = writeTopic local name (ResolveWrite expec
 selectTopic :: LocalReplica -> Name -> Version -> Id -> IO (Either TopicError TopicView)
 selectTopic local name expected selected = writeTopic local name (ResolveWrite expected (Left selected))
 
+type ResolutionGuard = Snapshot -> IO (Either TopicError [(Resource, Version)])
+
+resolveTopicGuarded :: ResolutionGuard -> LocalReplica -> Name -> Version -> NewMemory -> IO (Either TopicError TopicView)
+resolveTopicGuarded guard local name expected new = writeTopicWith guard local name (ResolveWrite expected (Right new))
+
+selectTopicGuarded :: ResolutionGuard -> LocalReplica -> Name -> Version -> Id -> IO (Either TopicError TopicView)
+selectTopicGuarded guard local name expected selected = writeTopicWith guard local name (ResolveWrite expected (Left selected))
+
 data TopicWrite = CreateWrite NewMemory | ReplaceWrite Version NewMemory | ResolveWrite Version (Either Id NewMemory)
 
 writeTopic :: LocalReplica -> Name -> TopicWrite -> IO (Either TopicError TopicView)
-writeTopic local@(LocalReplica repo replica) name operation = fmap join $ tryWith TopicIO $ runExceptT $ do
+writeTopic = writeTopicWith (const (pure (Right [])))
+
+writeTopicWith :: ResolutionGuard -> LocalReplica -> Name -> TopicWrite -> IO (Either TopicError TopicView)
+writeTopicWith guard local@(LocalReplica repo replica) name operation = fmap join $ tryWith TopicIO $ runExceptT $ do
   snapshot <- storage (loadSnapshot repo)
   view <- viewAt snapshot name
   let state = snapshotState snapshot
@@ -233,6 +263,7 @@ writeTopic local@(LocalReplica repo replica) name operation = fmap join $ tryWit
       expected = case operation of CreateWrite _ -> Nothing; ReplaceWrite token _ -> Just token; ResolveWrite token _ -> Just token
       content = case operation of CreateWrite input -> Right input; ReplaceWrite _ input -> Right input; ResolveWrite _ choice -> choice
   forExpected view expected
+  checks <- if resolving then ExceptT (guard snapshot) else pure []
   when (creating && viewStatus view /= Missing) (throwE (ExistingTopic view))
   unless creating $ do
     when (viewStatus view == Missing) (throwE (MissingTopic name))
@@ -252,11 +283,12 @@ writeTopic local@(LocalReplica repo replica) name operation = fmap join $ tryWit
   let parents = Map.keysSet (resourceHeads state (RefResource name))
       action = if resolving then ResolveTopic name digest else SetTopic name digest
   event <- either (throwE . InvalidInput . T.pack . show) pure (mkEvent (storeId state) replica nonce parents action now)
-  result <- liftIO (commitLocal repo (viewVersion view) event payloads)
+  result <- liftIO (Repository.commitLocalChecked repo (viewVersion view) event payloads checks)
   case result of
     Left (InvalidState StaleVersion) -> do
       latest <- ExceptT (readTopic local name)
       throwE (StaleTopic latest)
+    Left (InvalidState (State.StaleDependency _)) -> throwE ConfigurationChanged
     Left err -> throwE (StorageError err)
     Right accepted -> viewAt accepted name
   where
@@ -309,6 +341,8 @@ errorJSON err = object (["error" .= (code :: Text), "message" .= describeError e
       UnregisteredReplica _ -> ("unregistered-replica", Nothing)
       InvalidSelection _ -> ("invalid-selection", Nothing)
       InvalidInput _ -> ("invalid-input", Nothing)
+      ConfigurationChanged -> ("configuration-changed", Nothing)
+      TextIndexFailed _ -> ("text-index-error", Nothing)
 
 renderView :: TopicView -> Text
 renderView view =
@@ -330,6 +364,8 @@ replicaText (ReplicaId who) = renderIdentifier who
 
 describeError :: TopicError -> Text
 describeError err = case err of
+  ConfigurationChanged -> "The configured policy or tier version changed. Read configured context before another resolution."
+  TextIndexFailed message -> "The topic text index failed: " <> message
   InvalidInput text -> text
   TopicIO io -> T.pack (displayException io)
   MissingTopic name -> "The topic " <> nameText name <> " does not exist."

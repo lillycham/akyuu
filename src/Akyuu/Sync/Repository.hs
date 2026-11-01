@@ -13,6 +13,7 @@ module Akyuu.Sync.Repository
     readStoreIdentity,
     loadSnapshot,
     commitLocal,
+    commitLocalChecked,
     commitLocalWith,
     importState,
     importStateWith,
@@ -34,9 +35,9 @@ import Akyuu.Mutation (withMutation)
 import Akyuu.Sync.Checkpoint (Checkpoint, CheckpointError, CheckpointId (CheckpointId), checkpointEvents, checkpointId, checkpointObjects, checkpointStore, maxCheckpointBytes, mkCheckpoint, parseCheckpoint, pendingEvents, pendingObjects, renderCheckpoint)
 import Akyuu.Sync.Event (Event, maxEventBytes, renderEvent)
 import Akyuu.Sync.Event qualified as Event
-import Akyuu.Sync.State (State, StateError, Version)
+import Akyuu.Sync.State (State, StateError (StaleDependency), Version)
 import Akyuu.Sync.State qualified as State
-import Akyuu.Sync.Types (Action (AppendLog, ResolveLog, ResolveTopic, SetPin, SetReview, SetTopic), EventId (EventId), StoreId (StoreId), parseIdentifier, renderIdentifier)
+import Akyuu.Sync.Types (Action (AppendLog, ResolveLog, ResolveTopic, SetPin, SetReview, SetTopic), EventId (EventId), Resource, StoreId (StoreId), parseIdentifier, renderIdentifier)
 import Control.Exception (IOException)
 import Control.Monad (join, unless, when)
 import Control.Monad.IO.Class (liftIO)
@@ -199,6 +200,12 @@ parsePointer bytes = do
 
 commitLocal :: Repository -> Version -> Event -> [(Id, ByteString)] -> IO (Either RepositoryError Snapshot)
 commitLocal = commitLocalWith (const (pure ()))
+
+-- | Check read dependencies under the target's mutation lock.
+commitLocalChecked :: Repository -> Version -> Event -> [(Id, ByteString)] -> [(Resource, Version)] -> IO (Either RepositoryError Snapshot)
+commitLocalChecked repo expected event payloads checks = transact (const (pure ())) repo payloads $ \state -> do
+  traverse_ (\(resource, token) -> unless (State.version state resource == token) (Left (InvalidState (StaleDependency resource)))) checks
+  first InvalidState (State.applyLocal expected event state)
 
 commitLocalWith :: FaultHook -> Repository -> Version -> Event -> [(Id, ByteString)] -> IO (Either RepositoryError Snapshot)
 commitLocalWith hook repo expected event payloads = transact hook repo payloads $ \old ->

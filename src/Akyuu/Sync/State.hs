@@ -52,6 +52,7 @@ data StateError
   | InvalidRefTransition EventId
   | EventCycle
   | StaleVersion
+  | StaleDependency Resource
   | WrongParents
   | NeedsResolution
   deriving (Eq, Show)

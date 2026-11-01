@@ -12,6 +12,7 @@ module Akyuu.CLI
     Command (..),
     ReplicaCommand (..),
     ReplicaResolution (..),
+    ReplicaContextArgs (..),
     MemoryArgs (..),
     SourceArgs (..),
     BodySource (..),
@@ -41,6 +42,7 @@ import Akyuu.Config qualified as Config
 import Akyuu.Embed qualified as Embed
 import Akyuu.Episode (Walk (walkEnd), WalkEnd (Interrupted))
 import Akyuu.Error (AkyuuError (BadConfig, BadInput, BadName), describe)
+import Akyuu.Fs (tryWith)
 import Akyuu.GC (Policy (Policy, gracePeriod, keepGenerations, trashTTL), defaultPolicy)
 import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersedes))
 import Akyuu.Id (Id)
@@ -58,8 +60,11 @@ import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Source qualified as Source
 import Akyuu.Store qualified as Store
+import Akyuu.Sync.Context qualified as ReplicaContext
+import Akyuu.Sync.Search qualified as ReplicaSearch
 import Akyuu.Sync.State (Version, parseVersion)
 import Akyuu.Sync.Topics qualified as Topics
+import Akyuu.Sync.Web qualified as ReplicaWeb
 import Akyuu.Tier (Place (Place))
 import Akyuu.Web.Page qualified as Page
 import Akyuu.Web.Read qualified as Read
@@ -149,6 +154,9 @@ data Check i
 data ReplicaResolution i = SelectHead i | MergeHeads (MemoryArgs i)
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
+data ReplicaContextArgs = ReplicaContextArgs (Maybe Name) (Maybe Name) Text (Maybe Text) [Name]
+  deriving (Eq, Show)
+
 data ReplicaCommand i
   = ReplicaInit Text Bool
   | ReplicaRead Name Bool
@@ -157,6 +165,10 @@ data ReplicaCommand i
   | ReplicaResolve Name Version (ReplicaResolution i) Bool
   | ReplicaConflicts Bool
   | ReplicaContext [Name] Bool
+  | ReplicaConfiguredContext ReplicaContextArgs Bool
+  | ReplicaSearch Text Int Bool
+  | ReplicaServe Int ReplicaContextArgs
+  | ReplicaViz ReplicaContextArgs
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
 data Command i
@@ -371,6 +383,17 @@ commandParser =
           <> cmd "resolve" (ReplicaResolve <$> topicName <*> topicVersion <*> ((SelectHead <$> option idReader (long "select" <> metavar "ID" <> help "Select one current head by its complete memory ID.")) <|> (MergeHeads <$> memoryArgs)) <*> jsonFlag) "Resolve current heads with a selected or merged memory."
           <> cmd "conflicts" (ReplicaConflicts <$> jsonFlag) "List unresolved topic conflicts."
           <> cmd "context" (ReplicaContext <$> some (option nameReader (long "ref" <> metavar "NAME" <> help "Read this topic. Repeat for more.")) <*> jsonFlag) "Read explicit topics from one checkpoint."
+          <> cmd "configured-context" (ReplicaConfiguredContext <$> replicaContextArgs <*> jsonFlag) "Read configured policy, tiers and directory context."
+          <> cmd "search" (ReplicaSearch <$> (T.unwords <$> some (strArgument (metavar "WORDS..."))) <*> option (atLeast 1) (long "limit" <> value 10 <> metavar "N" <> help "At most 100 topic results.") <*> jsonFlag) "Search current topic heads by words."
+          <> cmd "serve" (ReplicaServe <$> option portReader (long "port" <> value 0 <> metavar "PORT" <> help "Loopback port; 0 chooses a free port.") <*> replicaContextArgs) "Serve the read-only replica topic browser."
+          <> cmd "viz" (ReplicaViz <$> replicaContextArgs) "Export one read-only topic snapshot as HTML."
+    replicaContextArgs =
+      ReplicaContextArgs
+        <$> optional (option nameReader (long "policy-ref" <> metavar "NAME" <> help "The configured policy ref."))
+        <*> optional (option nameReader (long "tiers-ref" <> metavar "NAME" <> help "The configured tier manifest ref."))
+        <*> strOption (long "tier" <> value "always" <> metavar "TIER" <> help "The configured context tier.")
+        <*> optional (strOption (long "cwd" <> metavar "DIR" <> help "The session directory."))
+        <*> many (option nameReader (long "ref" <> metavar "NAME" <> help "An extra context ref."))
     jsonFlag = switch (long "json" <> help "Print structured JSON, including operation errors.")
     topicName = argument nameReader (metavar "NAME")
     topicVersion = option (eitherReader (either (const (Left "Give the complete opaque topic version.")) Right . parseVersion . T.pack)) (long "expected" <> metavar "VERSION" <> help "The complete version returned by replica read.")
@@ -850,6 +873,12 @@ runCommand env c = runExceptT $ case c of
 
 -- | The program: parse the arguments, find the store, run the command.
 runReplicaCommand :: FilePath -> ReplicaCommand Id -> IO (Either AkyuuError Output)
+runReplicaCommand root (ReplicaServe port options) = replicaWebAction root options $ \local settings -> do
+  ExceptT (tryWith Topics.TopicIO (ReplicaWeb.serve local settings port (\actual -> putStrLn ("http://127.0.0.1:" <> show actual <> "/") >> hFlush stdout)))
+  pure (Output BS.empty True False)
+runReplicaCommand root (ReplicaViz options) = replicaWebAction root options $ \local settings -> do
+  bytes <- ExceptT (ReplicaWeb.staticPage local settings)
+  pure (Output bytes True False)
 runReplicaCommand root operation = do
   result <- runExceptT $ case operation of
     ReplicaInit label _ -> do
@@ -861,10 +890,22 @@ runReplicaCommand root operation = do
         ReplicaRead name _ -> view <$> ExceptT (Topics.readTopic local name)
         ReplicaCreate name args _ -> new args >>= ExceptT . Topics.createTopic local name >>= pure . view
         ReplicaReplace name expected args _ -> new args >>= ExceptT . Topics.replaceTopic local name expected >>= pure . view
-        ReplicaResolve name expected (SelectHead choice) _ -> view <$> ExceptT (Topics.selectTopic local name expected choice)
-        ReplicaResolve name expected (MergeHeads args) _ -> new args >>= ExceptT . Topics.resolveTopic local name expected >>= pure . view
+        ReplicaResolve name expected (SelectHead choice) _ -> do
+          settings <- replicaSettings defaultReplicaContext
+          view <$> ExceptT (Topics.selectTopicGuarded (ReplicaContext.resolutionGuard settings name) local name expected choice)
+        ReplicaResolve name expected (MergeHeads args) _ -> do
+          settings <- replicaSettings defaultReplicaContext
+          content <- new args
+          view <$> ExceptT (Topics.resolveTopicGuarded (ReplicaContext.resolutionGuard settings name) local name expected content)
         ReplicaConflicts _ -> context <$> ExceptT (Topics.conflicts local)
         ReplicaContext names _ -> context <$> ExceptT (Topics.contextTopics local names)
+        ReplicaConfiguredContext args _ -> do
+          settings <- replicaSettings args
+          report <- ExceptT (ReplicaContext.configuredContext local settings)
+          pure (ReplicaContext.reportJSON report, ReplicaContext.renderReport report)
+        ReplicaSearch text limit _ -> do
+          report <- ExceptT (ReplicaSearch.searchTopics local text limit)
+          pure (ReplicaSearch.searchJSON report, ReplicaSearch.renderSearch report)
   pure $ case result of
     Right (payload, text) -> Right (output True payload text)
     Left err | json -> Right (output False (Topics.errorJSON err) (Topics.describeError err))
@@ -878,6 +919,8 @@ runReplicaCommand root operation = do
       ReplicaResolve _ _ _ flag -> flag
       ReplicaConflicts flag -> flag
       ReplicaContext _ flag -> flag
+      ReplicaConfiguredContext _ flag -> flag
+      ReplicaSearch _ _ flag -> flag
     new args = ExceptT (first (Topics.InvalidInput . describe) <$> runExceptT (newMemory args))
     view report = (Topics.viewJSON report, Topics.renderView report)
     context report@(Topics.TopicContext _ views) = (Topics.contextJSON report, T.concat (map Topics.renderView views))
@@ -888,6 +931,24 @@ runReplicaCommand root operation = do
       Topics.NeedsResolution report -> "\n" <> Topics.renderView report
       Topics.StaleTopic report -> "\n" <> Topics.renderView report
       _ -> ""
+
+defaultReplicaContext :: ReplicaContextArgs
+defaultReplicaContext = ReplicaContextArgs Nothing Nothing "always" Nothing []
+
+replicaSettings :: ReplicaContextArgs -> ExceptT Topics.TopicError IO ReplicaContext.ContextOptions
+replicaSettings (ReplicaContextArgs policy tiers tier cwd extras) = do
+  p <- ExceptT (first (Topics.InvalidInput . describe) <$> resolvePolicyRef policy)
+  t <- ExceptT (first (Topics.InvalidInput . describe) <$> resolveTiersRef tiers)
+  place <- ExceptT (tryWith Topics.TopicIO (placeFor cwd))
+  pure (ReplicaContext.ContextOptions p t tier (Just place) extras)
+
+replicaWebAction :: FilePath -> ReplicaContextArgs -> (Topics.LocalReplica -> ReplicaContext.ContextOptions -> ExceptT Topics.TopicError IO Output) -> IO (Either AkyuuError Output)
+replicaWebAction root options action = do
+  result <- runExceptT $ do
+    local <- ExceptT (Topics.openLocal root)
+    settings <- replicaSettings options
+    action local settings
+  pure (first (BadInput . Topics.describeError) result)
 
 -- | The program: parse the arguments, find the store, run the command.
 main :: IO ()
@@ -923,20 +984,18 @@ main = do
             Replica operation -> case traverse fullId operation of
               Left err -> pure (Left err)
               Right resolved -> runReplicaCommand root resolved
-            Mcp givenPolicy givenTiers MCP.Replicated
-              | givenPolicy /= Nothing || givenTiers /= Nothing -> pure (Left (BadInput "The replicated tool set does not expand policy or tier manifests yet. Use explicit topic_context refs."))
-              | otherwise -> do
-                  opened <- Topics.openLocal root
-                  case opened of
-                    Left err -> pure (Left (BadInput (Topics.describeError err)))
-                    Right local -> do
-                      let configured = case rc of
-                            Right cfg -> case Config.cfgAgent cfg of
-                              Config.Sourced _ Config.Default -> ""
-                              setting -> Config.sValue setting
-                            Left _ -> ""
-                      MCP.serveReplica (MCP.defaultMcpConfig {MCP.mcpAgent = configured, MCP.mcpToolSet = MCP.Replicated}) local
-                      pure (Right (Output BS.empty True False))
+            Mcp givenPolicy givenTiers MCP.Replicated -> runExceptT $ do
+              policy <- ExceptT (resolvePolicyRef givenPolicy)
+              tiers <- ExceptT (resolveTiersRef givenTiers)
+              local <- ExceptT (first (BadInput . Topics.describeError) <$> Topics.openLocal root)
+              place <- liftIO (placeFor Nothing)
+              let configured = case rc of
+                    Right cfg -> case Config.cfgAgent cfg of
+                      Config.Sourced _ Config.Default -> ""
+                      setting -> Config.sValue setting
+                    Left _ -> ""
+              liftIO (MCP.serveReplica (MCP.defaultMcpConfig {MCP.mcpAgent = configured, MCP.mcpPolicyRef = nameText policy, MCP.mcpTiersRef = nameText tiers, MCP.mcpPlace = Just place, MCP.mcpToolSet = MCP.Replicated}) local)
+              pure (Output BS.empty True False)
             -- seed makes the store, so it runs before withEnv.
             Seed _ -> do
               now <- getCurrentTime

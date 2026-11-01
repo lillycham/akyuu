@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { once } = require('node:events');
+const http = require('node:http');
 
 const binary = process.argv[2];
 assert.ok(binary, 'Pass the akyuu executable path.');
@@ -18,7 +19,7 @@ const pending = new Map();
 let sequence = 0;
 
 function cli(args, expected = 0) {
-  const result = spawnSync(binary, ['--root', root, ...args], { env, encoding: 'utf8', timeout: 5000 });
+  const result = spawnSync(binary, ['--root', root, ...args], { env, encoding: 'utf8', timeout: 5000, maxBuffer: 16000000 });
   assert.ifError(result.error);
   assert.equal(result.status, expected, result.stderr || result.stdout);
   return result;
@@ -63,10 +64,13 @@ async function main() {
   assert.equal(jsonCli(['replica', 'read', 'me/topic']).version, merged.version);
 
   assert.match(cli(['get', '--ref', 'me/topic'], 1).stderr, /checkpoint repository/);
-  assert.match(cli(['mcp', '--tool-set', 'replicated', '--policy-ref', 'me/policy'], 1).stderr, /does not expand/);
+  jsonCli(['replica', 'create', 'policy/memory', '--kind', 'instruction', '--agent', 'test', '--body', 'Keep all concurrent heads.']);
+  jsonCli(['replica', 'create', 'policy/tiers', '--kind', 'config', '--agent', 'test', '--body', 'always: me/topic']);
+  assert.equal(jsonCli(['replica', 'configured-context']).ready, true);
+  assert.equal(jsonCli(['replica', 'search', 'merged']).hits.length, 1);
   for (const name of ['store', 'refs', 'cache.sqlite']) assert.equal(fs.existsSync(path.join(root, name)), false);
 
-  server = spawn(binary, ['--root', root, 'mcp', '--tool-set', 'replicated'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+  server = spawn(binary, ['--root', root, 'mcp', '--tool-set', 'replicated', '--policy-ref', 'policy/memory', '--tiers-ref', 'policy/tiers'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
   let buffer = '';
   server.stdout.setEncoding('utf8');
   server.stderr.setEncoding('utf8');
@@ -100,7 +104,7 @@ async function main() {
   const initial = await rpc('initialize', { protocolVersion: '2025-03-26', clientInfo: { name: 'Smoke Test' } });
   assert.match(initial.result.instructions, /opaque version/);
   const listed = await rpc('tools/list', {});
-  assert.equal(listed.result.tools.length, 6);
+  assert.equal(listed.result.tools.length, 8);
   assert.equal(listed.result.tools.some(tool => tool.name === 'supersede'), false);
   const read = await tool('topic_read', { ref: 'me/topic' });
   assert.equal(read.structuredContent.heads[0].body, 'merged');
@@ -111,6 +115,10 @@ async function main() {
   const context = await tool('topic_context', { refs: ['me/topic', 'me/missing'] });
   assert.deepEqual(context.structuredContent.topics.map(topic => topic.status), ['missing', 'resolved']);
   assert.ok(context.structuredContent.topics.every(topic => topic.checkpoint === context.structuredContent.checkpoint));
+  const configured = await tool('configured_context', {});
+  assert.equal(configured.structuredContent.ready, true);
+  const found = await tool('topic_search', { query: 'merged' });
+  assert.equal(found.structuredContent.hits.length, 1);
   const conflict = await tool('topic_replace', { ref: 'me/topic', expected: created.version, kind: 'fact', body: 'stale' });
   assert.equal(conflict.isError, true);
   assert.equal(conflict.structuredContent.error, 'stale-version');
@@ -124,7 +132,41 @@ async function main() {
   })]);
   assert.equal(code, 0, stderr);
   server = undefined;
-  console.log('Replica CLI and MCP smoke passed.');
+  const exported = cli(['replica', 'viz']).stdout;
+  assert.ok(exported.includes('id="akyuu-data"'));
+  server = spawn(binary, ['--root', root, 'replica', 'serve', '--port', '0'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  server.stdout.setEncoding('utf8');
+  const address = await new Promise((resolve, reject) => {
+    let text = '';
+    const timer = setTimeout(() => reject(new Error('Browser startup timed out.')), 5000);
+    server.stdout.on('data', chunk => {
+      text += chunk;
+      if(text.includes('\n')){ clearTimeout(timer); resolve(text.split('\n')[0]); }
+    });
+    server.once('error', error => { clearTimeout(timer); reject(error); });
+  });
+  const webResponse = await fetch(new URL('api/view?q=merged', address), { signal: AbortSignal.timeout(5000) });
+  assert.equal(webResponse.status, 200);
+  const web = await webResponse.json();
+  assert.equal(web.checkpoint, web.context.checkpoint);
+  assert.equal(web.checkpoint, web.search.checkpoint);
+  assert.ok(web.topics.every(topic => topic.checkpoint === web.checkpoint));
+  const denied = await fetch(new URL('api/view', address), { method: 'POST', signal: AbortSignal.timeout(5000) });
+  assert.equal(denied.status, 405);
+  const hostileStatus = await new Promise((resolve, reject) => {
+    const request = http.get(new URL('api/view', address), { headers: { Host: 'untrusted.invalid' } }, response => {
+      response.resume();
+      resolve(response.statusCode);
+    });
+    request.setTimeout(5000, () => request.destroy(new Error('Host guard check timed out.')));
+    request.on('error', reject);
+  });
+  assert.equal(hostileStatus, 403);
+  const exited = once(server, 'exit');
+  server.kill('SIGTERM');
+  await exited;
+  server = undefined;
+  console.log('Replica CLI, MCP and HTTP smoke passed.');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {

@@ -2,6 +2,7 @@
 
 The first two phases implement the pure event model and checkpoint storage.
 Phase 3a adds opt-in local topic commands and a replicated MCP tool set.
+Phase 3b adds configured context, current-head search and a read-only browser.
 These changes do not migrate the live store or add network transport. The wire format is
 experimental until the persistence and migration phases are complete.
 
@@ -20,6 +21,10 @@ experimental until the persistence and migration phases are complete.
   Only an atomic `CURRENT` replacement publishes accepted state.
 - `Akyuu.Sync.Topics` reads every topic head from one captured checkpoint.
   It creates topics, checks opaque versions, and resolves concurrent heads.
+- `Akyuu.Sync.Context` expands configured tiers and reports unresolved controls.
+  It checks control versions before it publishes a topic resolution.
+- `Akyuu.Sync.Search` searches current topic heads with an in-memory FTS index.
+- `Akyuu.Sync.Web` serves a read-only browser or exports a static snapshot.
 
 `applyLocal` checks a resource version and its complete parent set. Future
 writers must call it under the mutation lock. Remote merge permits unseen
@@ -142,8 +147,8 @@ the checkpoint ID. The caller must read current state before a retry. This
 prevents a visible publication from being reported as a definite rejection.
 
 Captured snapshots retain their accepted ID sets. Explicit memory reads do
-not inspect directory listings. Existing live search still uses the legacy
-store; checkpoint-based search must follow in the integration phase.
+not inspect directory listings. Replica search indexes only causal topic
+heads from one captured checkpoint. Legacy search still uses the legacy store.
 
 The prototype validates full event and payload inventories on each load and
 commit. This favours a simple correctness boundary. Incremental validation,
@@ -154,12 +159,9 @@ The durability claim does not cover drive caches that survive an `fsync`.
 
 ## Next phase
 
-Complete configured context, search and web integration. Then implement log
-DAG traversal and GC integration. Topic operations already use captured
-checkpoints through the interfaces below.
-
-Search must use causal topic state. A selected head does not rewrite the
-memory supersession graph, so graph heads alone cannot identify topic conflicts.
+Implement log DAG traversal, summary levels and GC/archive integration.
+Bounded context pages, incremental validation and persistent search caches
+remain open. The current read interfaces use captured checkpoints.
 
 Keep transport and live-store migration behind their later acceptance checks.
 
@@ -191,19 +193,37 @@ Each head includes its event ID, memory ID, replica, timestamps and memory
 metadata. No conflict response has an arbitrary current value.
 
 `replica context` reads explicit refs from one checkpoint. It retains missing
-and conflict markers. It does not expand a policy or tier manifest yet.
+and conflict markers. `replica configured-context` expands the configured
+policy, tier manifest and directory rules. It accepts `--policy-ref`,
+`--tiers-ref`, `--tier`, `--cwd` and extra `--ref` values.
+
+Missing controls permit initial setup. Conflicted or invalid controls block
+unrelated topic resolutions. The control refs themselves remain repairable.
+Publication checks both control versions under the mutation lock. CLI writes
+use configured control names; read-only flag overrides affect only that read.
+
+`replica search WORDS` searches each current topic head separately. It groups
+matching heads by topic before the limit. Results retain every alternative
+and identify the matching heads. Superseded and unselected heads do not match.
+
+`replica serve` provides a read-only loopback browser. Each response contains
+topics, configured context and search results from one checkpoint.
+`replica viz` exports a static HTML snapshot. Its local filter uses literal
+text; the live browser uses FTS search. The legacy graph and GC views remain
+separate and do not accept checkpoint roots.
 
 With `--json`, failed writes return structured errors on stdout and exit 1.
 Stale-version and conflict errors include the current heads. Successful reads
 of conflicts exit 0. Without `--json`, failures use stderr.
 
 `mcp --tool-set replicated` exposes `topic_read`, `topic_create`,
-`topic_replace`, `topic_resolve`, `topic_conflicts`, and `topic_context`.
+`topic_replace`, `topic_resolve`, `topic_conflicts`, `topic_context`,
+`configured_context`, and `topic_search`.
 Results carry the same JSON in text and MCP `structuredContent`, as the
 [MCP tool specification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#structured-content)
 recommends for compatibility. The server requires a
-previously initialised local replica. Its explicit policy/tier flags are
-refused until configured context is available. The default tool set stays
+previously initialised local replica. It accepts explicit policy/tier flags.
+The default tool set stays
 ordinary. Replicated writers use the configured or negotiated client author.
 
 `REPLICA` stores local identity before its registration event. Repeated init
@@ -218,4 +238,7 @@ guard; coordinated upgrades still precede any real migration.
 conflicts, explicit resolution and captured context. `ReplicaInterfaceTests`
 checks CLI output and JSON-RPC responses. `test/smoke-replica.cjs` tests the
 actual CLI and stdio MCP server against a temporary repository. The Nix
-`replica` check runs this smoke test without a remote or model.
+`replica` check runs this smoke test without a remote or model. It also checks
+browser script logic, conflict display and stale response rejection.
+`ReplicaReadTests` covers context expansion, control races, current-head
+search and HTTP guards. The smoke test also checks the loopback HTTP server.
