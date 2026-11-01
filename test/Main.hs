@@ -30,6 +30,7 @@ import QueryTests (queryTests)
 import RecallTests (recallTests)
 import RefsTests (refsTests)
 import RelatedTests (relatedTests)
+import ReplicaInterfaceTests (replicaInterfaceTests)
 import RepositoryTests (repositoryTests)
 import ReviewTests (reviewTests)
 import SeedTests (seedTests)
@@ -49,6 +50,7 @@ import Test.Tasty.QuickCheck (conjoin, testProperty, (===), (==>))
 import TierTests (tierTests)
 import TopicOpsTests (topicOpsTests)
 import TopicTests (topicTests)
+import TopicsTests (topicsTests)
 import WebTests (webTests)
 
 main :: IO ()
@@ -57,7 +59,7 @@ main = do
   -- real embedding command would change the results and start a model.
   mapM_ unsetEnv ["AKYUU_EMBED_COMMAND", "AKYUU_EMBED_MODEL", "AKYUU_EMBED_MIN", "AKYUU_EMBED_TIMEOUT", "AKYUU_EMBED_MAX_CHARS", "AKYUU_EMBED_PROFILE", "AKYUU_EMBED_QUERY_PREFIX", "AKYUU_EMBED_DOCUMENT_PREFIX", "AKYUU_POLICY_REF", "AKYUU_TIERS_REF", "AKYUU_AGENT", "AKYUU_TOPIC_RELATED", "AKYUU_TOPIC_PARALLEL"]
   setEnv "AKYUU_CONFIG" "/nonexistent/akyuu-embed.env"
-  defaultMain $ testGroup "akyuu" [idTests, configTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, syncTests, checkpointTests, repositoryTests, gcTests, queryTests, checkTests, amendTests, compareTests, reviewTests, tierTests, topicTests, relatedTests, recallTests, embedTests, episodeTests, levelsTests, opsTests, topicOpsTests, cliTests, mcpTests, webTests, seedTests, sourceTests, sourceCliTests, sourceMcpTests, sourceHashTests]
+  defaultMain $ testGroup "akyuu" [idTests, configTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, syncTests, checkpointTests, repositoryTests, gcTests, queryTests, checkTests, amendTests, compareTests, reviewTests, tierTests, topicTests, relatedTests, recallTests, embedTests, episodeTests, levelsTests, opsTests, topicOpsTests, cliTests, mcpTests, webTests, seedTests, sourceTests, sourceCliTests, sourceMcpTests, sourceHashTests, topicsTests, replicaInterfaceTests]
 
 idTests :: TestTree
 idTests =

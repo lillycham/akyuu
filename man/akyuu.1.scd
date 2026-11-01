@@ -93,6 +93,46 @@ GC and mutations share one store lock. Reference and pin target checks run
 under that lock. A busy lock causes an error after about one second. Update
 all writers and GC jobs together; old processes do not use this protocol.
 
+## Experimental local replicas
+
+*replica init* *--label* _text_ [*--json*]
+	Create a local checkpoint repository in an empty directory. Existing
+	replica initialisation can resume. This command does not migrate a legacy
+	store or connect a remote. The local replica identity stays on this machine.
+
+*replica read* _name_ [*--json*]
+	Print every current head and the opaque version of the topic. A conflict
+	has no selected current value. A missing topic has an explicit status.
+
+*replica create* _name_ *--kind* _text_ *--agent* _text_ [_edges_] [_body_] [*--json*]
+	Create a topic. Fail if its name exists. Memory arguments are as for *add*.
+	Replica commands require complete memory IDs; they do not expand prefixes.
+
+*replica replace* _name_ *--expected* _version_ *--kind* _text_ *--agent* _text_ [_edges_] [_body_] [*--json*]
+	Replace one resolved topic. Copy the complete opaque version from
+	*replica read*. A memory ID is not this version. Resolve conflicts first.
+
+*replica resolve* _name_ *--expected* _version_ (*--select* _id_ | *--kind* _text_ *--agent* _text_ [_edges_] [_body_]) [*--json*]
+	Resolve the current heads. Select one current memory, or write merged
+	content. Selection preserves the memory bytes. New content supersedes all
+	current head memories. A stale version refuses the operation.
+
+*replica conflicts* [*--json*]
+	List topic and ref type conflicts. Independent log heads are not conflicts.
+
+*replica context* *--ref* _name_ ... [*--json*]
+	Read explicit topics from one checkpoint. Include missing and conflict
+	markers. Configured policy and tier expansion is not available yet.
+
+With *--json*, errors have a code and a message on stdout. Stale-write and
+conflict errors also include the current heads. The exit code is 1 for a
+failed operation. A successful read of a conflict has exit code 0.
+
+Use *mcp --tool-set replicated* for the experimental topic tools. Results
+include structured content and text. This set has no legacy raw tools,
+logs, search, configured tiers, web view, GC, migration, or remote sync.
+Legacy commands refuse checkpoint repositories.
+
 ## Logs and notes
 
 A _log_ is a ref whose memories are episodes: things that happened, as opposed

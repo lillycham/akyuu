@@ -6,6 +6,7 @@ module Akyuu.Sync.State
     ResourceState (..),
     Version,
     versionText,
+    parseVersion,
     empty,
     fromEvents,
     fromBytes,
@@ -19,7 +20,7 @@ module Akyuu.Sync.State
   )
 where
 
-import Akyuu.Id (Id)
+import Akyuu.Id (Id, IdParseError)
 import Akyuu.Id qualified as Id
 import Akyuu.Refs (nameText)
 import Akyuu.Sync.Event (Event, EventError, eventAction, eventId, eventNonce, eventParents, eventReplica, eventStore, eventTime, mkEvent, parseEvent, renderEvent)
@@ -72,6 +73,9 @@ newtype Version = Version Id deriving (Eq, Ord, Show)
 
 versionText :: Version -> Text
 versionText (Version digest) = Id.render digest
+
+parseVersion :: Text -> Either IdParseError Version
+parseVersion = fmap Version . Id.parse
 
 empty :: StoreId -> State
 empty store = State store Map.empty

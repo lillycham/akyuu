@@ -10,6 +10,8 @@ module Akyuu.CLI
   ( -- * Commands
     Cli (..),
     Command (..),
+    ReplicaCommand (..),
+    ReplicaResolution (..),
     MemoryArgs (..),
     SourceArgs (..),
     BodySource (..),
@@ -26,6 +28,7 @@ module Akyuu.CLI
     readBody,
     resolveCommand,
     runCommand,
+    runReplicaCommand,
     withNewline,
     terminalBytes,
     main,
@@ -46,6 +49,7 @@ import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep, defaultSize
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
 import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLevels, readLog, readLogSince, readRef, refLinksOf, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, sourcePointers, statusOf, summariseLog, supersedeMemory, unfoldMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops qualified as Ops
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Related qualified as Related
@@ -54,6 +58,8 @@ import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Source qualified as Source
 import Akyuu.Store qualified as Store
+import Akyuu.Sync.State (Version, parseVersion)
+import Akyuu.Sync.Topics qualified as Topics
 import Akyuu.Tier (Place (Place))
 import Akyuu.Web.Page qualified as Page
 import Akyuu.Web.Read qualified as Read
@@ -61,7 +67,7 @@ import Akyuu.Web.Server qualified as Server
 import Control.Exception (IOException, try)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE)
-import Data.Aeson (encode, toJSON)
+import Data.Aeson (encode, object, toJSON, (.=))
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -140,8 +146,22 @@ data Check i
 -- | One command. The parameter is the type of the ids that it holds: 'IdSpec'
 -- when the command comes from the command line, and 'Id' when it is ready
 -- to run. 'resolveCommand' makes the change, and it can fail.
+data ReplicaResolution i = SelectHead i | MergeHeads (MemoryArgs i)
+  deriving (Eq, Show, Functor, Foldable, Traversable)
+
+data ReplicaCommand i
+  = ReplicaInit Text Bool
+  | ReplicaRead Name Bool
+  | ReplicaCreate Name (MemoryArgs i) Bool
+  | ReplicaReplace Name Version (MemoryArgs i) Bool
+  | ReplicaResolve Name Version (ReplicaResolution i) Bool
+  | ReplicaConflicts Bool
+  | ReplicaContext [Name] Bool
+  deriving (Eq, Show, Functor, Foldable, Traversable)
+
 data Command i
-  = Add (MemoryArgs i)
+  = Replica (ReplicaCommand i)
+  | Add (MemoryArgs i)
   | -- | Add a memory and make a new ref for it (@add --ref@).
     AddRef Name (MemoryArgs i)
   | -- | The memory, and 'True' for @--with-id@: a first line with its id.
@@ -310,6 +330,7 @@ commandParser =
       <> cmd "supersede" supersedeP "Replace the memory of a ref with a new one, and print the new id."
       <> cmd "amend" amendP "Change some text of the memory of a ref: replace one passage, or add text at the end. Prints the new id."
       <> cmd "ref" refP "Read, set or list refs."
+      <> cmd "replica" (Replica <$> replicaP) "Use experimental local checkpoint topics. No remote sync or live-store migration."
       <> cmd "pin" (Pin <$> argument idReader (metavar "ID")) "Pin a memory, so that GC keeps it."
       <> cmd "unpin" (Unpin <$> argument idReader (metavar "ID")) "Remove the pin of a memory."
       <> cmd "pins" (pure Pins) "Print the id of each pinned memory."
@@ -341,6 +362,18 @@ commandParser =
       <> cmd "seed" seedP "Make a demo store in an empty directory, to try the web view."
   where
     cmd n p d = command n (info p (progDesc d))
+    replicaP =
+      hsubparser $
+        cmd "init" (ReplicaInit <$> option (via (checkField "label")) (long "label" <> metavar "TEXT" <> help "A label for this replica.") <*> jsonFlag) "Initialise an empty local checkpoint replica."
+          <> cmd "read" (ReplicaRead <$> topicName <*> jsonFlag) "Read all current heads and their opaque version."
+          <> cmd "create" (ReplicaCreate <$> topicName <*> memoryArgs <*> jsonFlag) "Create a topic that does not exist."
+          <> cmd "replace" (ReplicaReplace <$> topicName <*> topicVersion <*> memoryArgs <*> jsonFlag) "Replace a resolved topic with a version check."
+          <> cmd "resolve" (ReplicaResolve <$> topicName <*> topicVersion <*> ((SelectHead <$> option idReader (long "select" <> metavar "ID" <> help "Select one current head by its complete memory ID.")) <|> (MergeHeads <$> memoryArgs)) <*> jsonFlag) "Resolve current heads with a selected or merged memory."
+          <> cmd "conflicts" (ReplicaConflicts <$> jsonFlag) "List unresolved topic conflicts."
+          <> cmd "context" (ReplicaContext <$> some (option nameReader (long "ref" <> metavar "NAME" <> help "Read this topic. Repeat for more.")) <*> jsonFlag) "Read explicit topics from one checkpoint."
+    jsonFlag = switch (long "json" <> help "Print structured JSON, including operation errors.")
+    topicName = argument nameReader (metavar "NAME")
+    topicVersion = option (eitherReader (either (const (Left "Give the complete opaque topic version.")) Right . parseVersion . T.pack)) (long "expected" <> metavar "VERSION" <> help "The complete version returned by replica read.")
     addP =
       (\r a -> maybe (Add a) (`AddRef` a) r)
         <$> optional (option nameReader (long "ref" <> metavar "NAME" <> help "Also make a new ref NAME for the memory. The ref must not exist."))
@@ -485,11 +518,12 @@ commandParser =
       Mcp
         <$> optional (option nameReader (long "policy-ref" <> metavar "NAME" <> help "The ref that holds the policy of this store. The default is $AKYUU_POLICY_REF, then policy/memory."))
         <*> optional (option nameReader (long "tiers-ref" <> metavar "NAME" <> help "The ref of the manifest of the tiers. The default is $AKYUU_TIERS_REF, then policy/tiers."))
-        <*> option (eitherReader toolSetReader) (long "tool-set" <> metavar "ordinary|maintenance|topic" <> value MCP.Ordinary <> help "The MCP tools to expose. The default is ordinary; maintenance exposes raw store and consolidation tools; topic exposes tools that name topics and need no ids.")
+        <*> option (eitherReader toolSetReader) (long "tool-set" <> metavar "ordinary|maintenance|topic|replicated" <> value MCP.Ordinary <> help "The default is ordinary. Topic exposes topic tools; replicated exposes experimental checkpoint tools.")
     toolSetReader "ordinary" = Right MCP.Ordinary
     toolSetReader "maintenance" = Right MCP.Maintenance
     toolSetReader "topic" = Right MCP.Topic
-    toolSetReader _ = Left "The tool set must be ordinary, maintenance or topic."
+    toolSetReader "replicated" = Right MCP.Replicated
+    toolSetReader _ = Left "The tool set must be ordinary, maintenance, topic or replicated."
     checkP =
       CheckArgs
         <$> ( CheckOptions
@@ -626,6 +660,7 @@ withNewline bs
 -- stdout until stdin ends, and then prints nothing more.
 runCommand :: Env -> Command Id -> IO (Either AkyuuError Output)
 runCommand env c = runExceptT $ case c of
+  Replica _ -> throwE (BadInput "Replica commands must run against a checkpoint repository.")
   Add a -> do
     n <- newMemory a
     i <- ExceptT (addMemory env n)
@@ -814,6 +849,47 @@ runCommand env c = runExceptT $ case c of
     expected (MustBeAt i) = MustBe i
 
 -- | The program: parse the arguments, find the store, run the command.
+runReplicaCommand :: FilePath -> ReplicaCommand Id -> IO (Either AkyuuError Output)
+runReplicaCommand root operation = do
+  result <- runExceptT $ case operation of
+    ReplicaInit label _ -> do
+      _ <- ExceptT (Topics.initialiseLocal root label)
+      pure (object ["status" .= ("ready" :: Text)], "Local checkpoint replica initialised.")
+    _ -> do
+      local <- ExceptT (Topics.openLocal root)
+      case operation of
+        ReplicaRead name _ -> view <$> ExceptT (Topics.readTopic local name)
+        ReplicaCreate name args _ -> new args >>= ExceptT . Topics.createTopic local name >>= pure . view
+        ReplicaReplace name expected args _ -> new args >>= ExceptT . Topics.replaceTopic local name expected >>= pure . view
+        ReplicaResolve name expected (SelectHead choice) _ -> view <$> ExceptT (Topics.selectTopic local name expected choice)
+        ReplicaResolve name expected (MergeHeads args) _ -> new args >>= ExceptT . Topics.resolveTopic local name expected >>= pure . view
+        ReplicaConflicts _ -> context <$> ExceptT (Topics.conflicts local)
+        ReplicaContext names _ -> context <$> ExceptT (Topics.contextTopics local names)
+  pure $ case result of
+    Right (payload, text) -> Right (output True payload text)
+    Left err | json -> Right (output False (Topics.errorJSON err) (Topics.describeError err))
+    Left err -> Left (BadInput (Topics.describeError err <> details err))
+  where
+    json = case operation of
+      ReplicaInit _ flag -> flag
+      ReplicaRead _ flag -> flag
+      ReplicaCreate _ _ flag -> flag
+      ReplicaReplace _ _ _ flag -> flag
+      ReplicaResolve _ _ _ flag -> flag
+      ReplicaConflicts flag -> flag
+      ReplicaContext _ flag -> flag
+    new args = ExceptT (first (Topics.InvalidInput . describe) <$> runExceptT (newMemory args))
+    view report = (Topics.viewJSON report, Topics.renderView report)
+    context report@(Topics.TopicContext _ views) = (Topics.contextJSON report, T.concat (map Topics.renderView views))
+    output success payload text = Output (if json then BL.toStrict (encode payload) <> "\n" else encodeUtf8 (withTextNewline text)) success False
+    withTextNewline text = if T.isSuffixOf "\n" text then text else text <> "\n"
+    details err = case err of
+      Topics.ExistingTopic report -> "\n" <> Topics.renderView report
+      Topics.NeedsResolution report -> "\n" <> Topics.renderView report
+      Topics.StaleTopic report -> "\n" <> Topics.renderView report
+      _ -> ""
+
+-- | The program: parse the arguments, find the store, run the command.
 main :: IO ()
 main = do
   args <- getArgs
@@ -844,6 +920,23 @@ main = do
         Left e -> failWith 2 e
         Right root -> do
           r <- case cliCommand cli of
+            Replica operation -> case traverse fullId operation of
+              Left err -> pure (Left err)
+              Right resolved -> runReplicaCommand root resolved
+            Mcp givenPolicy givenTiers MCP.Replicated
+              | givenPolicy /= Nothing || givenTiers /= Nothing -> pure (Left (BadInput "The replicated tool set does not expand policy or tier manifests yet. Use explicit topic_context refs."))
+              | otherwise -> do
+                  opened <- Topics.openLocal root
+                  case opened of
+                    Left err -> pure (Left (BadInput (Topics.describeError err)))
+                    Right local -> do
+                      let configured = case rc of
+                            Right cfg -> case Config.cfgAgent cfg of
+                              Config.Sourced _ Config.Default -> ""
+                              setting -> Config.sValue setting
+                            Left _ -> ""
+                      MCP.serveReplica (MCP.defaultMcpConfig {MCP.mcpAgent = configured, MCP.mcpToolSet = MCP.Replicated}) local
+                      pure (Right (Output BS.empty True False))
             -- seed makes the store, so it runs before withEnv.
             Seed _ -> do
               now <- getCurrentTime
@@ -872,6 +965,8 @@ main = do
       putStr msg
       exitWith ExitSuccess
   where
+    fullId (Ops.Full digest) = Right digest
+    fullId (Ops.Prefix _) = Left (BadInput "Replica commands require complete memory IDs; prefixes are not supported yet.")
     failWith code e = do
       BS.hPut stderr (encodeUtf8 ("akyuu: " <> describe e <> "\n"))
       exitWith (ExitFailure code)
