@@ -82,6 +82,8 @@ library
                    , Akyuu.Sync.Types
                    , Akyuu.Sync.Event
                    , Akyuu.Sync.State
+                   , Akyuu.Sync.Checkpoint
+                   , Akyuu.Sync.Repository
                    , Akyuu.GC
                    , Akyuu.Query
                    , Akyuu.Error
@@ -109,6 +111,7 @@ test-suite akyuu-test
     hs-source-dirs:   test
     ghc-options:      -threaded -rtsopts "-with-rtsopts=-N"
     other-modules:    CacheTests
+                    , CheckpointTests
                     , ConfigTests
                     , FsTests
                     , GCTests
@@ -122,6 +125,7 @@ test-suite akyuu-test
                     , CheckTests
                     , CompareTests
                     , ReviewTests
+                    , RepositoryTests
                     , TierTests
                     , TopicTests
                     , TopicOpsTests
@@ -162,3 +166,4 @@ test-suite akyuu-test
                     , tasty-quickcheck
                     , text
                     , time
+                    , unix

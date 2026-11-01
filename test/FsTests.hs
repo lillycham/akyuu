@@ -2,14 +2,15 @@
 
 module FsTests (fsTests) where
 
-import Akyuu.Fs (atomicWrite, ignoreIO, tryAs, tryWith)
+import Akyuu.Fs (AtomicStep (TemporaryWritten), atomicWrite, atomicWriteWith, ignoreIO, tryAs, tryWith)
 import Control.Exception (ArithException (Overflow), IOException, throwIO, try)
 import Data.ByteString qualified as BS
+import Data.List (isPrefixOf)
 import Support (withTempDir)
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Test.Tasty.QuickCheck (ioProperty, testProperty, (===))
 
 fsTests :: TestTree
@@ -79,6 +80,13 @@ atomicWriteTests =
         withTempDir $ \dir -> do
           atomicWrite (dir </> "f") "hello"
           BS.readFile (dir </> "f") >>= (@?= "hello"),
+      testCase "temporary files have a hidden basename" $
+        withTempDir $ \dir -> do
+          let hook TemporaryWritten = do
+                names <- listDirectory dir
+                assertBool "Expected one hidden temporary file" (length names == 1 && all (isPrefixOf ".tmp") names)
+              hook _ = pure ()
+          atomicWriteWith hook (dir </> "f") "hello",
       testCase "writes empty content" $
         withTempDir $ \dir -> do
           atomicWrite (dir </> "f") BS.empty

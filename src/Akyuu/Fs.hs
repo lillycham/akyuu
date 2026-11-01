@@ -1,6 +1,9 @@
 -- | Small file helpers that more than one module uses.
 module Akyuu.Fs
   ( atomicWrite,
+    atomicWriteWith,
+    AtomicStep (..),
+    syncDir,
     tryAs,
     tryWith,
     ignoreIO,
@@ -69,18 +72,34 @@ ifMissing d act = either (const d) id <$> tryJust (guard . isDoesNotExistError) 
 -- removes the temporary file and rethrows the 'Control.Exception.IOException'.
 -- 'Akyuu.Store.add' and 'Akyuu.Refs.setRef' both use this function.
 atomicWrite :: FilePath -> ByteString -> IO ()
-atomicWrite final bytes =
+atomicWrite = atomicWriteWith (const (pure ()))
+
+-- | Boundaries for fault injection. A rename is visible before its directory
+-- flush completes; callers must treat failures after that point as uncertain.
+data AtomicStep = TemporaryWritten | FileSynced | Renamed | DirectorySynced
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+-- | 'atomicWrite' with a callback after each write/flush boundary. Production
+-- callers normally use 'atomicWrite'; tests can simulate an interrupted write.
+atomicWriteWith :: (AtomicStep -> IO ()) -> FilePath -> ByteString -> IO ()
+atomicWriteWith step final bytes =
   bracketOnError
-    (openBinaryTempFile dir ".tmp")
+    -- openBinaryTempFile treats a lone leading dot as an extension. A second
+    -- dot keeps the generated basename hidden as well as the final extension.
+    (openBinaryTempFile dir ".tmp.write")
     (\(tmp, h) -> ignoreIO (hClose h) >> ignoreIO (removeFile tmp))
     ( \(tmp, h) -> do
         BS.hPut h bytes
+        step TemporaryWritten
         -- 'handleToFd' flushes and closes the handle, but not the descriptor.
         -- The descriptor is ours to close.
         fd <- handleToFd h
         fileSynchronise fd `finally` closeFd fd
+        step FileSynced
         renameFile tmp final
+        step Renamed
         syncDir dir
+        step DirectorySynced
     )
   where
     dir = takeDirectory final

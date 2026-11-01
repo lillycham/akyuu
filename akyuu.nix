@@ -22,7 +22,7 @@ mkDerivation {
     aeson base base16-bytestring bytestring containers
     cryptohash-sha256 directory filelock filepath http-types
     optparse-applicative process sqlite-simple tasty tasty-hunit
-    tasty-quickcheck temporary text time wai
+    tasty-quickcheck temporary text time unix wai
   ];
   homepage = "https://github.com/lillycham/akyuu";
   description = "A content-addressed memory store for AI agents";

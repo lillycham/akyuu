@@ -1,6 +1,7 @@
 # Sync v1: implementation status
 
-The first phase implements the pure event model. It does not change the live
+The first two phases implement the pure event model and checkpoint storage.
+They do not change the live
 store, refs, GC, CLI, MCP tools, or network behaviour. The wire format is
 experimental until the persistence and migration phases are complete.
 
@@ -14,6 +15,9 @@ experimental until the persistence and migration phases are complete.
 - `Akyuu.Sync.State` validates parent closure, store identity, replica
   registration, resource types, and acyclic ancestry. It merges valid event
   sets and interprets their causal heads.
+- `Akyuu.Sync.Checkpoint` defines canonical, content-addressed manifests.
+- `Akyuu.Sync.Repository` saves verified payloads, events, and manifests.
+  Only an atomic `CURRENT` replacement publishes accepted state.
 
 `applyLocal` checks a resource version and its complete parent set. Future
 writers must call it under the mutation lock. Remote merge permits unseen
@@ -22,8 +26,8 @@ concurrent events and does not require a local version token.
 Resource versions include the store identity, resource key, and event heads.
 A rollback therefore changes the version even when it restores old content.
 
-An event has no memory payload bytes. The next phase must verify and save
-those bytes before it publishes a checkpoint. Replica registration records
+An event has no memory payload bytes. Repository transactions verify and save
+those bytes before they publish a checkpoint. Replica registration records
 identity, not authentication. Registered peers remain trusted.
 
 ## Experimental wire format
@@ -93,10 +97,63 @@ rollback, conflict resolution, late branches, type conflicts, log frontiers,
 pins, reviews, and optimistic local writes. Generated histories test merge
 associativity, commutativity, idempotence, and arrival order independence.
 
+Checkpoint tests cover canonical manifests and export obligations. Repository
+tests kill child processes at write, file flush, rename, and directory flush
+boundaries. Recovery validates the old or complete new checkpoint. These
+tests simulate process death, not a physical loss of power.
+
+## Experimental repository
+
+This API uses a separate, empty directory. It refuses a legacy store or an
+unrelated nonempty directory. It does not initialise a production format 2
+store or connect existing readers and writers to checkpoints.
+
+```text
+IDENTITY             protocol marker and store identity
+CURRENT              one checkpoint ID and a line feed
+store.lock           shared mutation lock
+objects/<id>         immutable canonical memory bytes
+events/<id>          immutable canonical event bytes
+checkpoints/<id>     immutable canonical manifest
+```
+
+Each manifest names all accepted events and payloads. It also names the
+pending events and payloads. These pending sets form the durable outbox.
+The object pool holds its bytes without a second copy. No acknowledgement
+or collection API exists yet; all accepted data remains available locally.
+
+Local transactions check the current resource token under the mutation lock.
+Imports merge against the latest checkpoint under that lock. They retain
+all new data as pending until transport can verify publication receipts.
+
+All event payloads and retaining memory dependencies must be present before
+publication. Supersession edges may name collected history. Payloads have a
+16 MiB limit. Manifests have a 64 MiB limit. Reads enforce their limits before
+they allocate a complete file.
+
+Transactions write and flush immutable files first. They publish `CURRENT`
+last. Repository initialisation also flushes ancestor directories. Recovery
+ignores temporary files and preparations outside the accepted manifest.
+
+An I/O failure after the pointer rename reports `PublicationUncertain` with
+the checkpoint ID. The caller must read current state before a retry. This
+prevents a visible publication from being reported as a definite rejection.
+
+Captured snapshots retain their accepted ID sets. Explicit memory reads do
+not inspect directory listings. Existing live search still uses the legacy
+store; checkpoint-based search must follow in the integration phase.
+
+The prototype validates full event and payload inventories on each load and
+commit. This favours a simple correctness boundary. Incremental validation,
+archive fallback, checkpoint retention and performance limits remain open.
+
+The filesystem helper uses `fsync`. It does not issue macOS `F_FULLFSYNC`.
+The durability claim does not cover drive caches that survive an `fsync`.
+
 ## Next phase
 
-Implement durable checkpoints and an outbox with fault injection. All
-accepted payloads must survive a crash before the first remote publication.
-Uncommitted preparations must remain absent from search and resolution.
+Connect topic reads and writes to captured checkpoints. Add explicit
+conflict results and opaque version tokens across the CLI, MCP tools, context,
+search, and web UI. Then implement log DAG traversal and GC integration.
 
-Do not add transport or migrate a live store before these guarantees pass.
+Keep transport and live-store migration behind their later acceptance checks.
