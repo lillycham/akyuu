@@ -1,8 +1,8 @@
 # Sync v1: implementation status
 
 The first two phases implement the pure event model and checkpoint storage.
-They do not change the live
-store, refs, GC, CLI, MCP tools, or network behaviour. The wire format is
+Phase 3a adds opt-in local topic commands and a replicated MCP tool set.
+These changes do not migrate the live store or add network transport. The wire format is
 experimental until the persistence and migration phases are complete.
 
 ## Current modules
@@ -18,6 +18,8 @@ experimental until the persistence and migration phases are complete.
 - `Akyuu.Sync.Checkpoint` defines canonical, content-addressed manifests.
 - `Akyuu.Sync.Repository` saves verified payloads, events, and manifests.
   Only an atomic `CURRENT` replacement publishes accepted state.
+- `Akyuu.Sync.Topics` reads every topic head from one captured checkpoint.
+  It creates topics, checks opaque versions, and resolves concurrent heads.
 
 `applyLocal` checks a resource version and its complete parent set. Future
 writers must call it under the mutation lock. Remote merge permits unseen
@@ -152,8 +154,68 @@ The durability claim does not cover drive caches that survive an `fsync`.
 
 ## Next phase
 
-Connect topic reads and writes to captured checkpoints. Add explicit
-conflict results and opaque version tokens across the CLI, MCP tools, context,
-search, and web UI. Then implement log DAG traversal and GC integration.
+Complete configured context, search and web integration. Then implement log
+DAG traversal and GC integration. Topic operations already use captured
+checkpoints through the interfaces below.
+
+Search must use causal topic state. A selected head does not rewrite the
+memory supersession graph, so graph heads alone cannot identify topic conflicts.
 
 Keep transport and live-store migration behind their later acceptance checks.
+
+## Experimental topic interfaces
+
+Use a separate directory. This path does not migrate a legacy store:
+
+```sh
+akyuu --root ./replica-demo replica init --label laptop
+akyuu --root ./replica-demo replica create me/topic \
+  --kind fact --agent test --body 'A first version' --json
+akyuu --root ./replica-demo replica read me/topic --json
+akyuu --root ./replica-demo replica replace me/topic \
+  --expected VERSION --kind fact --agent test --body 'A revised version' --json
+akyuu --root ./replica-demo replica conflicts --json
+akyuu --root ./replica-demo replica context --ref me/topic --json
+```
+
+Copy VERSION from the read response. A memory ID is not a resource version.
+Replica commands require complete IDs for memory links and selection.
+
+`replica resolve NAME --expected VERSION --select ID` selects one current
+head's memory. It preserves its bytes and creates a new causal event. New
+content instead uses `--kind`, `--agent`, and a body source. It supersedes
+every current head memory. Ordinary replacement refuses conflicts.
+
+Read responses include the checkpoint, opaque version, status and every head.
+Each head includes its event ID, memory ID, replica, timestamps and memory
+metadata. No conflict response has an arbitrary current value.
+
+`replica context` reads explicit refs from one checkpoint. It retains missing
+and conflict markers. It does not expand a policy or tier manifest yet.
+
+With `--json`, failed writes return structured errors on stdout and exit 1.
+Stale-version and conflict errors include the current heads. Successful reads
+of conflicts exit 0. Without `--json`, failures use stderr.
+
+`mcp --tool-set replicated` exposes `topic_read`, `topic_create`,
+`topic_replace`, `topic_resolve`, `topic_conflicts`, and `topic_context`.
+Results carry the same JSON in text and MCP `structuredContent`, as the
+[MCP tool specification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#structured-content)
+recommends for compatibility. The server requires a
+previously initialised local replica. Its explicit policy/tier flags are
+refused until configured context is available. The default tool set stays
+ordinary. Replicated writers use the configured or negotiated client author.
+
+`REPLICA` stores local identity before its registration event. Repeated init
+reuses this identity and completes an interrupted registration. This file is
+local configuration; it must not enter the replication archive.
+
+Legacy environment entry points refuse checkpoint markers before they open
+legacy object, ref or cache files. Old installed binaries do not have this
+guard; coordinated upgrades still precede any real migration.
+
+`TopicsTests` exercises divergent writes by two registered replicas, type
+conflicts, explicit resolution and captured context. `ReplicaInterfaceTests`
+checks CLI output and JSON-RPC responses. `test/smoke-replica.cjs` tests the
+actual CLI and stdio MCP server against a temporary repository. The Nix
+`replica` check runs this smoke test without a remote or model.

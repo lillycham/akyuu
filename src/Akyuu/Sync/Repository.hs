@@ -10,6 +10,7 @@ module Akyuu.Sync.Repository
     initialise,
     initialiseWith,
     openRepository,
+    readStoreIdentity,
     loadSnapshot,
     commitLocal,
     commitLocalWith,
@@ -155,6 +156,12 @@ openRepository path = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   let repo = Repository root store
   _ <- ExceptT (loadSnapshot repo)
   pure repo
+
+readStoreIdentity :: FilePath -> IO (Either RepositoryError StoreId)
+readStoreIdentity root =
+  fmap join $
+    tryWith RepositoryIO $
+      parseIdentity <$> boundedRead 256 (root </> "IDENTITY")
 
 identityBytes :: StoreId -> ByteString
 identityBytes (StoreId store) = "akyuu-sync-repository-v1\n" <> encodeUtf8 (renderIdentifier store) <> "\n"

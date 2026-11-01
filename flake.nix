@@ -111,6 +111,12 @@
       });
 
       checks = forAllSystems (pkgs: {
+        replica = pkgs.runCommand "akyuu-replica-check"
+          { nativeBuildInputs = [ pkgs.nodejs ]; }
+          ''
+            node ${./test/smoke-replica.cjs} ${akyuuFor pkgs}/bin/akyuu
+            touch $out
+          '';
         # The unit tests, in the Nix sandbox. The tests of provenance read an
         # archived transcript with zstd, so zstd is a tool of the test run.
         # Without it those tests print "skipped" and pass.

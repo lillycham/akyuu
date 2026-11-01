@@ -156,7 +156,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
 import Database.SQLite.Simple (SQLError)
-import System.Directory (doesDirectoryExist, doesFileExist)
+import System.Directory (doesDirectoryExist, doesFileExist, doesPathExist)
 import System.FilePath ((</>))
 
 -- The environment ------------------------------------------------------
@@ -187,17 +187,21 @@ resolveRoot opt env = case filter (not . null) (catMaybes [opt, env]) of
 withEnv :: FilePath -> (Env -> IO (Either AkyuuError a)) -> IO (Either AkyuuError a)
 withEnv root act = do
   there <- doesDirectoryExist root
+  checkpointMarkers <- traverse (doesPathExist . (root </>)) ["IDENTITY", "CURRENT", "REPLICA"]
   if not there
     then pure (Left (RootMissing root))
-    else do
-      opened <- runExceptT $ do
-        s <- withExceptT StoreFailed (ExceptT (openStore root))
-        rs <- withExceptT RefFailed (ExceptT (openRefs root))
-        c <- withExceptT CacheFailed (ExceptT (openCache root))
-        pure (Env s rs c)
-      case opened of
-        Left e -> pure (Left e)
-        Right env -> act env `finally` closeCache (envCache env)
+    else
+      if or checkpointMarkers
+        then pure (Left (BadInput "This is a checkpoint repository. Use replica commands or mcp --tool-set replicated."))
+        else do
+          opened <- runExceptT $ do
+            s <- withExceptT StoreFailed (ExceptT (openStore root))
+            rs <- withExceptT RefFailed (ExceptT (openRefs root))
+            c <- withExceptT CacheFailed (ExceptT (openCache root))
+            pure (Env s rs c)
+          case opened of
+            Left e -> pure (Left e)
+            Right env -> act env `finally` closeCache (envCache env)
 
 -- New memories ---------------------------------------------------------
 

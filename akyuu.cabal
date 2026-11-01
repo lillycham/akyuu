@@ -84,6 +84,7 @@ library
                    , Akyuu.Sync.State
                    , Akyuu.Sync.Checkpoint
                    , Akyuu.Sync.Repository
+                   , Akyuu.Sync.Topics
                    , Akyuu.GC
                    , Akyuu.Query
                    , Akyuu.Error
@@ -126,6 +127,8 @@ test-suite akyuu-test
                     , CompareTests
                     , ReviewTests
                     , RepositoryTests
+                    , ReplicaInterfaceTests
+                    , TopicsTests
                     , TierTests
                     , TopicTests
                     , TopicOpsTests

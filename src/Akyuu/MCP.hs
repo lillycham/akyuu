@@ -24,6 +24,8 @@ module Akyuu.MCP
     RememberArgs (..),
     ReplaceArgs (..),
     ToolResult (..),
+    ReplicaCall (..),
+    runReplicaTool,
     CallError (..),
     toolList,
     ToolSet (..),
@@ -44,6 +46,7 @@ module Akyuu.MCP
     expandCall,
     clientAgent,
     serve,
+    serveReplica,
   )
 where
 
@@ -63,6 +66,8 @@ import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName,
 import Akyuu.Related qualified as Related
 import Akyuu.Render (compareLines, edgeName, episodeLines, findingLines, heldBy, idLine, logLines, memoryText, neighbourLines, refLines, refLinkLines, refListLinesWith, searchLinesWith, shortIds, sourceShowLines, tierLinesWithin, tierPage, viewLines)
 import Akyuu.Source qualified as Source
+import Akyuu.Sync.State (Version, parseVersion)
+import Akyuu.Sync.Topics qualified as Topics
 import Akyuu.Tier (Place (Place), defaultPolicyRef, defaultTiersRef)
 import Akyuu.Topic qualified as Topic
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
@@ -85,7 +90,7 @@ import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding (encodeUtf8)
+import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time (NominalDiffTime)
 import Data.Version (showVersion)
 import Paths_akyuu qualified as Pkg
@@ -95,7 +100,8 @@ import System.IO (BufferMode (LineBuffering), hFlush, hIsEOF, hPutStrLn, hSetBin
 
 -- | A tool call, with its arguments checked.
 data ToolCall
-  = CallAdd NewMemory
+  = CallReplica ReplicaCall
+  | CallAdd NewMemory
   | -- | Add a memory and make a new ref for it.
     CallAddRef Name NewMemory
   | -- | By 'Id' ('Right') or by the current value of a ref ('Left').
@@ -169,11 +175,26 @@ data ReplaceArgs = ReplaceArgs
   }
   deriving (Eq, Show)
 
+data ReplicaCall
+  = TopicRead Name
+  | TopicCreate Name NewMemory
+  | TopicReplace Name Version NewMemory
+  | TopicResolve Name Version (Either Id NewMemory)
+  | TopicConflicts
+  | TopicContext [Name]
+  deriving (Eq, Show)
+
 -- | The result of a tool: text, and whether it is an error.
-data ToolResult = ToolResult
-  { resultText :: Text,
-    resultIsError :: Bool
-  }
+data ToolResult
+  = ToolResult
+      { resultText :: Text,
+        resultIsError :: Bool
+      }
+  | StructuredToolResult
+      { resultText :: Text,
+        resultIsError :: Bool,
+        resultStructured :: Value
+      }
   deriving (Eq, Show)
 
 -- | Why a tool call could not start.
@@ -571,12 +592,13 @@ parseToolCall n args = checkArgNames n args *> parseArgs n args
 -- Maintenance exposes the full interface, with the same version checks.
 -- Topic speaks in topics and plain text: no ids, no edge kinds, and a version
 -- only where a whole text is rewritten.
-data ToolSet = Ordinary | Maintenance | Topic
+data ToolSet = Ordinary | Maintenance | Topic | Replicated
   deriving (Eq, Show)
 
 toolsFor :: ToolSet -> [Value]
 toolsFor Maintenance = toolList
 toolsFor Topic = topicTools
+toolsFor Replicated = replicaToolList
 toolsFor Ordinary = map ordinarySchema (filter ordinaryTool toolList)
   where
     ordinaryTool (Object t) = case KM.lookup "name" t of
@@ -626,7 +648,10 @@ parseToolCallFor cfg n args
       checkArgNamesIn (argNamesOf (toolsForConfig cfg)) n args
       if mcpToolSet cfg == Ordinary && n == "add" then () <$ refArg args else pure ()
       let args' =
-            if mcpToolSet cfg == Ordinary && n `elem` ["add", "supersede"] && not (KM.member "agent" args)
+            if ( (mcpToolSet cfg == Ordinary && n `elem` ["add", "supersede"])
+                   || (mcpToolSet cfg == Replicated && n `elem` ["topic_create", "topic_replace", "topic_resolve"] && not (KM.member "select" args))
+               )
+              && not (KM.member "agent" args)
               then KM.insert "agent" (String author) args
               else args
       if mcpToolSet cfg == Topic then parseTopicArgs n args else parseArgs n args'
@@ -636,8 +661,38 @@ parseToolCallFor cfg n args
     named _ = False
 
 -- | The names of the arguments of each tool, from the schemas of 'toolList'.
+replicaMemoryProps :: [(Text, Value)]
+replicaMemoryProps = map complete memoryProps
+  where
+    complete (key, schema)
+      | key `elem` ["about", "derived_from", "refines"] =
+          (key, object ["type" .= ("array" :: Text), "items" .= stringSchema "A complete memory ID. Prefixes are not supported in the replicated tool set."])
+      | key == "body" = (key, stringSchema "Nonblank memory text. It can have many lines.")
+      | otherwise = (key, schema)
+
+replicaToolList :: [Value]
+replicaToolList =
+  [ tool "topic_read" "Read a topic with its opaque version and every current head. A conflict has no selected current value." (objectSchema [("ref", refSchema)] ["ref"]),
+    tool "topic_create" "Create a topic. Fail if the name exists. The configured author is the default." (objectSchema (("ref", refSchema) : replicaMemoryProps) ["ref", "kind", "body"]),
+    tool "topic_replace" "Replace one resolved topic. Copy the complete version from topic_read as expected. Resolve conflicts first." (objectSchema (("ref", refSchema) : ("expected", versionSchema) : replicaMemoryProps) ["ref", "expected", "kind", "body"]),
+    tool "topic_resolve" "Resolve every current head. Give select for one current memory, or kind and body for a merged memory. Require the complete observed version." (objectSchema (("ref", refSchema) : ("expected", versionSchema) : ("select", stringSchema "A complete memory ID from one current head.") : replicaMemoryProps) ["ref", "expected"]),
+    tool "topic_conflicts" "List unresolved topic and type conflicts. Independent log heads are not conflicts." (objectSchema [] []),
+    tool "topic_context" "Read explicit refs from one checkpoint, including missing refs and conflict markers. This experimental tool does not expand configured tiers." (objectSchema [("refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "minItems" .= (1 :: Int)])] ["refs"])
+  ]
+  where
+    tool :: Text -> Text -> Value -> Value
+    tool n d s = object ["name" .= n, "description" .= d, "inputSchema" .= s]
+
+versionSchema :: Value
+versionSchema = stringSchema "The complete opaque version from topic_read. It identifies all causal heads, not a memory."
+
+versionArg :: Args -> Either CallError Version
+versionArg args = do
+  text <- required args "expected" asText "a string"
+  first (const (BadArguments "expected must be a complete opaque topic version.")) (parseVersion text)
+
 toolArgNames :: Map.Map Text [Text]
-toolArgNames = argNamesOf toolList
+toolArgNames = argNamesOf (toolList <> replicaToolList)
 
 -- | The names of the arguments of each tool of a list, from its schemas.
 argNamesOf :: [Value] -> Map.Map Text [Text]
@@ -691,6 +746,26 @@ atLeast k lo v
 
 parseArgs :: Text -> Args -> Either CallError ToolCall
 parseArgs n args = case n of
+  "topic_read" -> CallReplica . TopicRead <$> refArg args
+  "topic_create" -> CallReplica <$> (TopicCreate <$> refArg args <*> memoryArg args plainEdges)
+  "topic_replace" -> CallReplica <$> (TopicReplace <$> refArg args <*> versionArg args <*> memoryArg args plainEdges)
+  "topic_resolve" -> do
+    ref <- refArg args
+    expected <- versionArg args
+    selected <- optIdArg args "select"
+    content <- case selected of
+      Nothing -> Right <$> memoryArg args plainEdges
+      Just digest -> do
+        unless
+          (all (\(key, _) -> not (KM.member (K.fromText key) args)) memoryProps)
+          (Left (BadArguments "Give select or new memory fields, not both."))
+        pure (Left digest)
+    pure (CallReplica (TopicResolve ref expected content))
+  "topic_conflicts" -> pure (CallReplica TopicConflicts)
+  "topic_context" -> do
+    refs <- required args "refs" (asList asText) "a list of ref names" >>= traverse parseName
+    unless (not (null refs)) (Left (BadArguments "Give at least one ref."))
+    pure (CallReplica (TopicContext refs))
   "add" -> do
     m <- memoryArg args (plainEdges <> [("supersedes", Supersedes)])
     r <- optional' args "ref" asText "a string" >>= traverse parseName
@@ -943,6 +1018,7 @@ runTool cfg env c = either failed id <$> go
     okText = ToolResult
     lines' empty ls = okText (if null ls then empty else T.intercalate "\n" ls) False
     go = case c of
+      CallReplica _ -> pure (Left (BadInput "Replicated topic calls require the replicated tool set and a checkpoint repository."))
       CallAdd n -> fmap (\i -> okText (Id.render i) False) <$> addMemory env n
       CallAddRef r n -> fmap (\i -> okText (Id.render i) False) <$> addUnderRef env r n
       CallGet t -> do
@@ -1095,6 +1171,23 @@ data McpConfig = McpConfig
 defaultMcpConfig :: McpConfig
 defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing Ordinary Nothing Nothing
 
+runReplicaTool :: McpConfig -> Topics.LocalReplica -> ToolCall -> IO ToolResult
+runReplicaTool _ local call = case call of
+  CallReplica operation -> case operation of
+    TopicRead name -> viewResult <$> Topics.readTopic local name
+    TopicCreate name new -> viewResult <$> Topics.createTopic local name new
+    TopicReplace name expected new -> viewResult <$> Topics.replaceTopic local name expected new
+    TopicResolve name expected (Left selected) -> viewResult <$> Topics.selectTopic local name expected selected
+    TopicResolve name expected (Right new) -> viewResult <$> Topics.resolveTopic local name expected new
+    TopicConflicts -> contextResult <$> Topics.conflicts local
+    TopicContext names -> contextResult <$> Topics.contextTopics local names
+  _ -> pure (ToolResult "This tool is unavailable in the replicated tool set." True)
+  where
+    structured failed payload = StructuredToolResult (decodeUtf8 (BL.toStrict (A.encode payload))) failed payload
+    failure err = structured True (Topics.errorJSON err)
+    viewResult = either failure (structured False . Topics.viewJSON)
+    contextResult = either failure (structured False . Topics.contextJSON)
+
 -- | The result of @initialize@.
 initializeResult :: McpConfig -> Maybe Text -> Value
 initializeResult cfg asked =
@@ -1106,6 +1199,7 @@ initializeResult cfg asked =
     ]
   where
     instructions = case mcpToolSet cfg of
+      Replicated -> "This experimental repository supports local topic operations. Read with topic_read. Copy its opaque version as expected for topic_replace or topic_resolve. A memory ID is not a version. Conflicts retain every head; never choose one silently. topic_context reads explicit refs only. Configured tiers, logs, search and remote sync are not available in this tool set."
       Topic ->
         "akyuu is a memory store. A topic is a name, such as kitchen/oven, with the text that is current about it. \
         \Use recall to find a topic or to read one, remember to make a topic, add_to to add a line, \
@@ -1136,9 +1230,11 @@ initializeResult cfg asked =
 toolResultValue :: ToolResult -> Value
 toolResultValue r =
   object
-    [ "content" .= [object ["type" .= ("text" :: Text), "text" .= resultText r]],
-      "isError" .= resultIsError r
-    ]
+    ( [ "content" .= [object ["type" .= ("text" :: Text), "text" .= resultText r]],
+        "isError" .= resultIsError r
+      ]
+        <> case r of StructuredToolResult _ _ value -> ["structuredContent" .= value]; _ -> []
+    )
 
 -- | Answer one JSON-RPC message.
 --
@@ -1224,7 +1320,13 @@ clientAgent line = case A.decodeStrict line of
 -- each one. A tool that throws an exception (a bug) gives an error result,
 -- and the server goes on. Logs go to stderr.
 serve :: McpConfig -> Env -> IO ()
-serve cfg env = do
+serve cfg env = serveUsing cfg (expandCall (resolvePrefix env)) (\now -> runTool now env)
+
+serveReplica :: McpConfig -> Topics.LocalReplica -> IO ()
+serveReplica cfg local = serveUsing cfg (pure . Right) (\now -> runReplicaTool now local)
+
+serveUsing :: McpConfig -> (BS.ByteString -> IO (Either Value BS.ByteString)) -> (McpConfig -> ToolCall -> IO ToolResult) -> IO ()
+serveUsing cfg expand run = do
   hSetBinaryMode stdin True
   hSetBinaryMode stdout True
   hSetBuffering stdout LineBuffering
@@ -1241,14 +1343,14 @@ serve cfg env = do
         forM_ (clientAgent line) $ \name ->
           modifyIORef' cfgRef (\c -> if T.null (mcpAgent c) then c {mcpAgent = name} else c)
         now <- readIORef cfgRef
-        expanded <- expandCall (resolvePrefix env) line
+        expanded <- expand line
         answer <- case expanded of
           Left v -> pure (Just v)
           Right l -> handleLine now (safeRun now) l
         mapM_ (\v -> BL.hPut stdout (A.encode v <> "\n") >> hFlush stdout) answer
         loop cfgRef
     safeRun now tc = do
-      r <- tryJust notAsync (runTool now env tc)
+      r <- tryJust notAsync (run now tc)
       case r of
         Right x -> pure x
         Left e -> do
