@@ -13,6 +13,9 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
   exchange, fresh join and a separate legacy snapshot copy are experimental.
   Complete consumer integration, performance acceptance and coordinated live
   cutover remain. See [the implementation plan](docs/plans/sync-v1.md).
+  A two-machine SSH experiment passed. Synthetic measurements found long
+  mutation-lock windows and slow archive copies. See the
+  [benchmark report](bench/results/2026-11-03.md).
 
 - **Extend the topic evaluation.** The Sonnet and Haiku runs are in
   [docs/plans/mcp-eval-results.md](docs/plans/mcp-eval-results.md).

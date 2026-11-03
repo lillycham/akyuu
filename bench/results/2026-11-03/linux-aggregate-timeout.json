@@ -1,0 +1,137 @@
+{
+  "created": "2026-11-03T07:37:18.396Z",
+  "platform": "linux",
+  "arch": "arm64",
+  "cpu": "unknown",
+  "memory_gib": 7.3252716064453125,
+  "samples": 5,
+  "profiles": [
+    {
+      "seed_entries": 1000,
+      "seed_ms": 16879.576401000002,
+      "inventory": {
+        "events": 1040,
+        "objects": 1039,
+        "payload_bytes": 1210927,
+        "seed_entries": 1000
+      },
+      "local": {
+        "metrics": [
+          {
+            "first_ms": 247.759322,
+            "max_ms": 250.032877,
+            "median_ms": 247.759322,
+            "operation": "snapshot",
+            "samples_ms": [
+              247.759322,
+              250.032877,
+              249.162973,
+              223.766874,
+              203.90448
+            ]
+          },
+          {
+            "first_ms": 265.290265,
+            "max_ms": 336.461059,
+            "median_ms": 266.030023,
+            "operation": "context",
+            "samples_ms": [
+              265.290265,
+              266.030023,
+              265.164153,
+              301.387841,
+              336.461059
+            ]
+          },
+          {
+            "first_ms": 304.409826,
+            "max_ms": 380.431901,
+            "median_ms": 301.367673,
+            "operation": "search",
+            "samples_ms": [
+              304.409826,
+              301.039433,
+              301.367673,
+              298.812907,
+              380.431901
+            ]
+          },
+          {
+            "first_ms": 996.681322,
+            "max_ms": 1094.526798,
+            "median_ms": 986.760855,
+            "operation": "topic_replace",
+            "samples_ms": [
+              996.681322,
+              1094.526798,
+              982.742555,
+              944.753812,
+              986.760855
+            ]
+          },
+          {
+            "first_ms": 16247.791262,
+            "max_ms": 16247.791262,
+            "median_ms": 894.837096,
+            "operation": "archive",
+            "samples_ms": [
+              16247.791262,
+              6976.516962,
+              894.837096,
+              657.307074,
+              653.891338
+            ]
+          },
+          {
+            "first_ms": 497.994908,
+            "max_ms": 497.994908,
+            "median_ms": 468.217726,
+            "operation": "commit_uncontended",
+            "samples_ms": [
+              497.994908,
+              470.198354,
+              464.094834,
+              468.217726,
+              455.932617
+            ]
+          }
+        ],
+        "samples": 5
+      },
+      "concurrent_commits": {
+        "attempts": [
+          {
+            "busy": false,
+            "ms": 753.870214,
+            "success": true
+          },
+          {
+            "busy": false,
+            "ms": 1400.074675,
+            "success": true
+          }
+        ]
+      },
+      "initial_sync_ms": 2200.954227000002,
+      "join_ms": 34275.911837,
+      "noop_sync_ms": [
+        2521.2010620000074,
+        2463.2128209999937,
+        2527.243678999992
+      ],
+      "status": "complete"
+    },
+    {
+      "seed_entries": 5000,
+      "seed_ms": 84586.105216,
+      "inventory": {
+        "events": 5190,
+        "objects": 5189,
+        "payload_bytes": 6059114,
+        "seed_entries": 5000
+      },
+      "status": "failed",
+      "error": "Measure snapshot\nMeasure context\nMeasure search\nMeasure topic_replace\nMeasure archive\nakyuu-sync-bench: user error (The experiment exceeded its 120-second deadline.)\nHasCallStack backtrace:\n  collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception\n  toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/IO.hs:260:11 in ghc-internal:GHC.Internal.IO\n  throwIO, called at libraries/ghc-internal/src/GHC/Internal/IO/Exception.hs:315:19 in ghc-internal:GHC.Internal.IO.Exception\n  ioException, called at libraries/ghc-internal/src/GHC/Internal/IO/Exception.hs:319:20 in ghc-internal:GHC.Internal.IO.Exception\n\n\n\n\n1 !== 0\n"
+    }
+  ]
+}

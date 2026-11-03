@@ -1,0 +1,125 @@
+{
+  "created": "2026-11-03T07:35:35.732Z",
+  "platform": "linux",
+  "arch": "arm64",
+  "cpu": "unknown",
+  "memory_gib": 7.3252716064453125,
+  "samples": 5,
+  "profiles": [
+    {
+      "seed_entries": 100,
+      "seed_ms": 1964.758667,
+      "inventory": {
+        "events": 106,
+        "objects": 105,
+        "payload_bytes": 119698,
+        "seed_entries": 100
+      },
+      "local": {
+        "metrics": [
+          {
+            "first_ms": 25.441441,
+            "max_ms": 25.441441,
+            "median_ms": 24.12805,
+            "operation": "snapshot",
+            "samples_ms": [
+              25.441441,
+              24.988634,
+              24.12805,
+              22.560471,
+              22.922091
+            ]
+          },
+          {
+            "first_ms": 33.278175,
+            "max_ms": 33.278175,
+            "median_ms": 33.004852,
+            "operation": "context",
+            "samples_ms": [
+              33.278175,
+              32.647494,
+              32.976042,
+              33.02468,
+              33.004852
+            ]
+          },
+          {
+            "first_ms": 30.997002,
+            "max_ms": 31.121056,
+            "median_ms": 30.997002,
+            "operation": "search",
+            "samples_ms": [
+              30.997002,
+              30.992003,
+              31.121056,
+              30.878323,
+              31.033535
+            ]
+          },
+          {
+            "first_ms": 111.740537,
+            "max_ms": 162.495994,
+            "median_ms": 154.32471,
+            "operation": "topic_replace",
+            "samples_ms": [
+              111.740537,
+              135.979915,
+              154.32471,
+              162.495994,
+              159.784313
+            ]
+          },
+          {
+            "first_ms": 1690.522097,
+            "max_ms": 1690.522097,
+            "median_ms": 221.904568,
+            "operation": "archive",
+            "samples_ms": [
+              1690.522097,
+              864.633473,
+              221.904568,
+              91.66177,
+              78.438667
+            ]
+          },
+          {
+            "first_ms": 76.000206,
+            "max_ms": 95.771541,
+            "median_ms": 88.179508,
+            "operation": "commit_uncontended",
+            "samples_ms": [
+              76.000206,
+              83.592554,
+              88.179508,
+              90.987217,
+              95.771541
+            ]
+          }
+        ],
+        "samples": 5
+      },
+      "concurrent_commits": {
+        "attempts": [
+          {
+            "busy": false,
+            "ms": 347.635611,
+            "success": true
+          },
+          {
+            "busy": false,
+            "ms": 168.048778,
+            "success": true
+          }
+        ]
+      },
+      "initial_sync_ms": 822.9717229999997,
+      "join_ms": 4199.289298999998,
+      "noop_sync_ms": [
+        694.7137210000001,
+        673.5520350000006,
+        709.3337179999999
+      ],
+      "status": "complete"
+    }
+  ]
+}
