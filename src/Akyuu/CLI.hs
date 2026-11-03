@@ -161,7 +161,7 @@ data Check i
 data ReplicaResolution i = SelectHead i | MergeHeads (MemoryArgs i)
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
-data ReplicaContextArgs = ReplicaContextArgs (Maybe Name) (Maybe Name) Text (Maybe Text) [Name]
+data ReplicaContextArgs = ReplicaContextArgs (Maybe Name) (Maybe Name) Text (Maybe Text) [Name] ReplicaLogs.LogPageOptions
   deriving (Eq, Show)
 
 data ReplicaCommand i
@@ -440,6 +440,12 @@ commandParser =
         <*> strOption (long "tier" <> value "always" <> metavar "TIER" <> help "The configured context tier.")
         <*> optional (strOption (long "cwd" <> metavar "DIR" <> help "The session directory."))
         <*> many (option nameReader (long "ref" <> metavar "NAME" <> help "An extra context ref."))
+        <*> ( ReplicaLogs.LogPageOptions
+                <$> option (atLeast 1) (long "log-page" <> value 1 <> metavar "N" <> help "The page of each resolved log; default 1.")
+                <*> option (atLeast 1) (long "log-limit" <> value 20 <> metavar "N" <> help "Entries per log page, from 1 to 100.")
+                <*> option (atLeast 0) (long "log-keep" <> value 10 <> metavar "N" <> help "Recent episodes to retain whole; default 10.")
+                <*> optional (option (eitherReader (first (const "Give a complete checkpoint ID.") . Id.parse . T.pack)) (long "checkpoint" <> metavar "ID" <> help "The checkpoint from the first log page. Required after page 1."))
+            )
     jsonFlag = switch (long "json" <> help "Print structured JSON, including operation errors.")
     keepEpisodes = option (atLeast 0) (long "keep" <> value 10 <> metavar "N" <> help "Recent episodes to retain whole.")
     fullMemory = argument idReader (metavar "ID")
@@ -1062,7 +1068,7 @@ runReplicaCommand root operation = do
       _ -> ""
 
 defaultReplicaContext :: ReplicaContextArgs
-defaultReplicaContext = ReplicaContextArgs Nothing Nothing "always" Nothing []
+defaultReplicaContext = ReplicaContextArgs Nothing Nothing "always" Nothing [] ReplicaLogs.defaultPageOptions
 
 syncOutput :: Bool -> IO (Either ReplicaSync.SyncError Value) -> IO (Either AkyuuError Output)
 syncOutput json action = do
@@ -1073,11 +1079,11 @@ syncOutput json action = do
     Left err -> Left (BadInput (ReplicaSync.describeSyncError err))
 
 replicaSettings :: ReplicaContextArgs -> ExceptT Topics.TopicError IO ReplicaContext.ContextOptions
-replicaSettings (ReplicaContextArgs policy tiers tier cwd extras) = do
+replicaSettings (ReplicaContextArgs policy tiers tier cwd extras pages) = do
   p <- ExceptT (first (Topics.InvalidInput . describe) <$> resolvePolicyRef policy)
   t <- ExceptT (first (Topics.InvalidInput . describe) <$> resolveTiersRef tiers)
   place <- ExceptT (tryWith Topics.TopicIO (placeFor cwd))
-  pure (ReplicaContext.ContextOptions p t tier (Just place) extras)
+  pure (ReplicaContext.ContextOptions p t tier (Just place) extras pages)
 
 replicaWebAction :: FilePath -> ReplicaContextArgs -> (Topics.LocalReplica -> ReplicaContext.ContextOptions -> ExceptT Topics.TopicError IO Output) -> IO (Either AkyuuError Output)
 replicaWebAction root options action = do

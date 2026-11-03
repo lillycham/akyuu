@@ -2,16 +2,20 @@
 
 module ReplicaReadTests (replicaReadTests) where
 
+import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memBody))
 import Akyuu.Refs (Name, mkName)
+import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Context qualified as Context
+import Akyuu.Sync.Logs qualified as Logs
+import Akyuu.Sync.Repository (snapshotId)
 import Akyuu.Sync.Search qualified as Search
 import Akyuu.Sync.Topics (TopicError (ConfigurationChanged, InvalidInput), TopicHead (headMemory, headMemoryId), TopicStatus (Conflicted, Resolved), TopicView (viewCheckpoint, viewHeads, viewName, viewStatus, viewVersion))
 import Akyuu.Sync.Topics qualified as Topics
 import Akyuu.Sync.Web qualified as Web
 import Akyuu.Tier (Place (Place))
 import Control.Monad (void)
-import Data.Aeson (Value (Object))
+import Data.Aeson (Value (Array, Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
@@ -19,10 +23,12 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding (encodeUtf8)
 import Network.HTTP.Types (statusCode)
 import Network.Wai qualified as Wai
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import Support (right)
+import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import TopicsTests (forkTopic, newTopic, onlyHead, topicName, withLocal)
@@ -31,12 +37,25 @@ name :: Text -> Name
 name = either (error . show) id . mkName
 
 options :: Context.ContextOptions
-options = Context.ContextOptions (name "policy/memory") (name "policy/tiers") "always" Nothing []
+options = Context.ContextOptions (name "policy/memory") (name "policy/tiers") "always" Nothing [] Logs.defaultPageOptions
 
 controls :: Topics.LocalReplica -> Text -> IO ()
 controls local manifest = do
   void (Topics.createTopic local (Context.policyRef options) (newTopic "Original policy") >>= right)
   void (Topics.createTopic local (Context.manifestRef options) (newTopic manifest) >>= right)
+
+logFixture :: Topics.LocalReplica -> IO [Id.Id]
+logFixture local = do
+  controls local "always: me/log"
+  ids <- traverse append ["a", "b", "c", "d", "e"]
+  levels <- Logs.readLevels local (name "me/log") >>= right
+  _ <- Logs.summarise local (name "me/log") (Logs.levelsToken levels) 1 (take 3 ids) (newTopic "abc summary") >>= right
+  pure ids
+  where
+    append body = do
+      view <- Topics.readTopic local (name "me/log") >>= right
+      result <- Logs.appendLog local (name "me/log") (viewVersion view) (newTopic body) >>= right
+      headMemoryId <$> onlyHead result
 
 replicaReadTests :: TestTree
 replicaReadTests = testGroup "replica read models" [contextTests, searchTests, webTests]
@@ -45,7 +64,55 @@ contextTests :: TestTree
 contextTests =
   testGroup
     "configured context"
-    [ testCase "tier, place and extra refs retain order and deduplicate" $ withLocal $ \_ local -> do
+    [ testCase "configured logs use bounded summary pages and preserve checkpoint identity" $ withLocal $ \_ local -> do
+        ids <- logFixture local
+        let config = options {Context.logOptions = Logs.LogPageOptions 1 2 1 Nothing}
+        snapshot <- Topics.captureSnapshot local >>= right
+        report <- Context.configuredAt snapshot config >>= right
+        Context.contextReady report @?= True
+        length (Context.contextLogs report) @?= 1
+        let first = head (Context.contextLogs report)
+            CheckpointId checkpoint = snapshotId snapshot
+        map Logs.itemId (Logs.pageItems first) @?= reverse (drop 3 ids)
+        second <- Context.configuredAt snapshot config {Context.logOptions = Logs.LogPageOptions 2 2 1 (Just checkpoint)} >>= right
+        map (memBody . Logs.itemMemory) (Logs.pageItems (head (Context.contextLogs second))) @?= ["abc summary"]
+        assertBool "plain context omits its checkpoint" (Id.render checkpoint `T.isInfixOf` Context.renderReport second)
+        assertBool "plain context omits source evidence" (all (\digest -> Id.render digest `T.isInfixOf` Context.renderReport second) (take 3 ids))
+        assertBool "log checkpoint differs" (all ((== Context.contextCheckpoint report) . viewCheckpoint . Logs.pageTopic) (Context.contextLogs report)),
+      testCase "damaged log history is a diagnostic, never a chosen partial summary" $ withLocal $ \root local -> do
+        ids <- logFixture local
+        snapshot <- Topics.captureSnapshot local >>= right
+        BS.writeFile (root </> "objects" </> T.unpack (Id.render (head ids))) "damaged"
+        report <- Context.configuredAt snapshot options >>= right
+        Context.contextReady report @?= False
+        Context.contextLogs report @?= []
+        assertBool "missing history diagnostic" (any (T.isInfixOf "incomplete") (Context.contextIssues report)),
+      testCase "a log cannot supply control instructions" $ withLocal $ \_ local -> do
+        void (Topics.createTopic local (Context.manifestRef options) (newTopic "always: me/hidden") >>= right)
+        empty <- Topics.readTopic local (Context.policyRef options) >>= right
+        _ <- Logs.appendLog local (Context.policyRef options) (viewVersion empty) (newTopic "log policy") >>= right
+        report <- Context.configuredContext local options >>= right
+        Context.contextReady report @?= False
+        Context.maintenanceReady report @?= False
+        map viewName (Context.contextEntries report) @?= [Context.policyRef options, Context.manifestRef options],
+      testCase "a topic at a summary level diagnoses the log without hiding its heads" $ withLocal $ \_ local -> do
+        controls local "always: me/log"
+        empty <- Topics.readTopic local (name "me/log") >>= right
+        _ <- Logs.appendLog local (name "me/log") (viewVersion empty) (newTopic "episode") >>= right
+        _ <- Topics.createTopic local (name "me/log.l1") (newTopic "conflicting summary type") >>= right
+        report <- Context.configuredContext local options >>= right
+        Context.contextReady report @?= False
+        Context.contextLogs report @?= []
+        assertBool "missing summary diagnostic" (not (null (Context.contextIssues report)))
+        length (viewHeads (last (Context.contextEntries report))) @?= 1,
+      testCase "configured continuation refuses a changed checkpoint before expansion" $ withLocal $ \_ local -> do
+        _ <- logFixture local
+        snapshot <- Topics.captureSnapshot local >>= right
+        let CheckpointId checkpoint = snapshotId snapshot
+            config = options {Context.logOptions = Logs.LogPageOptions 2 1 1 (Just checkpoint)}
+        void (Topics.createTopic local topicName (newTopic "changed") >>= right)
+        Context.configuredContext local config >>= (@?= Left ConfigurationChanged),
+      testCase "tier, place and extra refs retain order and deduplicate" $ withLocal $ \_ local -> do
         controls local "always: me/profile me/shared\nat ~/code: me/project me/shared\nbackground: me/other"
         mapM_ (\ref -> void (Topics.createTopic local (name ref) (newTopic ref) >>= right)) ["me/profile", "me/shared", "me/project", "me/extra"]
         report <- Context.configuredContext local options {Context.wantedPlace = Just (Place "/home/test" "/home/test/code/app"), Context.extraRefs = [name "me/shared", name "me/extra"]} >>= right
@@ -164,7 +231,18 @@ webTests :: TestTree
 webTests =
   testGroup
     "replica browser"
-    [ testCase "bundle, context and search share one checkpoint" $ withLocal $ \root local -> do
+    [ testCase "browser log pages share context and refuse stale continuation" $ withLocal $ \_ local -> do
+        _ <- logFixture local
+        bundle <- Web.readView local options Nothing 20 >>= right
+        case at ["logs"] bundle of
+          Just (Array reports) -> mapM_ (\report -> at ["checkpoint"] report @?= at ["checkpoint"] bundle) reports
+          _ -> assertFailure "No browser logs."
+        checkpoint <- case at ["checkpoint"] bundle of Just (String text) -> pure (encodeUtf8 text); _ -> assertFailure "No checkpoint."
+        call local "GET" ["api", "view"] (Just "localhost:7421") [("log_page", Just "2")] >>= (@?= 400)
+        call local "GET" ["api", "view"] (Just "localhost:7421") [("log_page", Just "2"), ("checkpoint", Just checkpoint)] >>= (@?= 200)
+        void (Topics.createTopic local topicName (newTopic "later") >>= right)
+        call local "GET" ["api", "view"] (Just "localhost:7421") [("log_page", Just "2"), ("checkpoint", Just checkpoint)] >>= (@?= 409),
+      testCase "bundle, context and search share one checkpoint" $ withLocal $ \root local -> do
         void (forkTopic False root local)
         bundle <- Web.readView local options (Just "local") 10 >>= right
         at ["context", "checkpoint"] bundle @?= at ["checkpoint"] bundle
@@ -175,7 +253,10 @@ webTests =
         call local "GET" ["unknown"] (Just "localhost:7421") [] >>= (@?= 404)
         call local "GET" [] (Just "localhost:7421") [] >>= (@?= 200)
         call local "GET" ["api", "view"] (Just "localhost:7421") [("limit", Just "0")] >>= (@?= 400)
-        call local "GET" ["api", "view"] (Just "localhost:7421") [("q", Just "word"), ("q", Just "other")] >>= (@?= 400),
+        call local "GET" ["api", "view"] (Just "localhost:7421") [("q", Just "word"), ("q", Just "other")] >>= (@?= 400)
+        call local "GET" ["api", "source"] (Just "localhost:7421") [] >>= (@?= 400)
+        call local "GET" ["api", "source"] (Just "localhost:7421") [("checkpoint", Just "bad"), ("memory", Just "bad")] >>= (@?= 400)
+        call local "GET" ["api", "view"] (Just "localhost:7421") [("log_limit", Just "101")] >>= (@?= 400),
       testCase "static export escapes memory text outside executable script" $ withLocal $ \_ local -> do
         void (Topics.createTopic local topicName (newTopic "</script><img src=x onerror=alert(1)>") >>= right)
         bytes <- Web.staticPage local options >>= right

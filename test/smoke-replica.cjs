@@ -191,6 +191,21 @@ async function main() {
   const stalePin = await tool('pin_set', { id: memoryA, expected: noPin.structuredContent.version });
   assert.equal(stalePin.isError, true);
   assert.equal(stalePin.structuredContent.error, 'stale-version');
+  const latestLog = jsonCli(['replica', 'read', 'me/log']);
+  const episodeC = jsonCli(['replica', 'append', 'me/log', '--expected', latestLog.version, '--kind', 'note', '--agent', 'test', '--body', 'recent episode c']);
+  const configuredLog = await tool('configured_context', { refs:['me/log'], log_keep:1, log_limit:1 });
+  assert.equal(configuredLog.isError,false);
+  assert.equal(configuredLog.structuredContent.ready,true);
+  assert.equal(configuredLog.structuredContent.logs[0].entries[0].body,'recent episode c');
+  const checkpoint = configuredLog.structuredContent.checkpoint;
+  const nextLog = await tool('configured_context', { refs:['me/log'], log_keep:1, log_limit:1, log_page:2, log_checkpoint:checkpoint });
+  assert.equal(nextLog.isError,false);
+  assert.equal(nextLog.structuredContent.logs[0].entries[0].level,1);
+  assert.equal(nextLog.structuredContent.logs[0].entries[0].direct_sources.length,2);
+  const cliLog = jsonCli(['replica','configured-context','--ref','me/log','--log-keep','1','--log-limit','1','--log-page','2','--checkpoint',checkpoint]);
+  assert.deepEqual(cliLog.logs,nextLog.structuredContent.logs);
+  const badPage = await rpc('tools/call',{name:'configured_context',arguments:{log_page:2}});
+  assert.equal(badPage.result.isError,true);
   const finished = once(server, 'exit');
   server.stdin.end();
   const [code] = await Promise.race([finished, new Promise((_, reject) => {
@@ -218,6 +233,24 @@ async function main() {
   assert.equal(web.checkpoint, web.context.checkpoint);
   assert.equal(web.checkpoint, web.search.checkpoint);
   assert.ok(web.topics.every(topic => topic.checkpoint === web.checkpoint));
+  const firstPageResponse = await fetch(new URL('api/view?log_limit=1&log_keep=1',address),{signal:AbortSignal.timeout(5000)});
+  const firstPage = await firstPageResponse.json();
+  const firstLog = firstPage.logs.find(log=>log.topic?.topic==='me/log');
+  assert.equal(firstLog.entries[0].body,'recent episode c');
+  const nextURL = new URL(`api/view?log_limit=1&log_keep=1&log_page=2&checkpoint=${firstPage.checkpoint}`,address);
+  const secondPageResponse = await fetch(nextURL,{signal:AbortSignal.timeout(5000)});
+  assert.equal(secondPageResponse.status,200);
+  const secondPage = await secondPageResponse.json();
+  const secondLog = secondPage.logs.find(log=>log.topic?.topic==='me/log');
+  assert.equal(secondLog.entries[0].level,1);
+  assert.deepEqual(secondLog.entries[0].sources.sort(),[episodeA.structuredContent.heads[0].memory,episodeB.heads[0].memory].sort());
+  const sourceURL = new URL(`api/source?checkpoint=${secondPage.checkpoint}&memory=${episodeA.structuredContent.heads[0].memory}`,address);
+  const sourceResponse = await fetch(sourceURL,{signal:AbortSignal.timeout(5000)});
+  assert.equal(sourceResponse.status,200);
+  assert.equal((await sourceResponse.json()).body,'episode a');
+  jsonCli(['replica','append','me/log','--expected',episodeC.version,'--kind','note','--agent','test','--body','later episode']);
+  assert.equal((await fetch(nextURL,{signal:AbortSignal.timeout(5000)})).status,409);
+  assert.equal((await fetch(sourceURL,{signal:AbortSignal.timeout(5000)})).status,409);
   const denied = await fetch(new URL('api/view', address), { method: 'POST', signal: AbortSignal.timeout(5000) });
   assert.equal(denied.status, 405);
   const hostileStatus = await new Promise((resolve, reject) => {

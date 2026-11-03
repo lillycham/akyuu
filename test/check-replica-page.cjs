@@ -28,6 +28,13 @@ function setup(embedded, fetch) {
 }
 function text(node) { return node.textContent + node.children.map(text).join('\n'); }
 function count(node, tag) { return Number(node.tag === tag) + node.children.reduce((sum,child)=>sum+count(child,tag),0); }
+function find(node, label) { if(node.tag==='button'&&node.textContent.startsWith(label))return node;for(const child of node.children){const found=find(child,label);if(found)return found;} }
+function logFixture(page=1) {
+  const bundle=fixture();
+  const topic={topic:'me/log',status:'log',heads:[]};
+  const report={topic,checkpoint:bundle.checkpoint,page,has_more:page===1,total:3,entries:[{memory:'sha256-summary',body:'summary <img onerror=bad()>',level:1,sources:['sha256-base-a','sha256-base-b'],direct_sources:['sha256-direct-a','sha256-direct-b']}]};
+  bundle.topics=[topic];bundle.logs=[report];bundle.context={...bundle.context,topics:[topic],logs:[report]};return bundle;
+}
 async function settle() { for(let n=0;n<8;n++) await Promise.resolve(); }
 async function main() {
   const staticView = setup(fixture(), () => {throw new Error('Static export attempted network I/O.');});
@@ -58,6 +65,30 @@ async function main() {
   requests[2].resolve({ok:false,json:async()=>({message:'Repository is damaged.'})});
   await settle();
   assert.match(live.nodes.error.textContent,/Repository is damaged/);
+
+  const staticLog=setup(logFixture(),()=>{throw new Error('Static log attempted network I/O.');});
+  await settle();
+  assert.match(text(staticLog.nodes.detail),/Summary · level 1/);
+  assert.match(text(staticLog.nodes.detail),/sha256-direct-a/);
+  assert.match(text(staticLog.nodes.detail),/snapshot contains this page only/);
+  assert.equal(count(staticLog.nodes.detail,'img'),0);
+  assert.equal(find(staticLog.nodes.detail,'Older'),undefined);
+
+  const logRequests=[];
+  const liveLog=setup(null,url=>new Promise(resolve=>logRequests.push({url,resolve})));
+  logRequests[0].resolve({ok:true,json:async()=>logFixture()});await settle();
+  find(liveLog.nodes.detail,'Read source').events.click();
+  assert.equal(logRequests[1].url.pathname,'/api/source');
+  assert.equal(logRequests[1].url.searchParams.get('checkpoint'),logFixture().checkpoint);
+  logRequests[1].resolve({ok:true,json:async()=>({memory:'sha256-direct-a',body:'exact source <script>bad()</script>',sources:[]})});await settle();
+  assert.match(text(liveLog.nodes.detail),/exact source <script>/);
+  assert.equal(count(liveLog.nodes.detail,'script'),0);
+  find(liveLog.nodes.detail,'Older').events.click();
+  assert.equal(logRequests[2].url.searchParams.get('log_page'),'2');
+  assert.equal(logRequests[2].url.searchParams.get('checkpoint'),logFixture().checkpoint);
+  logRequests[2].resolve({ok:false,status:409,json:async()=>({})});await settle();
+  assert.match(liveLog.nodes.error.textContent,/snapshot changed/);
+  assert.match(text(liveLog.nodes.detail),/page 1/);
   console.log('Replica page DOM checks passed.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

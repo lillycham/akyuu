@@ -15,11 +15,14 @@ import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memBody))
 import Akyuu.Refs (Name, nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
+import Akyuu.Sync.Logs (LogPage, LogPageOptions (pageCheckpoint), pageAt, pageJSON, renderPage, validatePageOptions)
 import Akyuu.Sync.Repository (Snapshot, snapshotId, snapshotState)
 import Akyuu.Sync.State (version)
-import Akyuu.Sync.Topics (LocalReplica, ResolutionGuard, TopicError (InvalidInput), TopicHead (headMemory), TopicStatus (Conflicted, LogTopic, Missing, Resolved, TypeConflicted), TopicView (viewHeads, viewName, viewStatus), captureSnapshot, renderView, topicNames, topicViewAt, viewJSON)
+import Akyuu.Sync.Topics (LocalReplica, ResolutionGuard, TopicError (ConfigurationChanged, InvalidInput), TopicHead (headMemory), TopicStatus (Conflicted, LogTopic, Missing, Resolved, TypeConflicted), TopicView (viewHeads, viewName, viewStatus), captureSnapshot, describeError, renderView, topicNames, topicViewAt, viewJSON)
 import Akyuu.Sync.Types (Resource (RefResource))
 import Akyuu.Tier (Place, parseManifest, placeRefs, tierNames, tierRefs)
+import Control.Monad (when)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE)
 import Data.Aeson (Value, object, (.=))
 import Data.List (nub)
@@ -32,7 +35,8 @@ data ContextOptions = ContextOptions
     manifestRef :: Name,
     wantedTier :: Text,
     wantedPlace :: Maybe Place,
-    extraRefs :: [Name]
+    extraRefs :: [Name],
+    logOptions :: LogPageOptions
   }
   deriving (Eq, Show)
 
@@ -42,6 +46,7 @@ data ContextReport = ContextReport
     contextReady :: Bool,
     contextIssues :: [Text],
     contextEntries :: [TopicView],
+    contextLogs :: [LogPage],
     contextOthers :: [Name],
     availableTiers :: [Text],
     maintenanceReady :: Bool
@@ -55,6 +60,9 @@ configuredContext local options = runExceptT $ do
 
 configuredAt :: Snapshot -> ContextOptions -> IO (Either TopicError ContextReport)
 configuredAt snapshot options = runExceptT $ do
+  ExceptT (pure (validatePageOptions (logOptions options)))
+  let CheckpointId captured = snapshotId snapshot
+  when (maybe False (/= captured) (pageCheckpoint (logOptions options))) (throwE ConfigurationChanged)
   policy <- ExceptT (topicViewAt snapshot (policyRef options))
   manifest <- ExceptT (topicViewAt snapshot (manifestRef options))
   let controlIssues = issues "Policy" policy <> issues "Tier manifest" manifest
@@ -72,14 +80,17 @@ configuredAt snapshot options = runExceptT $ do
         _ -> []
       wanted = nub ([policyRef options, manifestRef options] <> expanded <> extraRefs options)
   entries <- traverse (ExceptT . topicViewAt snapshot) wanted
-  let entryIssues = concatMap (issues "Context") (filter (\view -> viewName view `notElem` [policyRef options, manifestRef options]) entries)
+  logs <- liftIO (traverse (\view -> do result <- pageAt snapshot (viewName view) (logOptions options); pure (viewName view, result)) (filter ((== LogTopic) . viewStatus) entries))
+  let entryIssues = concatMap (\view -> if viewStatus view == LogTopic then [] else issues "Context" view) (filter (\view -> viewName view `notElem` [policyRef options, manifestRef options]) entries)
+      logIssues = ["Context log " <> nameText name <> ": " <> describeError err | (name, Left err) <- logs]
   pure
     ContextReport
       { contextCheckpoint = snapshotId snapshot,
         contextTier = wantedTier options,
-        contextReady = null (diagnostics <> entryIssues),
-        contextIssues = diagnostics <> entryIssues,
+        contextReady = null (diagnostics <> entryIssues <> logIssues),
+        contextIssues = diagnostics <> entryIssues <> logIssues,
         contextEntries = entries,
+        contextLogs = [report | (_, Right report) <- logs],
         contextOthers = filter (`notElem` wanted) (topicNames snapshot),
         availableTiers = maybe [] tierNames parsed,
         maintenanceReady =
@@ -121,6 +132,7 @@ reportJSON report =
       "maintenance_ready" .= maintenanceReady report,
       "issues" .= contextIssues report,
       "topics" .= map viewJSON (contextEntries report),
+      "logs" .= map pageJSON (contextLogs report),
       "other_refs" .= map nameText (contextOthers report),
       "available_tiers" .= availableTiers report
     ]
@@ -128,5 +140,6 @@ reportJSON report =
 renderReport :: ContextReport -> Text
 renderReport report =
   T.unlines
-    (["context: " <> contextTier report, "ready: " <> if contextReady report then "yes" else "no"] <> contextIssues report)
-    <> T.concat (map renderView (contextEntries report))
+    (["context: " <> contextTier report, "checkpoint: " <> let CheckpointId digest = contextCheckpoint report in Id.render digest, "ready: " <> if contextReady report then "yes" else "no"] <> contextIssues report)
+    <> T.concat (map renderView (filter ((/= LogTopic) . viewStatus) (contextEntries report)))
+    <> T.concat (map renderPage (contextLogs report))

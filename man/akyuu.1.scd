@@ -132,6 +132,15 @@ all writers and GC jobs together; old processes do not use this protocol.
 	again under the mutation lock. Control refs themselves remain repairable.
 	Resolution uses the policy and tier names from configuration. Context
 	flags override names for that read only.
+	Logs in the selected tier, directory or extra refs use summary pages.
+	*--log-limit* sets entries per log page, from 1 to 100; the default is 20.
+	*--log-keep* keeps recent episodes whole, from 0 to 4096; the default is 10.
+	*--log-page* selects a page, from 1 to 4096; the default is 1.
+	For later pages, give *--checkpoint* with the checkpoint from page one.
+	A changed checkpoint rejects continuation. Restart at page one.
+	Each log permits at most 4096 memories across at most 32 levels.
+	An excessive or incomplete history gives an explicit diagnostic.
+	Summary entries include direct source IDs and covered episode IDs.
 
 *replica search* _words_ ... [*--limit* _n_] [*--json*]
 	Search current topic heads with SQLite FTS. The limit is from 1 to 100;
@@ -266,11 +275,16 @@ On deadline, terminate the owned process group. Keep accepted local writes.
 	Serve the read-only topic browser on loopback. Port 0, the default, chooses
 	a free port. Print its URL. Context options are as for
 	*replica configured-context*. Each API response contains one checkpoint.
+	Log views distinguish episodes from summaries. Read exact summary sources
+	from the evidence controls. Page and evidence requests reject a changed
+	checkpoint. Refresh to restart at page one.
 
 *replica viz* [_context-options_]
 	Print a static topic browser with an embedded checkpoint. The export has
 	a literal text filter; live search uses SQLite FTS. It loads no external
 	assets. Memory bodies remain plain text.
+	The export contains the selected log page and its source IDs. Further
+	pages and source bodies require the live browser or replica CLI.
 
 With *--json*, errors have a code and a message on stdout. Stale-write and
 conflict errors also include the current heads. The exit code is 1 for a
@@ -280,6 +294,9 @@ Use *mcp --tool-set replicated* for the experimental topic and log tools. Result
 include the same JSON in structured content and text. The set includes
 *configured_context* and *topic_search*. Unresolved or invalid control refs
 block unrelated resolution, but permit repairs to the controls themselves.
+*configured_context* accepts *log_page*, *log_limit* and *log_keep*. Later
+pages also require *log_checkpoint*, copied from the first response.
+Use *log_unfold* to inspect exact summary evidence.
 Missing controls permit initial setup. The log tools are *log_read*,
 *log_append*, *log_levels*, *log_summarise*, *log_resolution*, *log_todo* and
 *log_unfold*. Pin tools are *pin_state*, *pin_set* and *pin_clear*.
