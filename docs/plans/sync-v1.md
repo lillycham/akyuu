@@ -153,7 +153,12 @@ All 1,252 Haskell tests passed in the development shell and native Nix
 sandbox on 2026-11-03. Packaged CLI/MCP/HTTP and
 sync/join/GC/pin/conflict/migration smoke, format, man and legacy version
 compatibility checks passed. SSH/HTTPS authentication, real network faults,
-Linux execution and coordinated live cutover remain unverified.
+and coordinated live cutover remain unverified.
+
+On 2026-11-03, all 1,252 tests also passed in the native aarch64-linux Nix
+sandbox on Apple Silicon with Asahi/NixOS. Packaged replica and sync smoke,
+format, man and legacy version checks passed. The fake Git scripts use the
+shell from PATH because Linux build sandboxes do not provide `/usr/bin/env`.
 
 ## Experimental repository
 
