@@ -3,7 +3,7 @@
 module CheckpointTests (checkpointTests) where
 
 import Akyuu.Id qualified as Id
-import Akyuu.Sync.Checkpoint (CheckpointError (NonCanonicalCheckpoint, UnknownPendingEvent, UnknownPendingObject), checkpointId, mkCheckpoint, parseCheckpoint, renderCheckpoint)
+import Akyuu.Sync.Checkpoint (CheckpointError (NonCanonicalCheckpoint, PendingObjectEvicted, UnknownEvictedObject, UnknownPendingEvent, UnknownPendingObject), activeObjects, checkpointId, mkCheckpoint, parseCheckpoint, renderCheckpoint, withEvicted)
 import Akyuu.Sync.Types (EventId (EventId), StoreId (StoreId), mkIdentifier)
 import Data.ByteString qualified as BS
 import Data.Set qualified as Set
@@ -17,6 +17,15 @@ checkpointTests =
   testGroup
     "Akyuu.Sync.Checkpoint"
     [ testCase "canonical manifest round-trips" $ parseCheckpoint (renderCheckpoint sample) @?= Right sample,
+      testCase "eviction metadata round-trips and changes the checkpoint ID" $ do
+        let published = must (mkCheckpoint store (Set.singleton event) (Set.singleton object) Set.empty Set.empty)
+            evicted = must (withEvicted (Set.singleton object) published)
+        activeObjects evicted @?= Set.empty
+        parseCheckpoint (renderCheckpoint evicted) @?= Right evicted
+        assertBool "residency omitted from checkpoint hash" (checkpointId published /= checkpointId evicted),
+      testCase "unaccepted and pending objects cannot be marked evicted" $ do
+        withEvicted (Set.singleton object) sample @?= Left PendingObjectEvicted
+        withEvicted (Set.singleton (Id.hashBytes "foreign")) sample @?= Left UnknownEvictedObject,
       testCase "hash includes export obligations" $ do
         let acknowledged = must (mkCheckpoint store (Set.singleton event) (Set.singleton object) Set.empty Set.empty)
         assertBool "pending obligations omitted from hash" (checkpointId sample /= checkpointId acknowledged),

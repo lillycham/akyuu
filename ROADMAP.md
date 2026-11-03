@@ -7,8 +7,9 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
 
 - **Multi-machine sync.** Experimental checkpoint topics have local CLI,
   MCP, configured context, search and read-only browser interfaces. DAG logs
-  and summary levels have CLI and MCP interfaces. GC/archive integration,
-  migration and Git transport remain. See [the implementation plan](docs/plans/sync-v1.md).
+  and summary levels have CLI and MCP interfaces. Local archive and GC
+  protect pending exports; pins and reviews use causal events. Migration
+  and Git transport remain. See [the implementation plan](docs/plans/sync-v1.md).
 
 - **Extend the topic evaluation.** The Sonnet and Haiku runs are in
   [docs/plans/mcp-eval-results.md](docs/plans/mcp-eval-results.md).

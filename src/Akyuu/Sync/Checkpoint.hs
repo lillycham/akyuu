@@ -6,6 +6,9 @@ module Akyuu.Sync.Checkpoint
     checkpointStore,
     checkpointEvents,
     checkpointObjects,
+    evictedObjects,
+    activeObjects,
+    withEvicted,
     pendingEvents,
     pendingObjects,
     checkpointId,
@@ -36,6 +39,7 @@ data Checkpoint = Checkpoint
   { checkpointStore :: StoreId,
     checkpointEvents :: Set EventId,
     checkpointObjects :: Set Id,
+    evictedObjects :: Set Id,
     pendingEvents :: Set EventId,
     pendingObjects :: Set Id
   }
@@ -47,6 +51,8 @@ data CheckpointError
   | CheckpointTooLarge
   | UnknownPendingEvent
   | UnknownPendingObject
+  | UnknownEvictedObject
+  | PendingObjectEvicted
   deriving (Eq, Show)
 
 maxCheckpointBytes :: Int
@@ -56,9 +62,21 @@ mkCheckpoint :: StoreId -> Set EventId -> Set Id -> Set EventId -> Set Id -> Eit
 mkCheckpoint store es objects waitingEvents waitingObjects = do
   unless (waitingEvents `Set.isSubsetOf` es) (Left UnknownPendingEvent)
   unless (waitingObjects `Set.isSubsetOf` objects) (Left UnknownPendingObject)
-  let checkpoint = Checkpoint store es objects waitingEvents waitingObjects
+  let checkpoint = Checkpoint store es objects Set.empty waitingEvents waitingObjects
   when (BS.length (renderCheckpoint checkpoint) > maxCheckpointBytes) (Left CheckpointTooLarge)
   pure checkpoint
+
+activeObjects :: Checkpoint -> Set Id
+activeObjects checkpoint = checkpointObjects checkpoint `Set.difference` evictedObjects checkpoint
+
+-- | Eviction changes local residency, never accepted history or export duties.
+withEvicted :: Set Id -> Checkpoint -> Either CheckpointError Checkpoint
+withEvicted gone checkpoint = do
+  unless (gone `Set.isSubsetOf` checkpointObjects checkpoint) (Left UnknownEvictedObject)
+  unless (Set.null (gone `Set.intersection` pendingObjects checkpoint)) (Left PendingObjectEvicted)
+  let updated = checkpoint {evictedObjects = gone}
+  when (BS.length (renderCheckpoint updated) > maxCheckpointBytes) (Left CheckpointTooLarge)
+  pure updated
 
 checkpointId :: Checkpoint -> CheckpointId
 checkpointId = CheckpointId . Id.hashBytes . renderCheckpoint
@@ -71,6 +89,7 @@ renderCheckpoint checkpoint = encodeUtf8 (T.unlines fields)
       ["akyuu-sync-checkpoint-v1", "store: " <> renderIdentifier store]
         <> ["event: " <> Id.render digest | EventId digest <- Set.toAscList (checkpointEvents checkpoint)]
         <> ["object: " <> Id.render digest | digest <- Set.toAscList (checkpointObjects checkpoint)]
+        <> ["evicted-object: " <> Id.render digest | digest <- Set.toAscList (evictedObjects checkpoint)]
         <> ["pending-event: " <> Id.render digest | EventId digest <- Set.toAscList (pendingEvents checkpoint)]
         <> ["pending-object: " <> Id.render digest | digest <- Set.toAscList (pendingObjects checkpoint)]
 
@@ -84,7 +103,8 @@ parseCheckpoint bytes = do
       store <- StoreId <$> first BadCheckpoint (parseIdentifier storeText)
       initial <- mkCheckpoint store Set.empty Set.empty Set.empty Set.empty
       parsed <- foldM entry initial entries
-      mkCheckpoint store (checkpointEvents parsed) (checkpointObjects parsed) (pendingEvents parsed) (pendingObjects parsed)
+      checked <- mkCheckpoint store (checkpointEvents parsed) (checkpointObjects parsed) (pendingEvents parsed) (pendingObjects parsed)
+      withEvicted (evictedObjects parsed) checked
     _ -> Left (BadCheckpoint "Unknown or incomplete checkpoint header.")
   unless (renderCheckpoint checkpoint == bytes) (Left NonCanonicalCheckpoint)
   pure checkpoint
@@ -95,6 +115,7 @@ parseCheckpoint bytes = do
       case key of
         "event" -> Right checkpoint {checkpointEvents = Set.insert (EventId digest) (checkpointEvents checkpoint)}
         "object" -> Right checkpoint {checkpointObjects = Set.insert digest (checkpointObjects checkpoint)}
+        "evicted-object" -> Right checkpoint {evictedObjects = Set.insert digest (evictedObjects checkpoint)}
         "pending-event" -> Right checkpoint {pendingEvents = Set.insert (EventId digest) (pendingEvents checkpoint)}
         "pending-object" -> Right checkpoint {pendingObjects = Set.insert digest (pendingObjects checkpoint)}
         _ -> Left (BadCheckpoint "Unknown checkpoint field.")

@@ -4,6 +4,8 @@ The first two phases implement the pure event model and checkpoint storage.
 Phase 3a adds opt-in local topic commands and a replicated MCP tool set.
 Phase 3b adds configured context, current-head search and a read-only browser.
 Phase 4 adds DAG log reads, appends and summary levels through CLI and MCP.
+Phase 5 adds a durable local archive, checkpoint eviction and replicated pins
+and reviews. The publication acknowledgement API is for future transport.
 These changes do not migrate the live store or add network transport. The wire format is
 experimental until the persistence and migration phases are complete.
 
@@ -28,6 +30,9 @@ experimental until the persistence and migration phases are complete.
 - `Akyuu.Sync.Web` serves a read-only browser or exports a static snapshot.
 - `Akyuu.Sync.Logs` traverses all predecessors from every log head. It reads
   summary levels and selects deterministic disjoint coverage.
+- `Akyuu.Sync.Retention` derives roots from every causal branch, pending
+  exports, live pins and retaining memory edges.
+- `Akyuu.Sync.Resources` exposes pin state and every surviving review reason.
 
 `applyLocal` checks a resource version and its complete parent set. Future
 writers must call it under the mutation lock. Remote merge permits unseen
@@ -120,6 +125,16 @@ and precedence for every edge. Imports refuse missing log predecessor links.
 On 2026-11-03, all 1,175 Haskell tests passed. The native Nix format, man
 and packaged CLI/MCP/HTTP replica checks also passed.
 
+`ArchiveTests` adds archive verification, publication acknowledgement,
+pending intermediate payloads, branch generations, pin/review partitions,
+old snapshot reads, eviction without import resurrection and restoration
+of new live references. Barrier tests cover readers and the shared writer
+lock during collection. Process-death tests cover archive dependencies,
+acknowledgement pointers and eviction through directory flush.
+After phase 5, all 1,222 Haskell tests passed on 2026-11-03. Native format,
+man and packaged CLI/MCP/HTTP checks also passed. Remote publication remains
+untested; tests simulate the transport acknowledgement boundary.
+
 ## Experimental repository
 
 This API uses a separate, empty directory. It refuses a legacy store or an
@@ -133,12 +148,21 @@ store.lock           shared mutation lock
 objects/<id>         immutable canonical memory bytes
 events/<id>          immutable canonical event bytes
 checkpoints/<id>     immutable canonical manifest
+archive/objects/    complete archived payloads
+archive/events/     complete archived events
+archive/checkpoints/ immutable archive commit markers
 ```
 
 Each manifest names all accepted events and payloads. It also names the
 pending events and payloads. These pending sets form the durable outbox.
-The object pool holds its bytes without a second copy. No acknowledgement
-or collection API exists yet; all accepted data remains available locally.
+The active object pool holds pending bytes. Explicit archive preparation
+adds a durable copy of every accepted payload and event. Archive manifests
+appear only after all their dependencies are durable.
+
+An optional `evicted-object` field records inactive copies in a checkpoint.
+It does not remove accepted object IDs. Old manifests with no evictions keep
+their canonical bytes. Earlier prototype binaries refuse this field. Every
+writer and reader must upgrade together before eviction.
 
 Local transactions check the current resource token under the mutation lock.
 Imports merge against the latest checkpoint under that lock. They retain
@@ -170,11 +194,64 @@ The durability claim does not cover drive caches that survive an `fsync`.
 
 ## Next phase
 
-Implement GC/archive integration for checkpoint readers and writers.
+Implement migration tooling and Git transport against the archive contract.
 Bounded context pages, incremental validation and persistent search caches
 remain open. The current read interfaces use captured checkpoints.
 
 Keep transport and live-store migration behind their later acceptance checks.
+
+## Local archive, collection, pins and reviews
+
+`replica archive` saves one complete accepted checkpoint locally. It does
+not acknowledge remote publication or clear the outbox. Archive payloads,
+events and manifests remain indefinitely. No command prunes them.
+
+Future transport calls `acknowledgePublished` only after it verifies remote
+inclusion of the archived checkpoint's complete payload and event sets.
+The API independently validates the complete local archive before it clears
+obligations. It clears only the captured sets; newer local writes remain
+pending. No CLI or MCP command can acknowledge publication. Current tests
+simulate that transport boundary. No real remote publication is tested yet.
+
+`replica gc --dry-run --keep-generations N` reports a checkpoint-bound plan.
+The default depth is 5, including the current generation. Each causal branch
+retains that depth independently. Collection requires `--expected CHECKPOINT`
+from a dry run and recomputes its roots under the shared mutation lock.
+Depth must be from 1 to 1000.
+
+Roots include every current ref head, live pins, pending objects, payloads
+of pending events and their retaining dependencies. Pending event roots
+protect intermediate versions even after a later local event clears a pin.
+Log follows links and summary evidence retain their complete source history.
+Published review records do not root their endpoints. GC preserves the
+records and emits no replicated pin or review removal.
+
+Collection saves a complete durable archive before it publishes an eviction
+manifest. It removes active copies only after `CURRENT` accepts that manifest.
+An unlink failure reports `collection-incomplete` and the accepted checkpoint.
+A retry completes removal. This prototype uses archive copies and eviction
+metadata, rather than the legacy trash or tombstone mechanism.
+
+Explicit reads try the active copy, then the archive if the file is missing.
+An existing corrupt copy remains an error. Old captured snapshots survive
+concurrent eviction. Reads do not restore files or add old versions to search.
+Imports preserve earlier eviction for unchanged data. A new live ref, pin or
+pending event restores its required payload before publication. A greater
+generation depth also restores required historical copies.
+
+All accepted events and payload IDs stay in the checkpoint. Load validates
+their complete bytes, including archive fallback, and rejects eviction of
+any current or pending dependency. Full inventory validation remains costly.
+The local archive is a filesystem pool for this prototype. The later Git
+transport must preserve the same immutable archive and acknowledgement rules.
+
+`replica pin-state ID` and `replica review-state A B` return opaque resource
+versions. `pin`, `unpin`, `review` and `unreview` require the matching version
+as `--expected`. Review creation also requires `--agent` and `--reason`.
+Each clear consumes every observed head. Unseen concurrent sets survive.
+Review pair order does not change its resource. Concurrent reasons remain
+visible in state reads. MCP exposes `pin_state`, `pin_set`, `pin_clear`,
+`review_state`, `review_set` and `review_clear` in the replicated tool set.
 
 ## Replicated logs and summary levels
 
@@ -214,8 +291,8 @@ tool set. Legacy readers retain their existing chain semantics.
 
 This prototype loads full history before it orders or limits a log read.
 Time filters, resumable traversal, bounded summary views and log integration
-in configured context and the browser remain open. GC/archive work remains
-separate. No command resets a log or replaces it with a summary.
+in configured context and the browser remain open. Archive-backed collection
+is described above. No command resets a log or replaces it with a summary.
 
 ## Experimental topic interfaces
 
