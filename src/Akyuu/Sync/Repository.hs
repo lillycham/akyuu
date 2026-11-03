@@ -30,6 +30,8 @@ module Akyuu.Sync.Repository
     collect,
     collectWith,
     maxPayloadBytes,
+    verifyIncoming,
+    archiveIncoming,
   )
 where
 
@@ -144,7 +146,7 @@ initialiseWith hook path store = fmap join $ tryWith RepositoryIO $ do
     case identity of
       Nothing -> do
         entries <- liftIO (listDirectory root)
-        unless (all (\entry -> entry == "store.lock" || ".tmp" `T.isPrefixOf` T.pack entry) entries) (throwE NotRepository)
+        unless (all (\entry -> entry `elem` ["store.lock", "sync.lock"] || ".tmp" `T.isPrefixOf` T.pack entry) entries) (throwE NotRepository)
         liftIO (atomicWriteWith (hook . WriteBoundary IdentityFile) (root </> "IDENTITY") (identityBytes store))
       Just bytes -> unless (bytes == identityBytes store) (throwE IdentityMismatch)
     liftIO (traverse_ (ensureDirectory hook . (root </>)) ["events", "objects", "checkpoints"])
@@ -281,6 +283,14 @@ verifyPayload (digest, bytes) = do
   memory <- either (throwE . InvalidMemory digest) pure (parseMemory bytes)
   pure (digest, (bytes, memory))
 
+-- | Validate a complete transport inventory before a live import or join.
+verifyIncoming :: StoreId -> [(EventId, ByteString)] -> [(Id, ByteString)] -> IO (Either RepositoryError State)
+verifyIncoming store eventBytes payloads = runExceptT $ do
+  state <- either (throwE . InvalidState) pure (State.fromBytes store eventBytes)
+  memories <- Map.fromList <$> traverse verifyPayload payloads
+  validatePayloads state (Map.map snd memories)
+  pure state
+
 validatePayloads :: State -> Map Id Memory -> ExceptT RepositoryError IO ()
 validatePayloads state memories = do
   traverse_ (\digest -> unless (Map.member digest memories) (throwE (MissingPayload digest))) (concatMap (actionPayloads . Event.eventAction) (Map.elems (State.events state)))
@@ -357,6 +367,19 @@ archiveSnapshotWith hook repo@(Repository root _) captured = withMutation root R
   unless (snapshotRoot captured == root && included (snapshotCheckpoint captured) (snapshotCheckpoint current)) (throwE ArchiveNotAccepted)
   saveArchive hook repo captured
   pure (snapshotId captured)
+
+-- | Archive exactly the remotely verified inventory, not newer local events.
+-- Used by resumable joins before the first local registration is published.
+archiveIncoming :: Repository -> State -> Set.Set Id -> IO (Either RepositoryError CheckpointId)
+archiveIncoming repo@(Repository root store) state objects = withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
+  current <- ExceptT (loadSnapshot repo)
+  checkpoint <- either (throwE . InvalidCheckpoint) pure (mkCheckpoint (State.storeId state) (Map.keysSet (State.events state)) objects Set.empty Set.empty)
+  unless (State.storeId state == store && included checkpoint (snapshotCheckpoint current)) (throwE ArchiveNotAccepted)
+  memories <- loadMemories repo objects
+  validatePayloads state memories
+  let snapshot = Snapshot root checkpoint state
+  saveArchive (const (pure ())) repo snapshot
+  pure (snapshotId snapshot)
 
 included :: Checkpoint -> Checkpoint -> Bool
 included part whole = checkpointStore part == checkpointStore whole && checkpointEvents part `Set.isSubsetOf` checkpointEvents whole && checkpointObjects part `Set.isSubsetOf` checkpointObjects whole

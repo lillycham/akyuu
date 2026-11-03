@@ -14,7 +14,9 @@
       #
       # The package with its test suite on. `checks.tests` builds this, and
       # the dev shell takes its dependencies (the test libraries too).
-      withTests = pkgs: pkgs.haskellPackages.callPackage ./akyuu.nix { };
+      withTests = pkgs: pkgs.haskell.lib.overrideCabal (pkgs.haskellPackages.callPackage ./akyuu.nix { }) (drv: {
+        testToolDepends = (drv.testToolDepends or [ ]) ++ [ pkgs.git pkgs.bash pkgs.coreutils ];
+      });
 
       # The package to install: no tests (they run in `checks`), no haddock,
       # and only the executable. justStaticExecutables drops the references to
@@ -43,7 +45,7 @@
             # `source show` reads an archived session with zstd. Wrap last: the
             # completions above run the plain binary. A client that starts
             # `akyuu mcp` does not have the PATH of a shell.
-            wrapProgram $out/bin/akyuu --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.zstd ]}
+            wrapProgram $out/bin/akyuu --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.zstd pkgs.git pkgs.bash pkgs.coreutils pkgs.openssh ]}
           '';
         });
 
@@ -112,10 +114,11 @@
 
       checks = forAllSystems (pkgs: {
         replica = pkgs.runCommand "akyuu-replica-check"
-          { nativeBuildInputs = [ pkgs.nodejs ]; __darwinAllowLocalNetworking = true; }
+          { nativeBuildInputs = [ pkgs.nodejs pkgs.git pkgs.bash pkgs.coreutils ]; __darwinAllowLocalNetworking = true; }
           ''
             node ${./test/check-replica-page.cjs} ${./web/replica.html}
             node ${./test/smoke-replica.cjs} ${akyuuFor pkgs}/bin/akyuu
+            node ${./test/smoke-sync.cjs} ${akyuuFor pkgs}/bin/akyuu
             touch $out
           '';
         # The unit tests, in the Nix sandbox. The tests of provenance read an
@@ -224,7 +227,7 @@
               ormolu
             ])
             # The tests of provenance read an archived transcript with zstd.
-            ++ [ pkgs.zstd ];
+            ++ [ pkgs.zstd pkgs.git pkgs.bash pkgs.coreutils ];
         };
       });
     };

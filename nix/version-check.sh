@@ -56,4 +56,12 @@ c=$(akyuu supersede check/main --kind fact --agent check --body "third memory")
 akyuu-version --push 2> /dev/null > /dev/null
 test "$(git -C "$root" rev-list --count HEAD)" = 4
 
+# A compatibility client must not snapshot a checkpoint root, even if legacy
+# directories still exist beside its new format marker.
+touch "$root/IDENTITY"
+if akyuu-version > /dev/null 2> /dev/null; then
+  echo "legacy version snapshots accepted a checkpoint root" >&2
+  exit 1
+fi
+
 touch $out

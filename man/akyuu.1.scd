@@ -180,6 +180,56 @@ all writers and GC jobs together; old processes do not use this protocol.
 	Keep pending export obligations. This command does not publish to a remote.
 	The archive retains bytes indefinitely and permits explicit fallback reads.
 
+*replica sync-config* *--remote* _url_ [*--branch* _name_] [*--json*]
+	Configure one dedicated protocol branch. The default is akyuu-sync-v1.
+	This command makes a private bare transport repository but contacts no
+	remote. An existing configuration must match. Do not embed credentials.
+
+*replica sync* [*--dry-run*] [*--json*]
+	Fetch and validate the configured archive. Import its accepted history,
+	export the local union, and push a normal fast-forward commit. Retry up
+	to three push attempts within a 60-second deadline. A conflict is a valid
+	exchange result. Resolve its heads before an ordinary topic replacement.
+	Verify remote inclusion before acknowledgement. Later local writes remain
+	pending. A lost response leaves obligations for the next fetch to verify.
+	Refuse branch rewrites, deleted archive entries, symlinks, submodules,
+	unknown paths, invalid hashes, missing dependencies and excessive records.
+	With --dry-run, fetch and report without import, acknowledgement or push.
+	Preview can update private transport data and the last fetched cursor.
+
+*replica sync-status* [*--json*]
+	Report the local checkpoint, last fetched tip, last published checkpoint,
+	pending counts, conflicts and last error. Contact no remote. The last
+	fetched tip does not establish the present state of the remote.
+
+*replica join* *--remote* _url_ [*--branch* _name_] *--label* _text_ [*--json*]
+	Join a verified archive into an empty directory. Resume only a matching
+	join journal. Give the replica a fresh local identity. Leave its local
+	registration pending until a publishing sync. Never copy another device's
+	REPLICA file or join by a filesystem union.
+
+*replica migrate* *--source* _dir_ *--classification* _file_ [*--dry-run* | *--expected* _version_] [*--json*]
+	Validate a legacy snapshot under its mutation lock. The classification
+	file is a JSON object that maps every ref to "topic" or "log".
+	A dry run returns the source version, missing generations and metadata.
+	Copy that version as --expected to create a separate checkpoint replica.
+	The source is not converted in place. A matching journal resumes a copy.
+	Preserve memory bytes and diagnostic legacy metadata in the archive.
+	Baseline events use the Unix epoch as an import sentinel. They do not
+	claim original action dates. Missing current or retaining payloads refuse
+	the copy. A copy does not complete live cutover. Before cutover, verify
+	a backup, stop source writes and upgrade every reader, writer and GC job.
+
+Transport uses a separate bare Git repository. Hooks and credential prompts
+are disabled. SSH uses batch mode and the existing SSH agent/configuration.
+The prototype does not use global Git credential helpers. Local paths and
+public HTTPS reads are also supported. Network authentication has not been
+tested as part of the local bare-remote acceptance suite.
+The accepted archive has a 256 MiB payload budget and at most 100,000 tree
+entries. Events have a 64 KiB limit; memories have a 16 MiB limit. Private
+Git storage has a monitored 512 MiB budget; temporary overshoot is possible.
+On deadline, terminate the owned process group. Keep accepted local writes.
+
 *replica gc* [*--keep-generations* _n_] [*--dry-run* | *--expected* _checkpoint_] [*--json*]
 	Plan or remove unused local copies. The default generation depth is 5;
 	valid depths are 1 to 1000. Retain ancestry along every causal branch.

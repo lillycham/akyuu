@@ -63,8 +63,10 @@ import Akyuu.Store qualified as Store
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Context qualified as ReplicaContext
 import Akyuu.Sync.Logs qualified as ReplicaLogs
+import Akyuu.Sync.Migration qualified as ReplicaMigration
 import Akyuu.Sync.Repository qualified as ReplicaRepository
 import Akyuu.Sync.Resources qualified as ReplicaResources
+import Akyuu.Sync.Run qualified as ReplicaSync
 import Akyuu.Sync.Search qualified as ReplicaSearch
 import Akyuu.Sync.State (Version, parseVersion)
 import Akyuu.Sync.Topics qualified as Topics
@@ -77,7 +79,7 @@ import Akyuu.Web.Server qualified as Server
 import Control.Exception (IOException, try)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE)
-import Data.Aeson (encode, object, toJSON, (.=))
+import Data.Aeson (Value, eitherDecodeStrict', encode, object, toJSON, (.=))
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -186,6 +188,11 @@ data ReplicaCommand i
   | ReplicaReviewState i i Bool
   | ReplicaReview i i Version Text Text Bool
   | ReplicaUnreview i i Version Bool
+  | ReplicaSyncConfigure Text Text Bool
+  | ReplicaSync Bool Bool
+  | ReplicaSyncStatus Bool
+  | ReplicaJoin Text Text Text Bool
+  | ReplicaMigrate FilePath FilePath (Maybe i) Bool Bool
   | ReplicaServe Int ReplicaContextArgs
   | ReplicaViz ReplicaContextArgs
   deriving (Eq, Show, Functor, Foldable, Traversable)
@@ -361,7 +368,7 @@ commandParser =
       <> cmd "supersede" supersedeP "Replace the memory of a ref with a new one, and print the new id."
       <> cmd "amend" amendP "Change some text of the memory of a ref: replace one passage, or add text at the end. Prints the new id."
       <> cmd "ref" refP "Read, set or list refs."
-      <> cmd "replica" (Replica <$> replicaP) "Use experimental local checkpoint topics. No remote sync or live-store migration."
+      <> cmd "replica" (Replica <$> replicaP) "Use experimental checkpoint replicas, snapshot copies and manual Git sync."
       <> cmd "pin" (Pin <$> argument idReader (metavar "ID")) "Pin a memory, so that GC keeps it."
       <> cmd "unpin" (Unpin <$> argument idReader (metavar "ID")) "Remove the pin of a memory."
       <> cmd "pins" (pure Pins) "Print the id of each pinned memory."
@@ -412,6 +419,11 @@ commandParser =
           <> cmd "log-todo" (ReplicaTodo <$> topicName <*> option (atLeast 2) (long "size" <> value 8 <> metavar "N" <> help "Sources per suggested summary.") <*> keepEpisodes <*> jsonFlag) "List uncovered source batches for summaries."
           <> cmd "unfold" (ReplicaUnfold <$> argument idReader (metavar "ID") <*> jsonFlag) "Read the exact direct sources of an accepted summary."
           <> cmd "archive" (ReplicaArchive <$> jsonFlag) "Save a complete durable local archive. This does not acknowledge remote publication."
+          <> cmd "sync-config" (ReplicaSyncConfigure <$> remoteURL <*> syncBranch <*> jsonFlag) "Configure one sync target. This command does not contact the remote."
+          <> cmd "sync" (ReplicaSync <$> switch (long "dry-run" <> help "Fetch and report changes without import, acknowledgement or push.") <*> jsonFlag) "Exchange accepted memory data through the configured Git branch."
+          <> cmd "sync-status" (ReplicaSyncStatus <$> jsonFlag) "Report local progress and pending counts without a remote call."
+          <> cmd "join" (ReplicaJoin <$> remoteURL <*> syncBranch <*> strOption (long "label" <> metavar "TEXT" <> help "A label for the new local replica.") <*> jsonFlag) "Join a verified archive into an empty directory. Resume an interrupted join."
+          <> cmd "migrate" (ReplicaMigrate <$> strOption (long "source" <> metavar "DIR" <> help "The legacy source store. It is not converted in place.") <*> strOption (long "classification" <> metavar "FILE" <> help "A JSON object that maps every ref to topic or log.") <*> optional (option idReader (long "expected" <> metavar "VERSION" <> help "The source version from a migration dry run.")) <*> switch (long "dry-run" <> help "Validate and report the source without a destination write.") <*> jsonFlag) "Copy an explicitly classified legacy snapshot to a separate replica."
           <> cmd "gc" (ReplicaGC <$> option (atLeast 1) (long "keep-generations" <> value 5 <> metavar "N" <> help "Retain this many generations along every causal branch, from 1 to 1000.") <*> optional (option idReader (long "expected" <> metavar "CHECKPOINT" <> help "The checkpoint from a dry run. Required for collection.")) <*> switch (long "dry-run" <> help "Report the plan without a change.") <*> jsonFlag) "Evict unused local copies after a complete durable archive."
           <> cmd "pin-state" (ReplicaPinState <$> fullMemory <*> jsonFlag) "Read pin state and its resource version."
           <> cmd "pin" (ReplicaPin <$> fullMemory <*> topicVersion <*> pure True <*> jsonFlag) "Pin an accepted memory with a resource version check."
@@ -431,6 +443,8 @@ commandParser =
     jsonFlag = switch (long "json" <> help "Print structured JSON, including operation errors.")
     keepEpisodes = option (atLeast 0) (long "keep" <> value 10 <> metavar "N" <> help "Recent episodes to retain whole.")
     fullMemory = argument idReader (metavar "ID")
+    remoteURL = strOption (long "remote" <> metavar "URL" <> help "A local Git path or remote URL. Do not embed credentials.")
+    syncBranch = strOption (long "branch" <> value "akyuu-sync-v1" <> metavar "NAME" <> help "A dedicated protocol branch; default akyuu-sync-v1.")
     topicName = argument nameReader (metavar "NAME")
     topicVersion = option (eitherReader (either (const (Left "Give the complete opaque resource version.")) Right . parseVersion . T.pack)) (long "expected" <> metavar "VERSION" <> help "The complete version returned by the matching state read.")
     addP =
@@ -909,6 +923,24 @@ runCommand env c = runExceptT $ case c of
 
 -- | The program: parse the arguments, find the store, run the command.
 runReplicaCommand :: FilePath -> ReplicaCommand Id -> IO (Either AkyuuError Output)
+runReplicaCommand root (ReplicaSyncConfigure remote branch json) = syncOutput json $ fmap (fmap (const (object ["configured" .= True]))) (ReplicaSync.configure root remote branch)
+runReplicaCommand root (ReplicaSync preview json) = syncOutput json (ReplicaSync.runSync root preview)
+runReplicaCommand root (ReplicaSyncStatus json) = syncOutput json (ReplicaSync.status root)
+runReplicaCommand root (ReplicaJoin remote branch label json) = syncOutput json (ReplicaSync.joinReplica root remote branch label)
+runReplicaCommand root (ReplicaMigrate source classifications expected preview json) = syncOutput json $ do
+  bytes <- tryWith ReplicaSync.SyncIO (BS.readFile classifications)
+  case bytes of
+    Left err -> pure (Left err)
+    Right contents -> case eitherDecodeStrict' contents of
+      Left _ -> pure (Left (ReplicaSync.SyncInvalid "The classification file must map ref names to topic or log."))
+      Right kinds -> do
+        result <- ReplicaMigration.planMigration source kinds
+        case result of
+          Left err -> pure (Left err)
+          Right plan | preview -> pure (Right (ReplicaMigration.migrationJSON plan))
+          Right plan -> case expected of
+            Nothing -> pure (Left (ReplicaSync.SyncInvalid "Give --expected from replica migrate --dry-run before a copy."))
+            Just token -> ReplicaMigration.copyMigration root plan token
 runReplicaCommand root (ReplicaServe port options) = replicaWebAction root options $ \local settings -> do
   ExceptT (tryWith Topics.TopicIO (ReplicaWeb.serve local settings port (\actual -> putStrLn ("http://127.0.0.1:" <> show actual <> "/") >> hFlush stdout)))
   pure (Output BS.empty True False)
@@ -1031,6 +1063,14 @@ runReplicaCommand root operation = do
 
 defaultReplicaContext :: ReplicaContextArgs
 defaultReplicaContext = ReplicaContextArgs Nothing Nothing "always" Nothing []
+
+syncOutput :: Bool -> IO (Either ReplicaSync.SyncError Value) -> IO (Either AkyuuError Output)
+syncOutput json action = do
+  result <- action
+  pure $ case result of
+    Right payload -> Right (Output (BL.toStrict (encode payload) <> "\n") True False)
+    Left err | json -> Right (Output (BL.toStrict (encode (object ["error" .= ("sync-error" :: Text), "message" .= ReplicaSync.describeSyncError err])) <> "\n") False False)
+    Left err -> Left (BadInput (ReplicaSync.describeSyncError err))
 
 replicaSettings :: ReplicaContextArgs -> ExceptT Topics.TopicError IO ReplicaContext.ContextOptions
 replicaSettings (ReplicaContextArgs policy tiers tier cwd extras) = do
