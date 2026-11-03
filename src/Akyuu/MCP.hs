@@ -68,9 +68,11 @@ import Akyuu.Render (compareLines, edgeName, episodeLines, findingLines, heldBy,
 import Akyuu.Source qualified as Source
 import Akyuu.Sync.Context qualified as ReplicaContext
 import Akyuu.Sync.Logs qualified as ReplicaLogs
+import Akyuu.Sync.Resources qualified as ReplicaResources
 import Akyuu.Sync.Search qualified as ReplicaSearch
 import Akyuu.Sync.State (Version, parseVersion)
 import Akyuu.Sync.Topics qualified as Topics
+import Akyuu.Sync.Types (Action (ClearPin, ClearReview, SetPin, SetReview), Resource (PinResource, ReviewResource), ReviewValue (ReviewValue))
 import Akyuu.Tier (Place (Place), defaultPolicyRef, defaultTiersRef)
 import Akyuu.Topic qualified as Topic
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
@@ -194,6 +196,8 @@ data ReplicaCall
   | LogResolution Name Int
   | LogTodo Name Int Int
   | LogUnfold Id
+  | ResourceRead Resource
+  | ResourceWrite Version Action
   deriving (Eq, Show)
 
 -- | The result of a tool: text, and whether it is an error.
@@ -661,7 +665,7 @@ parseToolCallFor cfg n args
       if mcpToolSet cfg == Ordinary && n == "add" then () <$ refArg args else pure ()
       let args' =
             if ( (mcpToolSet cfg == Ordinary && n `elem` ["add", "supersede"])
-                   || (mcpToolSet cfg == Replicated && n `elem` ["topic_create", "topic_replace", "topic_resolve", "log_append", "log_summarise"] && not (KM.member "select" args))
+                   || (mcpToolSet cfg == Replicated && n `elem` ["topic_create", "topic_replace", "topic_resolve", "log_append", "log_summarise", "review_set"] && not (KM.member "select" args))
                )
               && not (KM.member "agent" args)
               then KM.insert "agent" (String author) args
@@ -698,12 +702,19 @@ replicaToolList =
     tool "log_summarise" "Append a summary of exact source IDs from the level below. Copy expected from log_levels.version or log_todo.version. Concurrent overlap is valid." (objectSchema ([("ref", refSchema), ("expected", idSchema "The source version."), ("level", countSchema 1), ("sources", object ["type" .= ("array" :: Text), "items" .= idSchema "A complete source ID.", "minItems" .= (2 :: Int)])] <> replicaMemoryProps) ["ref", "expected", "level", "sources", "kind", "body"]),
     tool "log_resolution" "Read a deterministic disjoint summary cover. Raw episodes fill gaps. Keep defaults to 10 recent whole episodes." (objectSchema [("ref", refSchema), ("keep", countSchema 0)] ["ref"]),
     tool "log_todo" "List exact uncovered source batches and a source version for log_summarise. Size defaults to 8 and keep to 10." (objectSchema [("ref", refSchema), ("size", countSchema 2), ("keep", countSchema 0)] ["ref"]),
-    tool "log_unfold" "Read the exact direct sources of an accepted summary, without substitution." (objectSchema [("id", idSchema "A complete summary ID.")] ["id"])
+    tool "log_unfold" "Read the exact direct sources of an accepted summary, without substitution." (objectSchema [("id", idSchema "A complete summary ID.")] ["id"]),
+    tool "pin_state" "Read whether a memory is pinned, and its opaque resource version." (objectSchema [("id", idSchema "A complete memory ID.")] ["id"]),
+    tool "pin_set" "Pin an accepted memory. Copy expected from pin_state.version." (objectSchema [("id", idSchema "A complete memory ID."), ("expected", versionSchema)] ["id", "expected"]),
+    tool "pin_clear" "Clear observed pin heads. Unseen concurrent sets survive. Copy expected from pin_state.version." (objectSchema [("id", idSchema "A complete memory ID."), ("expected", versionSchema)] ["id", "expected"]),
+    tool "review_state" "Read all surviving review reasons and the pair's resource version." (objectSchema pairProps ["a", "b"]),
+    tool "review_set" "Review two accepted memories as distinct. Copy expected from review_state.version. The configured author is the default." (objectSchema (pairProps <> [("expected", versionSchema), ("agent", stringSchema "The review author."), ("reason", stringSchema "Why the memories are distinct.")]) ["a", "b", "expected", "reason"]),
+    tool "review_clear" "Clear observed review heads. Unseen concurrent reasons survive. Copy expected from review_state.version." (objectSchema (pairProps <> [("expected", versionSchema)]) ["a", "b", "expected"])
   ]
   where
     tool :: Text -> Text -> Value -> Value
     tool n d s = object ["name" .= n, "description" .= d, "inputSchema" .= s]
     countSchema lower = object ["type" .= ("integer" :: Text), "minimum" .= (lower :: Int)]
+    pairProps = [("a", idSchema "One complete memory ID."), ("b", idSchema "The other complete memory ID.")]
 
 versionSchema :: Value
 versionSchema = stringSchema "The complete opaque version from topic_read. It identifies all causal heads, not a memory."
@@ -768,6 +779,12 @@ atLeast k lo v
 
 parseArgs :: Text -> Args -> Either CallError ToolCall
 parseArgs n args = case n of
+  "pin_state" -> CallReplica . ResourceRead . PinResource <$> idArg args "id"
+  "pin_set" -> CallReplica <$> (ResourceWrite <$> versionArg args <*> (SetPin <$> idArg args "id"))
+  "pin_clear" -> CallReplica <$> (ResourceWrite <$> versionArg args <*> (ClearPin <$> idArg args "id"))
+  "review_state" -> CallReplica . ResourceRead <$> (ReviewResource <$> idArg args "a" <*> idArg args "b")
+  "review_set" -> CallReplica <$> (ResourceWrite <$> versionArg args <*> (SetReview <$> idArg args "a" <*> idArg args "b" <*> (ReviewValue <$> required args "agent" asText "a string" <*> required args "reason" asText "a string")))
+  "review_clear" -> CallReplica <$> (ResourceWrite <$> versionArg args <*> (ClearReview <$> idArg args "a" <*> idArg args "b"))
   "log_read" -> CallReplica <$> (LogRead <$> refArg args <*> countArg "limit" 100 0)
   "log_append" -> CallReplica <$> (LogAppend <$> refArg args <*> versionArg args <*> memoryArg args plainEdges)
   "log_levels" -> CallReplica . LogLevels <$> refArg args
@@ -1252,6 +1269,8 @@ runReplicaTool cfg local call = case call of
         pure (object ["version" .= Id.render (ReplicaLogs.levelsToken levels), "runs" .= [object ["level" .= level, "sources" .= map Id.render ids] | (level, ids) <- runs]])
       pure (either failure (structured False) result)
     LogUnfold digest -> either failure (structured False . ReplicaLogs.entriesJSON) <$> ReplicaLogs.unfold local digest
+    ResourceRead resource -> either failure (structured False) <$> ReplicaResources.readResource local resource
+    ResourceWrite expected action -> either failure (structured False) <$> ReplicaResources.writeResource local expected action
   _ -> pure (ToolResult "This tool is unavailable in the replicated tool set." True)
   where
     structured failed payload = StructuredToolResult (decodeUtf8 (BL.toStrict (A.encode payload))) failed payload

@@ -21,6 +21,14 @@ module Akyuu.Sync.Repository
     snapshotState,
     snapshotCheckpoint,
     readMemory,
+    archiveSnapshot,
+    archiveSnapshotWith,
+    acknowledgePublished,
+    acknowledgePublishedWith,
+    CollectionPlan (..),
+    planCollection,
+    collect,
+    collectWith,
     maxPayloadBytes,
   )
 where
@@ -32,12 +40,13 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memEdges), MemoryParseError, parseMemory)
 import Akyuu.Mutation (withMutation)
-import Akyuu.Sync.Checkpoint (Checkpoint, CheckpointError, CheckpointId (CheckpointId), checkpointEvents, checkpointId, checkpointObjects, checkpointStore, maxCheckpointBytes, mkCheckpoint, parseCheckpoint, pendingEvents, pendingObjects, renderCheckpoint)
+import Akyuu.Sync.Checkpoint (Checkpoint, CheckpointError, CheckpointId (CheckpointId), activeObjects, checkpointEvents, checkpointId, checkpointObjects, checkpointStore, evictedObjects, maxCheckpointBytes, mkCheckpoint, parseCheckpoint, pendingEvents, pendingObjects, renderCheckpoint, withEvicted)
 import Akyuu.Sync.Event (Event, maxEventBytes, renderEvent)
 import Akyuu.Sync.Event qualified as Event
+import Akyuu.Sync.Retention (actionPayloads, retained)
 import Akyuu.Sync.State (State, StateError (StaleDependency), Version)
 import Akyuu.Sync.State qualified as State
-import Akyuu.Sync.Types (Action (AppendLog, ResolveLog, ResolveTopic, SetPin, SetReview, SetTopic), EventId (EventId), Resource, StoreId (StoreId), parseIdentifier, renderIdentifier)
+import Akyuu.Sync.Types (Action (AppendLog), EventId (EventId), Resource, StoreId (StoreId), parseIdentifier, renderIdentifier)
 import Control.Exception (IOException)
 import Control.Monad (join, unless, when)
 import Control.Monad.IO.Class (liftIO)
@@ -52,7 +61,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
-import System.Directory (canonicalizePath, createDirectory, doesDirectoryExist, listDirectory)
+import System.Directory (canonicalizePath, createDirectory, doesDirectoryExist, listDirectory, removeFile)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (IOMode (ReadMode), withBinaryFile)
 import System.IO.Error (isAlreadyExistsError)
@@ -86,6 +95,11 @@ data RepositoryError
   | MissingRetainedTarget Id Id
   | UnacceptedObject Id
   | MissingLogPredecessor EventId Id
+  | StaleCheckpoint
+  | InvalidRetentionDepth
+  | ArchiveNotAccepted
+  | CollectionIncomplete CheckpointId IOException
+  | InvalidResidency
   | PublicationUncertain CheckpointId IOException
   deriving (Eq, Show)
 
@@ -95,11 +109,16 @@ data WriteTarget
   | EventFile EventId
   | CheckpointFile CheckpointId
   | CurrentFile
+  | ArchiveMemoryFile Id
+  | ArchiveEventFile EventId
+  | ArchiveCheckpointFile CheckpointId
   deriving (Eq, Show)
 
 data Boundary
   = DirectoryCreated FilePath
   | WriteBoundary WriteTarget AtomicStep
+  | MemoryEvicted Id
+  | EvictionsSynced
   deriving (Eq, Show)
 
 type FaultHook = Boundary -> IO ()
@@ -190,6 +209,7 @@ loadSnapshot repo@(Repository root store) = fmap join $ tryWith RepositoryIO $ r
   state <- either (throwE . InvalidState) pure (State.fromBytes store eventBytes)
   memories <- loadMemories repo (checkpointObjects checkpoint)
   validatePayloads state memories
+  unless (Set.null (evictedObjects checkpoint `Set.intersection` retained 1 checkpoint state memories)) (throwE InvalidResidency)
   pure (Snapshot root checkpoint state)
 
 parsePointer :: ByteString -> Either RepositoryError Id
@@ -231,7 +251,7 @@ transact hook repo@(Repository root store) payloads advance = withMutation root 
   oldMemories <- loadMemories repo (checkpointObjects previous)
   let memories = Map.union (Map.map snd supplied) oldMemories
   validatePayloads state memories
-  checkpoint <-
+  base <-
     either (throwE . InvalidCheckpoint) pure $
       mkCheckpoint
         store
@@ -239,7 +259,16 @@ transact hook repo@(Repository root store) payloads advance = withMutation root 
         objectIds
         (pendingEvents previous <> (eventIds `Set.difference` checkpointEvents previous))
         (pendingObjects previous <> (objectIds `Set.difference` checkpointObjects previous))
-  traverse_ (\(digest, (bytes, _)) -> saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes) (Map.toAscList supplied)
+  let gone = evictedObjects previous `Set.difference` retained 1 base state memories
+      restored = evictedObjects previous `Set.difference` gone
+  checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone base)
+  traverse_ (\(digest, (bytes, _)) -> unless (digest `Set.member` gone) (saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes)) (Map.toAscList supplied)
+  traverse_
+    ( \digest -> do
+        bytes <- readObjectBytes repo digest
+        saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes
+    )
+    (Set.toAscList restored)
   traverse_ (\(key, event) -> saveImmutable hook (EventFile key) (eventPath repo key) (renderEvent event)) (Map.toAscList (State.events state))
   saveCheckpoint hook repo checkpoint
   publishCurrent hook repo checkpoint
@@ -254,7 +283,7 @@ verifyPayload (digest, bytes) = do
 
 validatePayloads :: State -> Map Id Memory -> ExceptT RepositoryError IO ()
 validatePayloads state memories = do
-  traverse_ (\digest -> unless (Map.member digest memories) (throwE (MissingPayload digest))) (concatMap (targets . Event.eventAction) (Map.elems (State.events state)))
+  traverse_ (\digest -> unless (Map.member digest memories) (throwE (MissingPayload digest))) (concatMap (actionPayloads . Event.eventAction) (Map.elems (State.events state)))
   traverse_ checkMemory (Map.toAscList memories)
   traverse_ checkLog (Map.toAscList (State.events state))
   where
@@ -263,17 +292,9 @@ validatePayloads state memories = do
         Nothing -> throwE (MissingPayload digest)
         Just memory -> do
           let linked = Set.fromList [target edge | edge <- Set.toList (memEdges memory), kind edge == Follows]
-              parents = [value | parent <- Set.toList (Event.eventParents event), Just previous <- [Map.lookup parent (State.events state)], value <- targets (Event.eventAction previous)]
+              parents = [value | parent <- Set.toList (Event.eventParents event), Just previous <- [Map.lookup parent (State.events state)], value <- actionPayloads (Event.eventAction previous)]
           traverse_ (\parent -> unless (parent `Set.member` linked) (throwE (MissingLogPredecessor eventId parent))) parents
       _ -> pure ()
-    targets action = case action of
-      SetTopic _ digest -> [digest]
-      AppendLog _ digest -> [digest]
-      ResolveTopic _ digest -> [digest]
-      ResolveLog _ digest -> [digest]
-      SetPin digest -> [digest]
-      SetReview a b _ -> [a, b]
-      _ -> []
     checkMemory (digest, memory) = traverse_ (checkEdge digest) (Set.toAscList (memEdges memory))
     checkEdge source edge = when (retains (kind edge) && Map.notMember (target edge) memories) (throwE (MissingRetainedTarget source (target edge)))
 
@@ -281,7 +302,7 @@ loadMemories :: Repository -> Set.Set Id -> ExceptT RepositoryError IO (Map Id M
 loadMemories repo ids = Map.fromList <$> traverse readOne (Set.toAscList ids)
   where
     readOne digest = do
-      bytes <- readChecked maxPayloadBytes (objectPath repo digest) digest
+      bytes <- readObjectBytes repo digest
       memory <- either (throwE . InvalidMemory digest) pure (parseMemory bytes)
       pure (digest, memory)
 
@@ -290,8 +311,134 @@ readMemory :: Snapshot -> Id -> IO (Either RepositoryError Memory)
 readMemory snapshot digest = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   unless (digest `Set.member` checkpointObjects (snapshotCheckpoint snapshot)) (throwE (UnacceptedObject digest))
   let repo = Repository (snapshotRoot snapshot) (checkpointStore (snapshotCheckpoint snapshot))
-  bytes <- readChecked maxPayloadBytes (objectPath repo digest) digest
+  bytes <- readObjectBytes repo digest
   either (throwE . InvalidMemory digest) pure (parseMemory bytes)
+
+-- Missing active copies fall back to the durable archive. An existing corrupt
+-- copy is an error, never a reason to hide corruption behind another file.
+readObjectBytes :: Repository -> Id -> ExceptT RepositoryError IO ByteString
+readObjectBytes repo digest = ExceptT $ do
+  local <- ifMissing Nothing (Just <$> runExceptT primary)
+  maybe fallback pure local
+  where
+    primary = readChecked maxPayloadBytes (objectPath repo digest) digest
+    fallback = runExceptT (readChecked maxPayloadBytes (archiveObjectPath repo digest) digest)
+
+data CollectionPlan = CollectionPlan
+  { collectionCheckpoint :: CheckpointId,
+    collectionRetained :: Set.Set Id,
+    collectionCandidates :: Set.Set Id,
+    collectionEvicted :: Set.Set Id
+  }
+  deriving (Eq, Show)
+
+planCollection :: Repository -> Int -> IO (Either RepositoryError CollectionPlan)
+planCollection repo depth = fmap join $ tryWith RepositoryIO $ runExceptT $ do
+  snapshot <- ExceptT (loadSnapshot repo)
+  collectionPlan repo snapshot depth
+
+collectionPlan :: Repository -> Snapshot -> Int -> ExceptT RepositoryError IO CollectionPlan
+collectionPlan repo snapshot depth = do
+  unless (depth >= 1 && depth <= 1000) (throwE InvalidRetentionDepth)
+  let checkpoint = snapshotCheckpoint snapshot
+  memories <- loadMemories repo (checkpointObjects checkpoint)
+  let live = retained depth checkpoint (snapshotState snapshot) memories
+  pure (CollectionPlan (snapshotId snapshot) live (activeObjects checkpoint `Set.difference` live) (evictedObjects checkpoint))
+
+-- | Prepare a complete durable local archive of one accepted checkpoint.
+-- This is NOT acknowledgement of remote publication. Transport calls the
+-- separate acknowledgement API only after it verifies remote inclusion.
+archiveSnapshot :: Repository -> Snapshot -> IO (Either RepositoryError CheckpointId)
+archiveSnapshot = archiveSnapshotWith (const (pure ()))
+
+archiveSnapshotWith :: FaultHook -> Repository -> Snapshot -> IO (Either RepositoryError CheckpointId)
+archiveSnapshotWith hook repo@(Repository root _) captured = withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
+  current <- ExceptT (loadSnapshot repo)
+  unless (snapshotRoot captured == root && included (snapshotCheckpoint captured) (snapshotCheckpoint current)) (throwE ArchiveNotAccepted)
+  saveArchive hook repo captured
+  pure (snapshotId captured)
+
+included :: Checkpoint -> Checkpoint -> Bool
+included part whole = checkpointStore part == checkpointStore whole && checkpointEvents part `Set.isSubsetOf` checkpointEvents whole && checkpointObjects part `Set.isSubsetOf` checkpointObjects whole
+
+saveArchive :: FaultHook -> Repository -> Snapshot -> ExceptT RepositoryError IO ()
+saveArchive hook repo@(Repository root _) snapshot = do
+  liftIO (traverse_ (ensureDirectory hook . (root </>)) ["archive/objects", "archive/events", "archive/checkpoints"])
+  let checkpoint = snapshotCheckpoint snapshot
+  traverse_ (\digest -> readObjectBytes repo digest >>= saveImmutable hook (ArchiveMemoryFile digest) (archiveObjectPath repo digest)) (Set.toAscList (checkpointObjects checkpoint))
+  traverse_ (\(key, event) -> saveImmutable hook (ArchiveEventFile key) (archiveEventPath repo key) (renderEvent event)) (Map.toAscList (State.events (snapshotState snapshot)))
+  -- A manifest is the archive commit marker. It comes after every dependency.
+  saveImmutable hook (ArchiveCheckpointFile (snapshotId snapshot)) (archiveCheckpointPath repo (snapshotId snapshot)) (renderCheckpoint checkpoint)
+
+loadArchive :: Repository -> CheckpointId -> ExceptT RepositoryError IO Checkpoint
+loadArchive repo@(Repository _ store) key@(CheckpointId digest) = do
+  bytes <- readChecked maxCheckpointBytes (archiveCheckpointPath repo key) digest
+  checkpoint <- either (throwE . InvalidCheckpoint) pure (parseCheckpoint bytes)
+  unless (checkpointStore checkpoint == store) (throwE IdentityMismatch)
+  entries <- traverse (\eventId@(EventId hash) -> (eventId,) <$> readChecked maxEventBytes (archiveEventPath repo eventId) hash) (Set.toAscList (checkpointEvents checkpoint))
+  state <- either (throwE . InvalidState) pure (State.fromBytes store entries)
+  memories <-
+    Map.fromList
+      <$> traverse
+        ( \i -> do
+            payload <- readChecked maxPayloadBytes (archiveObjectPath repo i) i
+            memory <- either (throwE . InvalidMemory i) pure (parseMemory payload)
+            pure (i, memory)
+        )
+        (Set.toAscList (checkpointObjects checkpoint))
+  validatePayloads state memories
+  pure checkpoint
+
+-- | Internal transport boundary. The caller MUST already have verified that
+-- the remote contains the archived checkpoint's complete event/payload sets.
+-- The local archive is validated independently before obligations are cleared.
+-- Newer local writes remain pending. There is deliberately no CLI/MCP command.
+acknowledgePublished :: Repository -> CheckpointId -> IO (Either RepositoryError Snapshot)
+acknowledgePublished = acknowledgePublishedWith (const (pure ()))
+
+acknowledgePublishedWith :: FaultHook -> Repository -> CheckpointId -> IO (Either RepositoryError Snapshot)
+acknowledgePublishedWith hook repo@(Repository root store) key = withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
+  current <- ExceptT (loadSnapshot repo)
+  archived <- loadArchive repo key
+  liftIO (syncDir (takeDirectory (archiveCheckpointPath repo key)))
+  let previous = snapshotCheckpoint current
+  unless (included archived previous) (throwE ArchiveNotAccepted)
+  base <- either (throwE . InvalidCheckpoint) pure (mkCheckpoint store (checkpointEvents previous) (checkpointObjects previous) (pendingEvents previous `Set.difference` checkpointEvents archived) (pendingObjects previous `Set.difference` checkpointObjects archived))
+  checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted (evictedObjects previous) base)
+  saveCheckpoint hook repo checkpoint
+  publishCurrent hook repo checkpoint
+  pure (Snapshot root checkpoint (snapshotState current))
+
+-- | Recompute under the mutation lock; never sweep a caller's stale plan.
+-- All accepted bytes enter the durable archive before CURRENT permits eviction.
+-- Unlink follows publication, so every old captured snapshot has fallback.
+collect :: Repository -> CheckpointId -> Int -> IO (Either RepositoryError CollectionPlan)
+collect = collectWith (const (pure ()))
+
+collectWith :: FaultHook -> Repository -> CheckpointId -> Int -> IO (Either RepositoryError CollectionPlan)
+collectWith hook repo@(Repository root _) expected depth = withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
+  current <- ExceptT (loadSnapshot repo)
+  unless (snapshotId current == expected) (throwE StaleCheckpoint)
+  plan <- collectionPlan repo current depth
+  saveArchive hook repo current
+  let gone = (collectionEvicted plan <> collectionCandidates plan) `Set.difference` collectionRetained plan
+      restored = collectionEvicted plan `Set.difference` gone
+  traverse_ (\digest -> readObjectBytes repo digest >>= saveImmutable hook (MemoryFile digest) (objectPath repo digest)) (Set.toAscList restored)
+  checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone (snapshotCheckpoint current))
+  saveCheckpoint hook repo checkpoint
+  publishCurrent hook repo checkpoint
+  -- A failed unlink is retryable: CURRENT already excludes these active copies.
+  removal <- liftIO $ tryWith (CollectionIncomplete (checkpointId checkpoint)) $ do
+    traverse_
+      ( \digest -> do
+          ifMissing () (removeFile (objectPath repo digest))
+          hook (MemoryEvicted digest)
+      )
+      (Set.toAscList gone)
+    syncDir (root </> "objects")
+    hook EvictionsSynced
+  either throwE pure removal
+  pure plan {collectionCheckpoint = checkpointId checkpoint, collectionEvicted = gone}
 
 saveCheckpoint :: FaultHook -> Repository -> Checkpoint -> ExceptT RepositoryError IO ()
 saveCheckpoint hook repo checkpoint = saveImmutable hook (CheckpointFile (checkpointId checkpoint)) (checkpointPath repo (checkpointId checkpoint)) (renderCheckpoint checkpoint)
@@ -328,6 +475,15 @@ eventPath (Repository root _) (EventId digest) = root </> "events" </> T.unpack 
 
 checkpointPath :: Repository -> CheckpointId -> FilePath
 checkpointPath (Repository root _) (CheckpointId digest) = root </> "checkpoints" </> T.unpack (Id.render digest)
+
+archiveObjectPath :: Repository -> Id -> FilePath
+archiveObjectPath (Repository root _) digest = root </> "archive" </> "objects" </> T.unpack (Id.render digest)
+
+archiveEventPath :: Repository -> EventId -> FilePath
+archiveEventPath (Repository root _) (EventId digest) = root </> "archive" </> "events" </> T.unpack (Id.render digest)
+
+archiveCheckpointPath :: Repository -> CheckpointId -> FilePath
+archiveCheckpointPath (Repository root _) (CheckpointId digest) = root </> "archive" </> "checkpoints" </> T.unpack (Id.render digest)
 
 readChecked :: Int -> FilePath -> Id -> ExceptT RepositoryError IO ByteString
 readChecked limit path digest = do

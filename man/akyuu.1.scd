@@ -175,6 +175,43 @@ all writers and GC jobs together; old processes do not use this protocol.
 	Read the exact direct sources of an accepted summary in DAG order.
 	This command does not substitute other summaries for the evidence.
 
+*replica archive* [*--json*]
+	Save a complete durable local archive of accepted events and payloads.
+	Keep pending export obligations. This command does not publish to a remote.
+	The archive retains bytes indefinitely and permits explicit fallback reads.
+
+*replica gc* [*--keep-generations* _n_] [*--dry-run* | *--expected* _checkpoint_] [*--json*]
+	Plan or remove unused local copies. The default generation depth is 5;
+	valid depths are 1 to 1000. Retain ancestry along every causal branch.
+	Copy the checkpoint from a dry run to collect. A changed checkpoint
+	refuses collection. Pending exports, all current heads, pins, log history
+	and retaining dependencies remain active. The archive keeps every accepted
+	object. Reads of old snapshots fall back without restore to search.
+	A new live reference restores its payload. A repeated import of old data
+	preserves eviction. Local GC never removes review records or archive bytes.
+	Until transport verifies publication, unpublished objects remain protected.
+
+*replica pin-state* _id_ [*--json*]
+	Read pin state and its opaque resource version.
+
+*replica pin* _id_ *--expected* _version_ [*--json*]
+	Pin an accepted memory. Use the version from *replica pin-state*.
+	An archived memory becomes active again.
+
+*replica unpin* _id_ *--expected* _version_ [*--json*]
+	Clear every observed pin head. An unseen concurrent pin survives.
+
+*replica review-state* _id_ _id_ [*--json*]
+	Read every surviving review reason and the pair's opaque resource version.
+	Pair order does not change the resource or version.
+
+*replica review* _id_ _id_ *--expected* _version_ *--agent* _text_ *--reason* _text_ [*--json*]
+	Record that two accepted memories are distinct. Use the version from
+	*replica review-state*. Concurrent reasons remain visible.
+
+*replica unreview* _id_ _id_ *--expected* _version_ [*--json*]
+	Clear observed review heads. An unseen concurrent review survives.
+
 *replica serve* [*--port* _n_] [_context-options_]
 	Serve the read-only topic browser on loopback. Port 0, the default, chooses
 	a free port. Print its URL. Context options are as for
@@ -195,7 +232,11 @@ include the same JSON in structured content and text. The set includes
 block unrelated resolution, but permit repairs to the controls themselves.
 Missing controls permit initial setup. The log tools are *log_read*,
 *log_append*, *log_levels*, *log_summarise*, *log_resolution*, *log_todo* and
-*log_unfold*. This set has no legacy raw tools, GC, migration, or remote sync.
+*log_unfold*. Pin tools are *pin_state*, *pin_set* and *pin_clear*.
+Review tools are *review_state*, *review_set* and *review_clear*. Each write
+requires the resource version from its state read. GC and archive operations
+remain CLI maintenance commands. This set has no legacy raw tools, migration,
+or remote sync.
 Legacy commands refuse checkpoint repositories.
 
 ## Logs and notes

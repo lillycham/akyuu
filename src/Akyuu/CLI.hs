@@ -60,11 +60,15 @@ import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Source qualified as Source
 import Akyuu.Store qualified as Store
+import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Context qualified as ReplicaContext
 import Akyuu.Sync.Logs qualified as ReplicaLogs
+import Akyuu.Sync.Repository qualified as ReplicaRepository
+import Akyuu.Sync.Resources qualified as ReplicaResources
 import Akyuu.Sync.Search qualified as ReplicaSearch
 import Akyuu.Sync.State (Version, parseVersion)
 import Akyuu.Sync.Topics qualified as Topics
+import Akyuu.Sync.Types (Action (ClearPin, ClearReview, SetPin, SetReview), Resource (PinResource, ReviewResource), ReviewValue (ReviewValue))
 import Akyuu.Sync.Web qualified as ReplicaWeb
 import Akyuu.Tier (Place (Place))
 import Akyuu.Web.Page qualified as Page
@@ -175,6 +179,13 @@ data ReplicaCommand i
   | ReplicaResolution Name Int Bool
   | ReplicaTodo Name Int Int Bool
   | ReplicaUnfold i Bool
+  | ReplicaArchive Bool
+  | ReplicaGC Int (Maybe i) Bool Bool
+  | ReplicaPinState i Bool
+  | ReplicaPin i Version Bool Bool
+  | ReplicaReviewState i i Bool
+  | ReplicaReview i i Version Text Text Bool
+  | ReplicaUnreview i i Version Bool
   | ReplicaServe Int ReplicaContextArgs
   | ReplicaViz ReplicaContextArgs
   deriving (Eq, Show, Functor, Foldable, Traversable)
@@ -400,6 +411,14 @@ commandParser =
           <> cmd "log-resolution" (ReplicaResolution <$> topicName <*> keepEpisodes <*> jsonFlag) "Read a deterministic summary cover with raw fallback."
           <> cmd "log-todo" (ReplicaTodo <$> topicName <*> option (atLeast 2) (long "size" <> value 8 <> metavar "N" <> help "Sources per suggested summary.") <*> keepEpisodes <*> jsonFlag) "List uncovered source batches for summaries."
           <> cmd "unfold" (ReplicaUnfold <$> argument idReader (metavar "ID") <*> jsonFlag) "Read the exact direct sources of an accepted summary."
+          <> cmd "archive" (ReplicaArchive <$> jsonFlag) "Save a complete durable local archive. This does not acknowledge remote publication."
+          <> cmd "gc" (ReplicaGC <$> option (atLeast 1) (long "keep-generations" <> value 5 <> metavar "N" <> help "Retain this many generations along every causal branch, from 1 to 1000.") <*> optional (option idReader (long "expected" <> metavar "CHECKPOINT" <> help "The checkpoint from a dry run. Required for collection.")) <*> switch (long "dry-run" <> help "Report the plan without a change.") <*> jsonFlag) "Evict unused local copies after a complete durable archive."
+          <> cmd "pin-state" (ReplicaPinState <$> fullMemory <*> jsonFlag) "Read pin state and its resource version."
+          <> cmd "pin" (ReplicaPin <$> fullMemory <*> topicVersion <*> pure True <*> jsonFlag) "Pin an accepted memory with a resource version check."
+          <> cmd "unpin" (ReplicaPin <$> fullMemory <*> topicVersion <*> pure False <*> jsonFlag) "Clear observed pin heads. A concurrent unseen pin survives."
+          <> cmd "review-state" (ReplicaReviewState <$> fullMemory <*> fullMemory <*> jsonFlag) "Read every surviving review reason and its resource version."
+          <> cmd "review" (ReplicaReview <$> fullMemory <*> fullMemory <*> topicVersion <*> strOption (long "agent" <> metavar "TEXT" <> help "The review author.") <*> strOption (long "reason" <> metavar "TEXT" <> help "Why these memories are distinct.") <*> jsonFlag) "Review a pair with a resource version check."
+          <> cmd "unreview" (ReplicaUnreview <$> fullMemory <*> fullMemory <*> topicVersion <*> jsonFlag) "Clear observed reviews. A concurrent unseen review survives."
           <> cmd "serve" (ReplicaServe <$> option portReader (long "port" <> value 0 <> metavar "PORT" <> help "Loopback port; 0 chooses a free port.") <*> replicaContextArgs) "Serve the read-only replica topic browser."
           <> cmd "viz" (ReplicaViz <$> replicaContextArgs) "Export one read-only topic snapshot as HTML."
     replicaContextArgs =
@@ -411,8 +430,9 @@ commandParser =
         <*> many (option nameReader (long "ref" <> metavar "NAME" <> help "An extra context ref."))
     jsonFlag = switch (long "json" <> help "Print structured JSON, including operation errors.")
     keepEpisodes = option (atLeast 0) (long "keep" <> value 10 <> metavar "N" <> help "Recent episodes to retain whole.")
+    fullMemory = argument idReader (metavar "ID")
     topicName = argument nameReader (metavar "NAME")
-    topicVersion = option (eitherReader (either (const (Left "Give the complete opaque topic version.")) Right . parseVersion . T.pack)) (long "expected" <> metavar "VERSION" <> help "The complete version returned by replica read.")
+    topicVersion = option (eitherReader (either (const (Left "Give the complete opaque resource version.")) Right . parseVersion . T.pack)) (long "expected" <> metavar "VERSION" <> help "The complete version returned by the matching state read.")
     addP =
       (\r a -> maybe (Add a) (`AddRef` a) r)
         <$> optional (option nameReader (long "ref" <> metavar "NAME" <> help "Also make a new ref NAME for the memory. The ref must not exist."))
@@ -942,6 +962,28 @@ runReplicaCommand root operation = do
         ReplicaUnfold digest _ -> do
           entries <- ExceptT (ReplicaLogs.unfold local digest)
           pure (ReplicaLogs.entriesJSON entries, T.unlines (map (memBody . snd) entries))
+        ReplicaArchive _ -> do
+          repo <- repository
+          snapshot <- ExceptT (Topics.captureSnapshot local)
+          CheckpointId digest <- store (ReplicaRepository.archiveSnapshot repo snapshot)
+          pure (object ["archived_checkpoint" .= Id.render digest], "Local archive saved: " <> Id.render digest)
+        ReplicaGC depth expected dry _ -> do
+          repo <- repository
+          report <-
+            if dry
+              then store (ReplicaRepository.planCollection repo depth)
+              else case expected of
+                Nothing -> throwE (Topics.InvalidInput "Give --expected from replica gc --dry-run before collection.")
+                Just digest -> store (ReplicaRepository.collect repo (CheckpointId digest) depth)
+          let CheckpointId checkpoint = ReplicaRepository.collectionCheckpoint report
+              ids = map Id.render . Set.toAscList
+              payload = object ["checkpoint" .= Id.render checkpoint, "retained" .= ids (ReplicaRepository.collectionRetained report), "candidates" .= ids (ReplicaRepository.collectionCandidates report), "evicted" .= ids (ReplicaRepository.collectionEvicted report)]
+          pure (payload, decodeUtf8 (BL.toStrict (encode payload)))
+        ReplicaPinState digest _ -> resource (ReplicaResources.readResource local (PinResource digest))
+        ReplicaPin digest expected pin _ -> resource (ReplicaResources.writeResource local expected (if pin then SetPin digest else ClearPin digest))
+        ReplicaReviewState a b _ -> resource (ReplicaResources.readResource local (ReviewResource a b))
+        ReplicaReview a b expected author reason _ -> resource (ReplicaResources.writeResource local expected (SetReview a b (ReviewValue author reason)))
+        ReplicaUnreview a b expected _ -> resource (ReplicaResources.writeResource local expected (ClearReview a b))
   pure $ case result of
     Right (payload, text) -> Right (output True payload text)
     Left err | json -> Right (output False (Topics.errorJSON err) (Topics.describeError err))
@@ -964,6 +1006,18 @@ runReplicaCommand root operation = do
       ReplicaResolution _ _ flag -> flag
       ReplicaTodo _ _ _ flag -> flag
       ReplicaUnfold _ flag -> flag
+      ReplicaArchive flag -> flag
+      ReplicaGC _ _ _ flag -> flag
+      ReplicaPinState _ flag -> flag
+      ReplicaPin _ _ _ flag -> flag
+      ReplicaReviewState _ _ flag -> flag
+      ReplicaReview _ _ _ _ _ flag -> flag
+      ReplicaUnreview _ _ _ flag -> flag
+    store = ExceptT . fmap (first Topics.StorageError)
+    repository = store (ReplicaRepository.openRepository root)
+    resource action = do
+      payload <- ExceptT action
+      pure (payload, decodeUtf8 (BL.toStrict (encode payload)))
     new args = ExceptT (first (Topics.InvalidInput . describe) <$> runExceptT (newMemory args))
     view report = (Topics.viewJSON report, Topics.renderView report)
     context report@(Topics.TopicContext _ views) = (Topics.contextJSON report, T.concat (map Topics.renderView views))

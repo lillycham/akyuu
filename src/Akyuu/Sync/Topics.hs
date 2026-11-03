@@ -22,6 +22,7 @@ module Akyuu.Sync.Topics
     resolveTopicGuarded,
     selectTopicGuarded,
     appendLogChecked,
+    changeResource,
     ResolutionGuard,
     viewJSON,
     contextJSON,
@@ -42,11 +43,11 @@ import Akyuu.Ops (NewMemory (newAboutRefs, newBody, newEdges), buildMemory)
 import Akyuu.Refs (Name, nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Event (eventAction, eventReplica, eventTime, mkEvent)
-import Akyuu.Sync.Repository (Repository, RepositoryError (CorruptData, IdentityMismatch, InvalidCheckpoint, InvalidMemory, InvalidPointer, InvalidState, MissingCurrent, MissingLogPredecessor, MissingPayload, MissingRetainedTarget, NotRepository, OversizedData, PublicationUncertain, RepositoryBusy, RepositoryIO, UnacceptedObject), Snapshot, commitLocal, initialise, loadSnapshot, openRepository, readMemory, readStoreIdentity, snapshotId, snapshotState)
+import Akyuu.Sync.Repository (Repository, RepositoryError (ArchiveNotAccepted, CollectionIncomplete, CorruptData, IdentityMismatch, InvalidCheckpoint, InvalidMemory, InvalidPointer, InvalidResidency, InvalidRetentionDepth, InvalidState, MissingCurrent, MissingLogPredecessor, MissingPayload, MissingRetainedTarget, NotRepository, OversizedData, PublicationUncertain, RepositoryBusy, RepositoryIO, StaleCheckpoint, UnacceptedObject), Snapshot, commitLocal, initialise, loadSnapshot, openRepository, readMemory, readStoreIdentity, snapshotId, snapshotState)
 import Akyuu.Sync.Repository qualified as Repository
 import Akyuu.Sync.State (RefKind (LogKind, TopicKind), ResourceState (Absent, LogHeads, RefTypeConflict, Registered, TopicHeads), StateError (StaleVersion), Version, events, interpret, resourceHeads, storeId, version, versionText)
 import Akyuu.Sync.State qualified as State
-import Akyuu.Sync.Types (Action (AppendLog, RegisterReplica, ResolveLog, ResolveTopic, SetTopic), EventId (EventId), Identifier, Nonce (Nonce), ReplicaId (ReplicaId), Resource (RefResource, RegistryResource), StoreId (StoreId), mkIdentifier, parseIdentifier, renderIdentifier, resourceOf)
+import Akyuu.Sync.Types (Action (AppendLog, ClearPin, ClearReview, RegisterReplica, ResolveLog, ResolveTopic, SetPin, SetReview, SetTopic), EventId (EventId), Identifier, Nonce (Nonce), ReplicaId (ReplicaId), Resource (RefResource, RegistryResource), ReviewValue (reviewAuthor, reviewReason), StoreId (StoreId), mkIdentifier, parseIdentifier, renderIdentifier, resourceOf)
 import Control.Exception (IOException, displayException)
 import Control.Monad (join, unless, when)
 import Control.Monad.IO.Class (liftIO)
@@ -104,6 +105,7 @@ data TopicError
   | UnregisteredReplica ReplicaId
   | ConfigurationChanged
   | TextIndexFailed Text
+  | StaleResource Resource Version
   deriving (Eq, Show)
 
 storage :: IO (Either RepositoryError a) -> ExceptT TopicError IO a
@@ -249,6 +251,35 @@ resolveTopicGuarded guard local name expected new = writeTopicWith guard local n
 selectTopicGuarded :: ResolutionGuard -> LocalReplica -> Name -> Version -> Id -> IO (Either TopicError TopicView)
 selectTopicGuarded guard local name expected selected = writeTopicWith guard local name (ResolveWrite expected (Left selected))
 
+-- | Pin/review sets and observed clears use the same durable event transaction
+-- as topics. GC never calls this function or invents a removal event.
+changeResource :: LocalReplica -> Version -> Action -> IO (Either TopicError Snapshot)
+changeResource (LocalReplica repo replica) expected action = fmap join $ tryWith TopicIO $ runExceptT $ do
+  snapshot <- storage (loadSnapshot repo)
+  let state = snapshotState snapshot
+      resource = resourceOf action
+      token = version state resource
+  targets <- case action of
+    SetPin digest -> pure [digest]
+    ClearPin _ -> pure []
+    SetReview a b value -> do
+      when (T.null (T.strip (reviewAuthor value)) || T.null (T.strip (reviewReason value))) (throwE (InvalidInput "A review needs a nonblank author and reason."))
+      when (a == b) (throwE (InvalidInput "A review needs two different memory IDs."))
+      pure [a, b]
+    ClearReview _ _ -> pure []
+    _ -> throwE (InvalidInput "This operation accepts only pin and review changes.")
+  unless (expected == token) (throwE (StaleResource resource token))
+  traverse_ (storage . readMemory snapshot) targets
+  (nonce, now) <- liftIO freshEventData
+  event <- either (throwE . InvalidInput . T.pack . show) pure (mkEvent (storeId state) replica nonce (Map.keysSet (resourceHeads state resource)) action now)
+  result <- liftIO (commitLocal repo expected event [])
+  case result of
+    Left (InvalidState StaleVersion) -> do
+      latest <- storage (loadSnapshot repo)
+      throwE (StaleResource resource (version (snapshotState latest) resource))
+    Left failure -> throwE (StorageError failure)
+    Right accepted -> pure accepted
+
 -- | Append to every observed log head. The caller can bind a summary to the
 -- versions of its source levels. Both the target and those dependencies are
 -- checked again inside the repository transaction.
@@ -352,8 +383,13 @@ contextJSON :: TopicContext -> Value
 contextJSON (TopicContext checkpoint views) = object ["checkpoint" .= checkpointText checkpoint, "topics" .= map viewJSON views]
 
 errorJSON :: TopicError -> Value
-errorJSON err = object (["error" .= (code :: Text), "message" .= describeError err] <> maybe [] (\view -> ["topic" .= viewJSON view]) detail)
+errorJSON err = object (["error" .= (code :: Text), "message" .= describeError err] <> maybe [] (\view -> ["topic" .= viewJSON view]) detail <> extras)
   where
+    extras = case err of
+      StaleResource _ token -> ["version" .= versionText token]
+      StorageError (PublicationUncertain key _) -> ["checkpoint" .= checkpointText key]
+      StorageError (CollectionIncomplete key _) -> ["checkpoint" .= checkpointText key]
+      _ -> []
     (code, detail) = case err of
       ExistingTopic view -> ("topic-exists", Just view)
       NeedsResolution view -> ("topic-conflict", Just view)
@@ -361,6 +397,8 @@ errorJSON err = object (["error" .= (code :: Text), "message" .= describeError e
       MissingTopic _ -> ("missing-topic", Nothing)
       IsLog _ -> ("wrong-ref-type", Nothing)
       StorageError (PublicationUncertain _ _) -> ("publication-uncertain", Nothing)
+      StorageError (CollectionIncomplete _ _) -> ("collection-incomplete", Nothing)
+      StorageError StaleCheckpoint -> ("stale-checkpoint", Nothing)
       StorageError _ -> ("repository-error", Nothing)
       TopicIO _ -> ("io-error", Nothing)
       UnregisteredReplica _ -> ("unregistered-replica", Nothing)
@@ -368,6 +406,7 @@ errorJSON err = object (["error" .= (code :: Text), "message" .= describeError e
       InvalidInput _ -> ("invalid-input", Nothing)
       ConfigurationChanged -> ("configuration-changed", Nothing)
       TextIndexFailed _ -> ("text-index-error", Nothing)
+      StaleResource _ _ -> ("stale-version", Nothing)
 
 renderView :: TopicView -> Text
 renderView view =
@@ -389,6 +428,7 @@ replicaText (ReplicaId who) = renderIdentifier who
 
 describeError :: TopicError -> Text
 describeError err = case err of
+  StaleResource _ _ -> "The resource version changed. Read its state before another write."
   ConfigurationChanged -> "The configured policy or tier version changed. Read configured context before another resolution."
   TextIndexFailed message -> "The topic text index failed: " <> message
   InvalidInput text -> text
@@ -416,4 +456,9 @@ describeError err = case err of
     MissingRetainedTarget _ digest -> "The write needs retained memory " <> Id.render digest <> "."
     UnacceptedObject digest -> "Memory " <> Id.render digest <> " is outside this checkpoint."
     MissingLogPredecessor _ digest -> "A log append does not follow its observed predecessor " <> Id.render digest <> "."
+    StaleCheckpoint -> "The checkpoint changed. Read a new GC plan before collection."
+    InvalidRetentionDepth -> "The generation depth must be from 1 to 1000."
+    ArchiveNotAccepted -> "The archive checkpoint does not belong to the accepted repository history."
+    InvalidResidency -> "The checkpoint marks a required live or pending payload as evicted."
+    CollectionIncomplete checkpoint _ -> "Collection published " <> checkpointText checkpoint <> " but did not finish local file removal. Retry collection."
     PublicationUncertain checkpoint _ -> "Publication of " <> checkpointText checkpoint <> " is uncertain. Read current state before another write."
