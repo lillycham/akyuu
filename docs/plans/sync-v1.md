@@ -160,6 +160,15 @@ sandbox on Apple Silicon with Asahi/NixOS. Packaged replica and sync smoke,
 format, man and legacy version checks passed. The fake Git scripts use the
 shell from PATH because Linux build sandboxes do not provide `/usr/bin/env`.
 
+After log/context/browser integration, all 1,261 tests passed in the Mac
+development shell and native aarch64-darwin and aarch64-linux Nix sandboxes
+on 2026-11-03. Packaged CLI/MCP/HTTP, DOM and sync smoke checks passed on
+both platforms, as did format, man and legacy version checks. New regressions
+cover shared history budgets, summary coverage across pages, stale
+continuation, invalid summary-level types, incomplete history and exact
+evidence reads. The browser access host was unavailable, so rendered UI
+interaction remains unverified.
+
 ## Experimental repository
 
 This API uses a separate, empty directory. It refuses a legacy store or an
@@ -219,10 +228,31 @@ The durability claim does not cover drive caches that survive an `fsync`.
 
 ## Next phase
 
-Complete log/context/browser integration and bounded traversal. Measure
-representative write, lock, join and archive costs before release acceptance.
-Bounded context pages, incremental validation and persistent search caches
-remain open. The current read interfaces use captured checkpoints.
+Configured context and the replica browser share summary-aware log pages.
+Each page keeps recent episodes whole and preserves exact direct and base
+source IDs. Entry limits apply after disjoint summary selection. Complete
+history validation permits at most 4096 memories across 32 levels per log;
+excessive or incomplete histories produce explicit diagnostics. These limits
+bound log traversal and entry counts, not individual memory body sizes or
+the repository's existing full-inventory checkpoint validation.
+
+The default is page 1, 20 entries and 10 recent whole episodes. CLI options
+are `--log-page`, `--log-limit` and `--log-keep`. MCP uses `log_page`,
+`log_limit` and `log_keep`. Later pages require the first response checkpoint
+through CLI `--checkpoint` or MCP `log_checkpoint`. A changed checkpoint
+refuses continuation; restart at page one. This avoids silent skips or
+duplicates after concurrent writes. Summary coverage remains deterministic.
+
+The live browser uses `/api/view` with `log_page`, `log_limit`, `log_keep`
+and `checkpoint`. It reads exact evidence through `/api/source` with a
+`memory` ID and the same `checkpoint`. A stale checkpoint returns HTTP 409.
+Every body enters the DOM as text. Static exports contain one selected page
+and source IDs; they do not request other pages or evidence over the network.
+
+Measure representative write, lock, join and archive costs before release
+acceptance. Ordinary consumer integration, incremental validation and
+persistent search caches remain open. The read interfaces use captured
+checkpoints. Context topic counts and body byte budgets remain open.
 
 Keep network deployment and live cutover behind their acceptance checks.
 

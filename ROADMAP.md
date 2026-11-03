@@ -7,7 +7,8 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
 
 - **Multi-machine sync.** Experimental checkpoint topics have local CLI,
   MCP, configured context, search and read-only browser interfaces. DAG logs
-  and summary levels have CLI and MCP interfaces. Local archive and GC
+  and summary levels have CLI, MCP, context and browser interfaces, with
+  bounded log pages and exact source reads. Local archive and GC
   protect pending exports; pins and reviews use causal events. Manual Git
   exchange, fresh join and a separate legacy snapshot copy are experimental.
   Complete consumer integration, performance acceptance and coordinated live

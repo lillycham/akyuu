@@ -4,6 +4,14 @@ module Akyuu.Sync.Logs
   ( LogRead (..),
     LogLevels (..),
     LogItem (..),
+    LogPageOptions (..),
+    LogPage (..),
+    defaultPageOptions,
+    validatePageOptions,
+    pageAt,
+    pageJSON,
+    renderPage,
+    levelsAtBounded,
     predecessors,
     orderEntries,
     readLog,
@@ -31,12 +39,12 @@ import Akyuu.Levels qualified as Levels
 import Akyuu.Memory (Memory (memBody, memCreated, memEdges))
 import Akyuu.Ops (NewMemory (newEdges))
 import Akyuu.Refs (Name, nameText)
+import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Repository (RepositoryError, Snapshot, readMemory)
 import Akyuu.Sync.State (Version, versionText)
-import Akyuu.Sync.Topics (LocalReplica, TopicError (InvalidInput, MissingTopic, NeedsResolution, StorageError), TopicHead (headMemoryId), TopicStatus (LogTopic, Missing), TopicView (viewHeads, viewName, viewStatus, viewVersion), appendLogChecked, captureSnapshot, describeError, topicViewAt, viewJSON)
+import Akyuu.Sync.Topics (LocalReplica, TopicError (ConfigurationChanged, InvalidInput, MissingTopic, NeedsResolution, StorageError), TopicHead (headMemoryId), TopicStatus (LogTopic, Missing), TopicView (viewCheckpoint, viewHeads, viewName, viewStatus, viewVersion), appendLogChecked, captureSnapshot, describeError, topicViewAt, viewJSON)
 import Akyuu.Sync.Types (Resource (RefResource))
 import Control.Monad (unless, when)
-import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE)
 import Data.Aeson (Value, object, (.=))
 import Data.Bifunctor (first)
@@ -75,6 +83,72 @@ data LogItem = LogItem
   }
   deriving (Eq, Show)
 
+data LogPageOptions = LogPageOptions
+  { pageNumber :: Int,
+    pageSize :: Int,
+    recentWhole :: Int,
+    pageCheckpoint :: Maybe Id
+  }
+  deriving (Eq, Show)
+
+defaultPageOptions :: LogPageOptions
+defaultPageOptions = LogPageOptions 1 20 10 Nothing
+
+data LogPage = LogPage
+  { pageTopic :: TopicView,
+    pageVersion :: Id,
+    pageItems :: [LogItem],
+    pageOptions :: LogPageOptions,
+    pageHasMore :: Bool,
+    pageTotal :: Int
+  }
+  deriving (Eq, Show)
+
+validatePageOptions :: LogPageOptions -> Either TopicError ()
+validatePageOptions options = do
+  unless
+    (pageNumber options >= 1 && pageNumber options <= 4096 && pageSize options >= 1 && pageSize options <= 100 && recentWhole options >= 0 && recentWhole options <= 4096)
+    (Left (InvalidInput "Log page must be from 1 to 4096, log limit from 1 to 100, and log keep from 0 to 4096."))
+  when
+    (pageNumber options > 1 && pageCheckpoint options == Nothing)
+    (Left (InvalidInput "Further log pages require the checkpoint from the first response."))
+
+-- | Coverage needs complete histories: do not claim a partial DAG is an ordered
+-- prefix. Refuse excessive work before resolution instead of silently omitting
+-- ancestors or summary alternatives. The budget is shared across all levels.
+pageAt :: Snapshot -> Name -> LogPageOptions -> IO (Either TopicError LogPage)
+pageAt snapshot name options = runExceptT $ do
+  ExceptT (pure (validatePageOptions options))
+  view <- ExceptT (topicViewAt snapshot name)
+  let CheckpointId checkpoint = viewCheckpoint view
+  when (maybe False (/= checkpoint) (pageCheckpoint options)) (throwE ConfigurationChanged)
+  levels <- ExceptT (levelsAtBounded snapshot name 4096)
+  items <- either (throwE . InvalidInput) pure (resolution (recentWhole options) levels)
+  let offset = (pageNumber options - 1) * pageSize options
+      selected = take (pageSize options) (drop offset items)
+  pure (LogPage view (levelsToken levels) selected options (offset + length selected < length items) (length items))
+
+pageJSON :: LogPage -> Value
+pageJSON report =
+  object
+    [ "topic" .= viewJSON (pageTopic report),
+      "checkpoint" .= let CheckpointId digest = viewCheckpoint (pageTopic report) in Id.render digest,
+      "version" .= Id.render (pageVersion report),
+      "page" .= pageNumber (pageOptions report),
+      "limit" .= pageSize (pageOptions report),
+      "keep" .= recentWhole (pageOptions report),
+      "has_more" .= pageHasMore report,
+      "total" .= pageTotal report,
+      "entries" .= map itemJSON (pageItems report)
+    ]
+
+renderPage :: LogPage -> Text
+renderPage report =
+  T.unlines
+    ( ["log: " <> nameText (viewName (pageTopic report)), "page: " <> T.pack (show (pageNumber (pageOptions report))) <> if pageHasMore report then " (more available)" else ""]
+        <> concat [["level: " <> T.pack (show (itemLevel item)), "memory: " <> Id.render (itemId item)] <> (if itemLevel item > 0 then ["direct sources: " <> T.intercalate " " (map Id.render (Levels.sources (itemMemory item))), "covered episodes: " <> T.intercalate " " (map Id.render (Set.toAscList (itemSources item)))] else []) <> [memBody (itemMemory item)] | item <- pageItems report]
+    )
+
 -- | All explicit predecessors, or the old one-derived-from chain fallback.
 predecessors :: Memory -> Set Id
 predecessors memory =
@@ -104,23 +178,27 @@ readLog :: LocalReplica -> Name -> Int -> IO (Either TopicError LogRead)
 readLog local name limit = runExceptT $ ExceptT (captureSnapshot local) >>= \snapshot -> ExceptT (logAt snapshot name limit)
 
 logAt :: Snapshot -> Name -> Int -> IO (Either TopicError LogRead)
-logAt snapshot name limit = runExceptT $ do
+logAt snapshot name limit = fmap fst <$> logAtWithin snapshot name limit maxBound
+
+logAtWithin :: Snapshot -> Name -> Int -> Int -> IO (Either TopicError (LogRead, Int))
+logAtWithin snapshot name limit budget = runExceptT $ do
   when (limit < 0) (throwE (InvalidInput "The log limit must be zero or more."))
   view <- ExceptT (topicViewAt snapshot name)
   when (viewStatus view == Missing) (throwE (MissingTopic name))
   unless (viewStatus view == LogTopic) (throwE (NeedsResolution view))
   let heads = Set.fromList (map headMemoryId (viewHeads view))
-  (memories, failures) <- liftIO (collect Map.empty [] heads)
+  (memories, failures) <- ExceptT (collect Map.empty [] heads)
   ordered <- either (throwE . InvalidInput) pure (orderEntries (Map.toList memories))
   let entries = take limit ordered
       emitted = Set.fromList (map fst entries)
       frontier = (heads <> Set.unions (map (predecessors . snd) entries)) `Set.difference` emitted
-  pure (LogRead view entries frontier failures)
+  pure (LogRead view entries frontier failures, Map.size memories + length failures)
   where
     collect found failures pending = case Set.minView pending of
-      Nothing -> pure (found, reverse failures)
+      Nothing -> pure (Right (found, reverse failures))
       Just (i, rest)
         | Map.member i found || i `elem` map fst failures -> collect found failures rest
+        | Map.size found + length failures >= budget -> pure (Left (InvalidInput "The log traversal budget was exceeded. No partial summary coverage was selected."))
         | otherwise -> do
             result <- readMemory snapshot i
             case result of
@@ -134,8 +212,15 @@ readLevels :: LocalReplica -> Name -> IO (Either TopicError LogLevels)
 readLevels local name = runExceptT $ ExceptT (captureSnapshot local) >>= \snapshot -> ExceptT (levelsAt snapshot name)
 
 levelsAt :: Snapshot -> Name -> IO (Either TopicError LogLevels)
-levelsAt snapshot name = runExceptT $ do
-  (reports, checks) <- go 0
+levelsAt snapshot name = levelsWithin snapshot name maxBound maxBound
+
+levelsAtBounded :: Snapshot -> Name -> Int -> IO (Either TopicError LogLevels)
+levelsAtBounded snapshot name budget = levelsWithin snapshot name budget 32
+
+levelsWithin :: Snapshot -> Name -> Int -> Int -> IO (Either TopicError LogLevels)
+levelsWithin snapshot name budget maxLevels = runExceptT $ do
+  when (budget < 1) (throwE (InvalidInput "The log traversal budget must be positive."))
+  (reports, checks) <- go 0 budget
   let token = Id.hashBytes (encodeUtf8 (T.unlines (nameText name : [nameText n <> " " <> versionText v | (RefResource n, v) <- checks])))
       levels = LogLevels name reports token checks
   -- Validate every source against the immediately lower level, including
@@ -143,16 +228,17 @@ levelsAt snapshot name = runExceptT $ do
   _ <- either (throwE . InvalidInput) pure (candidates levels)
   pure levels
   where
-    go k = do
+    go k available = do
       ref <- either (throwE . InvalidInput . T.pack . show) pure (Levels.levelRef name k)
       view <- ExceptT (topicViewAt snapshot ref)
       let check = (RefResource ref, viewVersion view)
       if k > 0 && viewStatus view == Missing
         then pure ([], [check])
         else do
-          result <- ExceptT (logAt snapshot ref maxBound)
+          when (k >= maxLevels) (throwE (InvalidInput "The log summary level budget was exceeded."))
+          (result, used) <- ExceptT (logAtWithin snapshot ref maxBound available)
           unless (Set.null (logFrontier result) && null (logFailures result)) (throwE (InvalidInput "The log history is incomplete. Restore the required episodes before a summary operation."))
-          (rest, checks) <- go (k + 1)
+          (rest, checks) <- go (k + 1) (available - used)
           pure (result : rest, check : checks)
 
 -- | Sources are exact IDs from the level below. Overlap with earlier summaries
@@ -242,7 +328,7 @@ itemsJSON :: [LogItem] -> Value
 itemsJSON items = object ["entries" .= map itemJSON items]
 
 itemJSON :: LogItem -> Value
-itemJSON item = object ["memory" .= Id.render (itemId item), "body" .= memBody (itemMemory item), "created" .= memCreated (itemMemory item), "level" .= itemLevel item, "sources" .= map Id.render (Set.toAscList (itemSources item))]
+itemJSON item = object ["memory" .= Id.render (itemId item), "body" .= memBody (itemMemory item), "created" .= memCreated (itemMemory item), "level" .= itemLevel item, "sources" .= map Id.render (Set.toAscList (itemSources item)), "direct_sources" .= (if itemLevel item > 0 then map Id.render (Levels.sources (itemMemory item)) else [])]
 
 logJSON :: LogRead -> Value
 logJSON report = object ["topic" .= viewJSON (logTopic report), "entries" .= [itemJSON (LogItem i m 0 (Set.singleton i)) | (i, m) <- logEntries report], "complete" .= (Set.null (logFrontier report) && null (logFailures report)), "frontier" .= map Id.render (Set.toAscList (logFrontier report)), "failures" .= [object ["memory" .= Id.render i, "message" .= describeError (StorageError err)] | (i, err) <- logFailures report]]

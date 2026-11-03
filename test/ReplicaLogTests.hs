@@ -8,9 +8,11 @@ import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memEdges), memoryId, renderMemory)
 import Akyuu.Ops (NewMemory (newEdges), buildMemory)
 import Akyuu.Refs (Name, mkName)
+import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Event (mkEvent)
 import Akyuu.Sync.Logs (LogItem (itemId, itemLevel, itemSources), LogLevels (levelsChecks, levelsReads, levelsToken), LogRead (logEntries, logFailures, logFrontier), appendLog, levelsAt, logAt, orderEntries, predecessors, readLevels, readLog, resolution, summarise, todo, unfold)
-import Akyuu.Sync.Repository (RepositoryError (MissingLogPredecessor), importState, loadSnapshot, openRepository, snapshotState)
+import Akyuu.Sync.Logs qualified as Logs
+import Akyuu.Sync.Repository (RepositoryError (MissingLogPredecessor), importState, loadSnapshot, openRepository, snapshotId, snapshotState)
 import Akyuu.Sync.State qualified as State
 import Akyuu.Sync.Topics (LocalReplica, TopicError (InvalidInput, NeedsResolution, StaleTopic), TopicHead (headEvent, headMemory, headMemoryId, headTime), TopicStatus (LogTopic), TopicView (viewHeads, viewStatus, viewVersion), appendLogChecked, captureSnapshot, createTopic, readTopic)
 import Akyuu.Sync.Types (Action (AppendLog, RegisterReplica), EventId, Nonce (Nonce), ReplicaId (ReplicaId), Resource (RegistryResource), mkIdentifier)
@@ -80,7 +82,40 @@ replicaLogTests :: TestTree
 replicaLogTests =
   testGroup
     "replicated logs"
-    [ testCase "a diamond reads both branches and the shared ancestor once" $ withLocal $ \root local -> do
+    [ testCase "bounded levels share their budget across base and summary histories" $ withLocal $ \_ local -> do
+        ids <- traverse (append local) ["a", "b", "c"]
+        _ <- summary local 1 (take 2 ids) "ab"
+        snapshot <- captureSnapshot local >>= right
+        Logs.levelsAtBounded snapshot logName 3 >>= assertInvalid
+        complete <- Logs.levelsAtBounded snapshot logName 4 >>= right
+        length (levelsReads complete) @?= 2,
+      testCase "log pages preserve coverage and require the same captured checkpoint" $ withLocal $ \_ local -> do
+        ids <- traverse (append local) ["a", "b", "c", "d", "e"]
+        compressed <- summary local 1 (take 3 ids) "abc"
+        snapshot <- captureSnapshot local >>= right
+        let CheckpointId checkpoint = snapshotId snapshot
+            options = Logs.LogPageOptions 1 2 1 Nothing
+        first <- Logs.pageAt snapshot logName options >>= right
+        map itemId (Logs.pageItems first) @?= reverse (drop 3 ids)
+        Logs.pageHasMore first @?= True
+        second <- Logs.pageAt snapshot logName options {Logs.pageNumber = 2, Logs.pageCheckpoint = Just checkpoint} >>= right
+        map itemId (Logs.pageItems second) @?= [compressed]
+        assertCover ids (Logs.pageItems first <> Logs.pageItems second)
+        Logs.pageHasMore second @?= False
+        Logs.pageAt snapshot logName options {Logs.pageNumber = 2} >>= assertInvalid
+        _ <- append local "later"
+        current <- captureSnapshot local >>= right
+        result <- Logs.pageAt current logName options {Logs.pageNumber = 2, Logs.pageCheckpoint = Just checkpoint}
+        assertBool "stale page accepted" (case result of Left _ -> True; _ -> False)
+        again <- Logs.pageAt snapshot logName options {Logs.pageNumber = 2, Logs.pageCheckpoint = Just checkpoint} >>= right
+        again @?= second,
+      testCase "page parameters cannot create unbounded output or overflow offsets" $ withLocal $ \_ local -> do
+        _ <- append local "a"
+        snapshot <- captureSnapshot local >>= right
+        mapM_
+          (\options -> Logs.pageAt snapshot logName options >>= assertInvalid)
+          [Logs.LogPageOptions 0 20 10 Nothing, Logs.LogPageOptions maxBound 20 10 Nothing, Logs.LogPageOptions 1 101 10 Nothing, Logs.LogPageOptions 1 20 (-1) Nothing],
+      testCase "a diamond reads both branches and the shared ancestor once" $ withLocal $ \root local -> do
         (base, child, remote) <- forkLog root local
         report <- readLog local logName 100 >>= right
         map fst (logEntries report) @?= [child, remote, base]
