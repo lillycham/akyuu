@@ -3,6 +3,7 @@
 The first two phases implement the pure event model and checkpoint storage.
 Phase 3a adds opt-in local topic commands and a replicated MCP tool set.
 Phase 3b adds configured context, current-head search and a read-only browser.
+Phase 4 adds DAG log reads, appends and summary levels through CLI and MCP.
 These changes do not migrate the live store or add network transport. The wire format is
 experimental until the persistence and migration phases are complete.
 
@@ -25,6 +26,8 @@ experimental until the persistence and migration phases are complete.
   It checks control versions before it publishes a topic resolution.
 - `Akyuu.Sync.Search` searches current topic heads with an in-memory FTS index.
 - `Akyuu.Sync.Web` serves a read-only browser or exports a static snapshot.
+- `Akyuu.Sync.Logs` traverses all predecessors from every log head. It reads
+  summary levels and selects deterministic disjoint coverage.
 
 `applyLocal` checks a resource version and its complete parent set. Future
 writers must call it under the mutation lock. Remote merge permits unseen
@@ -88,7 +91,8 @@ select a winner.
 
 - Topic heads remain separate, even when their memory IDs match.
 - Concurrent topic and log declarations produce a type conflict.
-- Log heads form a frontier. Memory traversal from that frontier is deferred.
+- Log heads form a frontier. Traversal follows every predecessor and visits
+  shared ancestors once. Imported appends must retain each observed predecessor.
 - A surviving pin Set retains the pin. A Clear consumes only observed heads.
 - Concurrent review Sets retain their reasons. A Clear consumes observed heads.
 - Replica registrations accumulate, even after later registry events.
@@ -108,6 +112,13 @@ Checkpoint tests cover canonical manifests and export obligations. Repository
 tests kill child processes at write, file flush, rename, and directory flush
 boundaries. Recovery validates the old or complete new checkpoint. These
 tests simulate process death, not a physical loss of power.
+
+`ReplicaLogTests` covers shared ancestors, clock skew, frontier limits,
+captured reads, corrupt history, concurrent summary heads, overlap, higher
+levels and stale source dependencies. Generated DAGs test order independence
+and precedence for every edge. Imports refuse missing log predecessor links.
+On 2026-11-03, all 1,175 Haskell tests passed. The native Nix format, man
+and packaged CLI/MCP/HTTP replica checks also passed.
 
 ## Experimental repository
 
@@ -159,11 +170,52 @@ The durability claim does not cover drive caches that survive an `fsync`.
 
 ## Next phase
 
-Implement log DAG traversal, summary levels and GC/archive integration.
+Implement GC/archive integration for checkpoint readers and writers.
 Bounded context pages, incremental validation and persistent search caches
 remain open. The current read interfaces use captured checkpoints.
 
 Keep transport and live-store migration behind their later acceptance checks.
+
+## Replicated logs and summary levels
+
+`replica append NAME --expected VERSION` appends to every observed log head.
+Use the resource version from `replica read NAME`, even for a missing log.
+The command supplies the follows edges and checks the version under lock.
+Topics and type conflicts refuse ordinary append.
+
+`replica log NAME --limit N` reads distinct episodes in reverse topological
+order. Among unrelated available episodes, newer creation time comes first,
+then ascending memory ID. Clock skew cannot move an ancestor before a child.
+The default limit is 100. Limits apply after deduplication. JSON includes
+the unvisited frontier and explicit read failures. A zero limit returns heads.
+The old single-derived-from predecessor remains a legacy fallback.
+
+`replica log-levels NAME` reads complete levels from one checkpoint. Its
+top-level version binds every level and the absent next level. An unrelated
+topic write does not change this version. Source history must be complete.
+`replica summarise NAME --expected VERSION --level N --source ID ...`
+records a summary in `NAME.lN`. Give two or more distinct IDs from the
+immediately lower level. The write checks every captured level version under
+the mutation lock. The command supplies derived_from and follows edges.
+
+Concurrent summaries and overlapping source sets are valid. Resolution uses
+descending level, descending base episode count, then ascending summary ID.
+It accepts only disjoint coverage. Raw episodes fill gaps. Recent episodes
+remain whole, and summaries that cover them are skipped. Higher levels
+flatten their exact sources to a set of base episode IDs.
+
+`replica log-resolution NAME --keep N` returns this view; keep defaults to 10.
+`replica log-todo NAME --size N --keep N` suggests oldest uncovered batches.
+Todo coverage uses the union of all source IDs from the next level.
+`replica unfold ID` reads exact direct sources without summary substitution.
+All commands support JSON. MCP exposes `log_read`, `log_append`, `log_levels`,
+`log_summarise`, `log_resolution`, `log_todo` and `log_unfold` in the replicated
+tool set. Legacy readers retain their existing chain semantics.
+
+This prototype loads full history before it orders or limits a log read.
+Time filters, resumable traversal, bounded summary views and log integration
+in configured context and the browser remain open. GC/archive work remains
+separate. No command resets a log or replaces it with a summary.
 
 ## Experimental topic interfaces
 

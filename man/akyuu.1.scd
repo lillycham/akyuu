@@ -139,6 +139,42 @@ all writers and GC jobs together; old processes do not use this protocol.
 	Words from different heads do not combine into one match. Superseded and
 	unaccepted objects are absent. This command does not use embeddings.
 
+*replica log* _name_ [*--limit* _n_] [*--json*]
+	Read all branches once, with successors before ancestors. The default limit
+	is 100 distinct episodes. An incomplete read reports its frontier and any
+	unreadable memories. Clock skew does not change causal order.
+
+*replica append* _name_ *--expected* _version_ *--kind* _text_ *--agent* _text_ [_edges_] [_body_] [*--json*]
+	Append an episode that follows every observed log head. Copy the version
+	from *replica read*. A missing ref starts a log. A topic or type conflict
+	does not permit append. The command supplies the follows edges.
+
+*replica log-levels* _name_ [*--json*]
+	Read complete levels from one checkpoint. The top-level version describes
+	the summary inputs. It differs from an individual log resource version.
+	Incomplete history prevents this read and summary generation.
+
+*replica summarise* _name_ *--expected* _version_ *--level* _n_ *--source* _id_ ... *--kind* _text_ *--agent* _text_ [_edges_] [_body_] [*--json*]
+	Record a summary beside its sources. Give at least two distinct, complete
+	IDs from the immediately lower level. Copy the source version from
+	*replica log-levels* or *replica log-todo*. The transaction checks all
+	source levels again. The command supplies derived_from and follows edges.
+	Overlap with other summaries is valid. Every source remains stored.
+
+*replica log-resolution* _name_ [*--keep* _n_] [*--json*]
+	Select disjoint summaries by descending level, descending base source
+	count, then ascending summary ID. Raw episodes fill uncovered gaps.
+	The newest _n_ episodes remain whole; the default is 10.
+
+*replica log-todo* _name_ [*--size* _n_] [*--keep* _n_] [*--json*]
+	List uncovered source batches with their source version. The default size
+	is 8, with a minimum of 2. Keep 10 recent base episodes whole by default.
+	Coverage is the union of exact source IDs from the next level.
+
+*replica unfold* _id_ [*--json*]
+	Read the exact direct sources of an accepted summary in DAG order.
+	This command does not substitute other summaries for the evidence.
+
 *replica serve* [*--port* _n_] [_context-options_]
 	Serve the read-only topic browser on loopback. Port 0, the default, chooses
 	a free port. Print its URL. Context options are as for
@@ -153,12 +189,13 @@ With *--json*, errors have a code and a message on stdout. Stale-write and
 conflict errors also include the current heads. The exit code is 1 for a
 failed operation. A successful read of a conflict has exit code 0.
 
-Use *mcp --tool-set replicated* for the experimental topic tools. Results
+Use *mcp --tool-set replicated* for the experimental topic and log tools. Results
 include the same JSON in structured content and text. The set includes
 *configured_context* and *topic_search*. Unresolved or invalid control refs
 block unrelated resolution, but permit repairs to the controls themselves.
-Missing controls permit initial setup. This set has no legacy raw tools,
-log traversal, GC, migration, or remote sync.
+Missing controls permit initial setup. The log tools are *log_read*,
+*log_append*, *log_levels*, *log_summarise*, *log_resolution*, *log_todo* and
+*log_unfold*. This set has no legacy raw tools, GC, migration, or remote sync.
 Legacy commands refuse checkpoint repositories.
 
 ## Logs and notes

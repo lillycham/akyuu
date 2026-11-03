@@ -21,6 +21,7 @@ module Akyuu.Sync.Topics
     selectTopic,
     resolveTopicGuarded,
     selectTopicGuarded,
+    appendLogChecked,
     ResolutionGuard,
     viewJSON,
     contextJSON,
@@ -32,7 +33,7 @@ where
 
 import Akyuu.Error (describe, describeParse)
 import Akyuu.Fs (atomicWrite, ifMissing, tryWith)
-import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (Supersedes))
+import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (Follows, Supersedes))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAboutRefs, memAgent, memBody, memCreated, memEdges, memKind), edgeToHeader, memoryId, renderMemory)
@@ -41,7 +42,7 @@ import Akyuu.Ops (NewMemory (newAboutRefs, newBody, newEdges), buildMemory)
 import Akyuu.Refs (Name, nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Event (eventAction, eventReplica, eventTime, mkEvent)
-import Akyuu.Sync.Repository (Repository, RepositoryError (CorruptData, IdentityMismatch, InvalidCheckpoint, InvalidMemory, InvalidPointer, InvalidState, MissingCurrent, MissingPayload, MissingRetainedTarget, NotRepository, OversizedData, PublicationUncertain, RepositoryBusy, RepositoryIO, UnacceptedObject), Snapshot, commitLocal, initialise, loadSnapshot, openRepository, readMemory, readStoreIdentity, snapshotId, snapshotState)
+import Akyuu.Sync.Repository (Repository, RepositoryError (CorruptData, IdentityMismatch, InvalidCheckpoint, InvalidMemory, InvalidPointer, InvalidState, MissingCurrent, MissingLogPredecessor, MissingPayload, MissingRetainedTarget, NotRepository, OversizedData, PublicationUncertain, RepositoryBusy, RepositoryIO, UnacceptedObject), Snapshot, commitLocal, initialise, loadSnapshot, openRepository, readMemory, readStoreIdentity, snapshotId, snapshotState)
 import Akyuu.Sync.Repository qualified as Repository
 import Akyuu.Sync.State (RefKind (LogKind, TopicKind), ResourceState (Absent, LogHeads, RefTypeConflict, Registered, TopicHeads), StateError (StaleVersion), Version, events, interpret, resourceHeads, storeId, version, versionText)
 import Akyuu.Sync.State qualified as State
@@ -248,6 +249,30 @@ resolveTopicGuarded guard local name expected new = writeTopicWith guard local n
 selectTopicGuarded :: ResolutionGuard -> LocalReplica -> Name -> Version -> Id -> IO (Either TopicError TopicView)
 selectTopicGuarded guard local name expected selected = writeTopicWith guard local name (ResolveWrite expected (Left selected))
 
+-- | Append to every observed log head. The caller can bind a summary to the
+-- versions of its source levels. Both the target and those dependencies are
+-- checked again inside the repository transaction.
+appendLogChecked :: LocalReplica -> Name -> Version -> NewMemory -> [(Resource, Version)] -> IO (Either TopicError TopicView)
+appendLogChecked local@(LocalReplica repo replica) name expected input checks = fmap join $ tryWith TopicIO $ runExceptT $ do
+  snapshot <- storage (loadSnapshot repo)
+  view <- viewAt snapshot name
+  unless (expected == viewVersion view) (throwE (StaleTopic view))
+  unless (viewStatus view `elem` [Missing, LogTopic]) (throwE (NeedsResolution view))
+  when (T.null (T.strip (newBody input))) (throwE (InvalidInput "An episode body must not be blank."))
+  when (any ((== Follows) . kind) (Set.toList (newEdges input))) (throwE (InvalidInput "Log append supplies the follows edges. Do not supply them yourself."))
+  let state = snapshotState snapshot
+  traverse_ (\target -> when (interpret state (RefResource target) == Absent) (throwE (InvalidInput ("The linked topic " <> nameText target <> " does not exist.")))) (Set.toList (newAboutRefs input))
+  (nonce, now) <- liftIO freshEventData
+  let predecessors = Set.fromList [Edge Follows (headMemoryId entry) | entry <- viewHeads view]
+  memory <- either (throwE . InvalidInput . describe) pure (buildMemory now input {newEdges = newEdges input <> predecessors})
+  event <- either (throwE . InvalidInput . T.pack . show) pure (mkEvent (storeId state) replica nonce (Map.keysSet (resourceHeads state (RefResource name))) (AppendLog name (memoryId memory)) now)
+  result <- liftIO (Repository.commitLocalChecked repo expected event [(memoryId memory, renderMemory memory)] checks)
+  case result of
+    Left (InvalidState StaleVersion) -> ExceptT (readTopic local name) >>= throwE . StaleTopic
+    Left (InvalidState (State.StaleDependency _)) -> throwE (InvalidInput "The summary sources changed. Read the log levels before another summary.")
+    Left err -> throwE (StorageError err)
+    Right accepted -> viewAt accepted name
+
 data TopicWrite = CreateWrite NewMemory | ReplaceWrite Version NewMemory | ResolveWrite Version (Either Id NewMemory)
 
 writeTopic :: LocalReplica -> Name -> TopicWrite -> IO (Either TopicError TopicView)
@@ -390,4 +415,5 @@ describeError err = case err of
     MissingPayload digest -> "The write needs memory " <> Id.render digest <> "."
     MissingRetainedTarget _ digest -> "The write needs retained memory " <> Id.render digest <> "."
     UnacceptedObject digest -> "Memory " <> Id.render digest <> " is outside this checkpoint."
+    MissingLogPredecessor _ digest -> "A log append does not follow its observed predecessor " <> Id.render digest <> "."
     PublicationUncertain checkpoint _ -> "Publication of " <> checkpointText checkpoint <> " is uncertain. Read current state before another write."
