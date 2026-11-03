@@ -8,7 +8,7 @@ import Control.Exception (finally)
 import Control.Monad (void)
 import Data.ByteString.Char8 qualified as BC
 import Support (withTempDir)
-import System.Directory (createDirectory, doesFileExist)
+import System.Directory (createDirectory, doesFileExist, findExecutable)
 import System.Environment (getEnv, getEnvironment, getExecutablePath, lookupEnv)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FileLock (SharedExclusive (Exclusive), lockFile, unlockFile, withTryFileLock)
@@ -28,7 +28,8 @@ isolated name script action = do
     Nothing -> withTempDir $ \root -> do
       let bin = root </> "bin"
       createDirectory bin
-      BC.writeFile (bin </> "git") ("#!/usr/bin/env sh\n" <> script <> "\n")
+      shell <- findExecutable "sh" >>= maybe (ioError (userError "The subprocess tests require sh on PATH.")) pure
+      BC.writeFile (bin </> "git") (BC.pack ("#!" <> shell <> "\n") <> script <> "\n")
       setFileMode (bin </> "git") 0o700
       executable <- getExecutablePath
       inherited <- getEnvironment
