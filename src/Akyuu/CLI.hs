@@ -49,7 +49,7 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep, defaultSize)
 import Akyuu.MCP qualified as MCP
-import Akyuu.Memory (renderMemory)
+import Akyuu.Memory (Memory (memBody), renderMemory)
 import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLevels, readLog, readLogSince, readRef, refLinksOf, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, sourcePointers, statusOf, summariseLog, supersedeMemory, unfoldMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Ops qualified as Ops
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
@@ -61,6 +61,7 @@ import Akyuu.Seed qualified as Seed
 import Akyuu.Source qualified as Source
 import Akyuu.Store qualified as Store
 import Akyuu.Sync.Context qualified as ReplicaContext
+import Akyuu.Sync.Logs qualified as ReplicaLogs
 import Akyuu.Sync.Search qualified as ReplicaSearch
 import Akyuu.Sync.State (Version, parseVersion)
 import Akyuu.Sync.Topics qualified as Topics
@@ -82,7 +83,7 @@ import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding (decodeUtf8', encodeUtf8)
+import Data.Text.Encoding (decodeUtf8, decodeUtf8', encodeUtf8)
 import Data.Time (NominalDiffTime, UTCTime, defaultTimeLocale, getCurrentTime, parseTimeM)
 import Data.Version (showVersion)
 import Options.Applicative (Alternative (many, some, (<|>)), CompletionResult (execCompletion), Parser, ParserInfo, ParserResult (CompletionInvoked, Failure, Success), ReadM, argument, auto, command, defaultPrefs, eitherReader, execParserPure, flag', footer, fullDesc, help, helper, hsubparser, info, infoOption, long, metavar, option, optional, progDesc, readerError, renderFailure, short, showDefault, showDefaultWith, strArgument, strOption, switch, value, (<**>))
@@ -167,6 +168,13 @@ data ReplicaCommand i
   | ReplicaContext [Name] Bool
   | ReplicaConfiguredContext ReplicaContextArgs Bool
   | ReplicaSearch Text Int Bool
+  | ReplicaLog Name Int Bool
+  | ReplicaAppend Name Version (MemoryArgs i) Bool
+  | ReplicaLevels Name Bool
+  | ReplicaSummarise Name i Int [i] (MemoryArgs i) Bool
+  | ReplicaResolution Name Int Bool
+  | ReplicaTodo Name Int Int Bool
+  | ReplicaUnfold i Bool
   | ReplicaServe Int ReplicaContextArgs
   | ReplicaViz ReplicaContextArgs
   deriving (Eq, Show, Functor, Foldable, Traversable)
@@ -385,6 +393,13 @@ commandParser =
           <> cmd "context" (ReplicaContext <$> some (option nameReader (long "ref" <> metavar "NAME" <> help "Read this topic. Repeat for more.")) <*> jsonFlag) "Read explicit topics from one checkpoint."
           <> cmd "configured-context" (ReplicaConfiguredContext <$> replicaContextArgs <*> jsonFlag) "Read configured policy, tiers and directory context."
           <> cmd "search" (ReplicaSearch <$> (T.unwords <$> some (strArgument (metavar "WORDS..."))) <*> option (atLeast 1) (long "limit" <> value 10 <> metavar "N" <> help "At most 100 topic results.") <*> jsonFlag) "Search current topic heads by words."
+          <> cmd "log" (ReplicaLog <$> topicName <*> option (atLeast 0) (long "limit" <> value 100 <> metavar "N" <> help "At most N distinct episodes. An incomplete read includes its frontier.") <*> jsonFlag) "Read every log branch in reverse topological order."
+          <> cmd "append" (ReplicaAppend <$> topicName <*> topicVersion <*> memoryArgs <*> jsonFlag) "Append an episode that follows every observed log head."
+          <> cmd "log-levels" (ReplicaLevels <$> topicName <*> jsonFlag) "Read complete log levels and their summary source version."
+          <> cmd "summarise" (ReplicaSummarise <$> topicName <*> option idReader (long "expected" <> metavar "VERSION" <> help "The source version from replica log-levels.") <*> option (atLeast 1) (long "level" <> metavar "N" <> help "The summary level, starting at 1.") <*> some (option idReader (long "source" <> metavar "ID" <> help "An exact source ID from the lower level. Repeat for more.")) <*> memoryArgs <*> jsonFlag) "Record a summary with exact sources and a source version check."
+          <> cmd "log-resolution" (ReplicaResolution <$> topicName <*> keepEpisodes <*> jsonFlag) "Read a deterministic summary cover with raw fallback."
+          <> cmd "log-todo" (ReplicaTodo <$> topicName <*> option (atLeast 2) (long "size" <> value 8 <> metavar "N" <> help "Sources per suggested summary.") <*> keepEpisodes <*> jsonFlag) "List uncovered source batches for summaries."
+          <> cmd "unfold" (ReplicaUnfold <$> argument idReader (metavar "ID") <*> jsonFlag) "Read the exact direct sources of an accepted summary."
           <> cmd "serve" (ReplicaServe <$> option portReader (long "port" <> value 0 <> metavar "PORT" <> help "Loopback port; 0 chooses a free port.") <*> replicaContextArgs) "Serve the read-only replica topic browser."
           <> cmd "viz" (ReplicaViz <$> replicaContextArgs) "Export one read-only topic snapshot as HTML."
     replicaContextArgs =
@@ -395,6 +410,7 @@ commandParser =
         <*> optional (strOption (long "cwd" <> metavar "DIR" <> help "The session directory."))
         <*> many (option nameReader (long "ref" <> metavar "NAME" <> help "An extra context ref."))
     jsonFlag = switch (long "json" <> help "Print structured JSON, including operation errors.")
+    keepEpisodes = option (atLeast 0) (long "keep" <> value 10 <> metavar "N" <> help "Recent episodes to retain whole.")
     topicName = argument nameReader (metavar "NAME")
     topicVersion = option (eitherReader (either (const (Left "Give the complete opaque topic version.")) Right . parseVersion . T.pack)) (long "expected" <> metavar "VERSION" <> help "The complete version returned by replica read.")
     addP =
@@ -906,6 +922,26 @@ runReplicaCommand root operation = do
         ReplicaSearch text limit _ -> do
           report <- ExceptT (ReplicaSearch.searchTopics local text limit)
           pure (ReplicaSearch.searchJSON report, ReplicaSearch.renderSearch report)
+        ReplicaLog name limit _ -> do
+          report <- ExceptT (ReplicaLogs.readLog local name limit)
+          pure (ReplicaLogs.logJSON report, ReplicaLogs.renderLog report)
+        ReplicaAppend name expected args _ -> new args >>= ExceptT . ReplicaLogs.appendLog local name expected >>= pure . view
+        ReplicaLevels name _ -> do
+          report <- ExceptT (ReplicaLogs.readLevels local name)
+          pure (ReplicaLogs.levelsJSON report, Id.render (ReplicaLogs.levelsToken report))
+        ReplicaSummarise name expected level sources args _ -> new args >>= ExceptT . ReplicaLogs.summarise local name expected level sources >>= pure . view
+        ReplicaResolution name keep _ -> do
+          levels <- ExceptT (ReplicaLogs.readLevels local name)
+          items <- either (throwE . Topics.InvalidInput) pure (ReplicaLogs.resolution keep levels)
+          pure (object ["version" .= Id.render (ReplicaLogs.levelsToken levels), "view" .= ReplicaLogs.itemsJSON items], T.unlines (map (memBody . ReplicaLogs.itemMemory) items))
+        ReplicaTodo name size keep _ -> do
+          levels <- ExceptT (ReplicaLogs.readLevels local name)
+          runs <- either (throwE . Topics.InvalidInput) pure (ReplicaLogs.todo size keep levels)
+          let payload = object ["version" .= Id.render (ReplicaLogs.levelsToken levels), "runs" .= [object ["level" .= level, "sources" .= map Id.render sources] | (level, sources) <- runs]]
+          pure (payload, decodeUtf8 (BL.toStrict (encode payload)))
+        ReplicaUnfold digest _ -> do
+          entries <- ExceptT (ReplicaLogs.unfold local digest)
+          pure (ReplicaLogs.entriesJSON entries, T.unlines (map (memBody . snd) entries))
   pure $ case result of
     Right (payload, text) -> Right (output True payload text)
     Left err | json -> Right (output False (Topics.errorJSON err) (Topics.describeError err))
@@ -921,6 +957,13 @@ runReplicaCommand root operation = do
       ReplicaContext _ flag -> flag
       ReplicaConfiguredContext _ flag -> flag
       ReplicaSearch _ _ flag -> flag
+      ReplicaLog _ _ flag -> flag
+      ReplicaAppend _ _ _ flag -> flag
+      ReplicaLevels _ flag -> flag
+      ReplicaSummarise _ _ _ _ _ flag -> flag
+      ReplicaResolution _ _ flag -> flag
+      ReplicaTodo _ _ _ flag -> flag
+      ReplicaUnfold _ flag -> flag
     new args = ExceptT (first (Topics.InvalidInput . describe) <$> runExceptT (newMemory args))
     view report = (Topics.viewJSON report, Topics.renderView report)
     context report@(Topics.TopicContext _ views) = (Topics.contextJSON report, T.concat (map Topics.renderView views))

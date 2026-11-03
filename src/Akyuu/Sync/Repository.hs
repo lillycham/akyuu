@@ -27,7 +27,7 @@ where
 
 import Akyuu.Fs (AtomicStep (Renamed), atomicWriteWith, ifMissing, syncDir, tryWith)
 import Akyuu.GC (retains)
-import Akyuu.Graph (Edge (kind, target))
+import Akyuu.Graph (Edge (kind, target), EdgeType (Follows))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memEdges), MemoryParseError, parseMemory)
@@ -85,6 +85,7 @@ data RepositoryError
   | MissingPayload Id
   | MissingRetainedTarget Id Id
   | UnacceptedObject Id
+  | MissingLogPredecessor EventId Id
   | PublicationUncertain CheckpointId IOException
   deriving (Eq, Show)
 
@@ -255,7 +256,16 @@ validatePayloads :: State -> Map Id Memory -> ExceptT RepositoryError IO ()
 validatePayloads state memories = do
   traverse_ (\digest -> unless (Map.member digest memories) (throwE (MissingPayload digest))) (concatMap (targets . Event.eventAction) (Map.elems (State.events state)))
   traverse_ checkMemory (Map.toAscList memories)
+  traverse_ checkLog (Map.toAscList (State.events state))
   where
+    checkLog (eventId, event) = case Event.eventAction event of
+      AppendLog _ digest -> case Map.lookup digest memories of
+        Nothing -> throwE (MissingPayload digest)
+        Just memory -> do
+          let linked = Set.fromList [target edge | edge <- Set.toList (memEdges memory), kind edge == Follows]
+              parents = [value | parent <- Set.toList (Event.eventParents event), Just previous <- [Map.lookup parent (State.events state)], value <- targets (Event.eventAction previous)]
+          traverse_ (\parent -> unless (parent `Set.member` linked) (throwE (MissingLogPredecessor eventId parent))) parents
+      _ -> pure ()
     targets action = case action of
       SetTopic _ digest -> [digest]
       AppendLog _ digest -> [digest]

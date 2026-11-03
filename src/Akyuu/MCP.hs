@@ -67,6 +67,7 @@ import Akyuu.Related qualified as Related
 import Akyuu.Render (compareLines, edgeName, episodeLines, findingLines, heldBy, idLine, logLines, memoryText, neighbourLines, refLines, refLinkLines, refListLinesWith, searchLinesWith, shortIds, sourceShowLines, tierLinesWithin, tierPage, viewLines)
 import Akyuu.Source qualified as Source
 import Akyuu.Sync.Context qualified as ReplicaContext
+import Akyuu.Sync.Logs qualified as ReplicaLogs
 import Akyuu.Sync.Search qualified as ReplicaSearch
 import Akyuu.Sync.State (Version, parseVersion)
 import Akyuu.Sync.Topics qualified as Topics
@@ -186,6 +187,13 @@ data ReplicaCall
   | TopicContext [Name]
   | ConfiguredContext (Maybe Text) (Maybe Text) [Name]
   | TopicSearch Text Int
+  | LogRead Name Int
+  | LogAppend Name Version NewMemory
+  | LogLevels Name
+  | LogSummarise Name Id Int [Id] NewMemory
+  | LogResolution Name Int
+  | LogTodo Name Int Int
+  | LogUnfold Id
   deriving (Eq, Show)
 
 -- | The result of a tool: text, and whether it is an error.
@@ -653,7 +661,7 @@ parseToolCallFor cfg n args
       if mcpToolSet cfg == Ordinary && n == "add" then () <$ refArg args else pure ()
       let args' =
             if ( (mcpToolSet cfg == Ordinary && n `elem` ["add", "supersede"])
-                   || (mcpToolSet cfg == Replicated && n `elem` ["topic_create", "topic_replace", "topic_resolve"] && not (KM.member "select" args))
+                   || (mcpToolSet cfg == Replicated && n `elem` ["topic_create", "topic_replace", "topic_resolve", "log_append", "log_summarise"] && not (KM.member "select" args))
                )
               && not (KM.member "agent" args)
               then KM.insert "agent" (String author) args
@@ -683,11 +691,19 @@ replicaToolList =
     tool "topic_conflicts" "List unresolved topic and type conflicts. Independent log heads are not conflicts." (objectSchema [] []),
     tool "topic_context" "Read explicit refs from one checkpoint, including missing refs and conflict markers. This experimental tool does not expand configured tiers." (objectSchema [("refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "minItems" .= (1 :: Int)])] ["refs"]),
     tool "configured_context" "Read configured policy, tiers, directory refs and extra refs from one checkpoint. Unresolved controls give explicit diagnostics and suspend configured expansion." (objectSchema [("tier", stringSchema "The tier; default always."), ("cwd", stringSchema "The session directory."), ("refs", object ["type" .= ("array" :: Text), "items" .= refSchema])] []),
-    tool "topic_search" "Search current topic heads by words. A matching conflict includes every alternative. Old and unaccepted objects do not match." (objectSchema [("query", stringSchema "Search words."), ("limit", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "maximum" .= (100 :: Int)])] ["query"])
+    tool "topic_search" "Search current topic heads by words. A matching conflict includes every alternative. Old and unaccepted objects do not match." (objectSchema [("query", stringSchema "Search words."), ("limit", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "maximum" .= (100 :: Int)])] ["query"]),
+    tool "log_read" "Read every log branch once in reverse topological order. Incomplete reads retain a frontier and failures." (objectSchema [("ref", refSchema), ("limit", countSchema 0)] ["ref"]),
+    tool "log_append" "Append to every observed log head. Copy expected from topic_read or log_read.topic.version. A missing ref starts a log." (objectSchema (("ref", refSchema) : ("expected", versionSchema) : replicaMemoryProps) ["ref", "expected", "kind", "body"]),
+    tool "log_levels" "Read complete log and summary levels with their source version. Summary generation requires complete history." (objectSchema [("ref", refSchema)] ["ref"]),
+    tool "log_summarise" "Append a summary of exact source IDs from the level below. Copy expected from log_levels.version or log_todo.version. Concurrent overlap is valid." (objectSchema ([("ref", refSchema), ("expected", idSchema "The source version."), ("level", countSchema 1), ("sources", object ["type" .= ("array" :: Text), "items" .= idSchema "A complete source ID.", "minItems" .= (2 :: Int)])] <> replicaMemoryProps) ["ref", "expected", "level", "sources", "kind", "body"]),
+    tool "log_resolution" "Read a deterministic disjoint summary cover. Raw episodes fill gaps. Keep defaults to 10 recent whole episodes." (objectSchema [("ref", refSchema), ("keep", countSchema 0)] ["ref"]),
+    tool "log_todo" "List exact uncovered source batches and a source version for log_summarise. Size defaults to 8 and keep to 10." (objectSchema [("ref", refSchema), ("size", countSchema 2), ("keep", countSchema 0)] ["ref"]),
+    tool "log_unfold" "Read the exact direct sources of an accepted summary, without substitution." (objectSchema [("id", idSchema "A complete summary ID.")] ["id"])
   ]
   where
     tool :: Text -> Text -> Value -> Value
     tool n d s = object ["name" .= n, "description" .= d, "inputSchema" .= s]
+    countSchema lower = object ["type" .= ("integer" :: Text), "minimum" .= (lower :: Int)]
 
 versionSchema :: Value
 versionSchema = stringSchema "The complete opaque version from topic_read. It identifies all causal heads, not a memory."
@@ -752,6 +768,19 @@ atLeast k lo v
 
 parseArgs :: Text -> Args -> Either CallError ToolCall
 parseArgs n args = case n of
+  "log_read" -> CallReplica <$> (LogRead <$> refArg args <*> countArg "limit" 100 0)
+  "log_append" -> CallReplica <$> (LogAppend <$> refArg args <*> versionArg args <*> memoryArg args plainEdges)
+  "log_levels" -> CallReplica . LogLevels <$> refArg args
+  "log_summarise" -> do
+    name <- refArg args
+    expected <- idArg args "expected"
+    level <- countArg "level" 1 1
+    ids <- required args "sources" (asList asText) "a list of complete memory IDs" >>= traverse (first (BadArguments . T.pack . show) . Id.parse)
+    unless (length ids >= 2 && Set.size (Set.fromList ids) == length ids) (Left (BadArguments "Give two or more distinct summary sources."))
+    CallReplica . LogSummarise name expected level ids <$> memoryArg args plainEdges
+  "log_resolution" -> CallReplica <$> (LogResolution <$> refArg args <*> countArg "keep" 10 0)
+  "log_todo" -> CallReplica <$> (LogTodo <$> refArg args <*> countArg "size" 8 2 <*> countArg "keep" 10 0)
+  "log_unfold" -> CallReplica . LogUnfold <$> idArg args "id"
   "topic_read" -> CallReplica . TopicRead <$> refArg args
   "topic_create" -> CallReplica <$> (TopicCreate <$> refArg args <*> memoryArg args plainEdges)
   "topic_replace" -> CallReplica <$> (TopicReplace <$> refArg args <*> versionArg args <*> memoryArg args plainEdges)
@@ -898,6 +927,7 @@ parseArgs n args = case n of
     pure (CallCheck defaultCheckOptions {nearThreshold = thr, hubDegree = hub, longLog = longN} kinds sev)
   _ -> Left (UnknownTool n)
   where
+    countArg key fallback lower = optional' args key asInt "a whole number" >>= atLeast key lower . fromMaybe fallback
     kindName' t =
       maybe
         (argError "kinds" ("has '" <> t <> "', which is not a kind of finding."))
@@ -1205,6 +1235,23 @@ runReplicaTool cfg local call = case call of
       Left err -> pure (failure err)
       Right options -> either failure (structured False . ReplicaContext.reportJSON) <$> ReplicaContext.configuredContext local options
     TopicSearch text limit -> either failure (structured False . ReplicaSearch.searchJSON) <$> ReplicaSearch.searchTopics local text limit
+    LogRead name limit -> either failure (structured False . ReplicaLogs.logJSON) <$> ReplicaLogs.readLog local name limit
+    LogAppend name expected new -> viewResult <$> ReplicaLogs.appendLog local name expected new
+    LogLevels name -> either failure (structured False . ReplicaLogs.levelsJSON) <$> ReplicaLogs.readLevels local name
+    LogSummarise name expected level ids new -> viewResult <$> ReplicaLogs.summarise local name expected level ids new
+    LogResolution name keep -> do
+      result <- runExceptT $ do
+        levels <- ExceptT (ReplicaLogs.readLevels local name)
+        items <- ExceptT (pure (first Topics.InvalidInput (ReplicaLogs.resolution keep levels)))
+        pure (object ["version" .= Id.render (ReplicaLogs.levelsToken levels), "view" .= ReplicaLogs.itemsJSON items])
+      pure (either failure (structured False) result)
+    LogTodo name size keep -> do
+      result <- runExceptT $ do
+        levels <- ExceptT (ReplicaLogs.readLevels local name)
+        runs <- ExceptT (pure (first Topics.InvalidInput (ReplicaLogs.todo size keep levels)))
+        pure (object ["version" .= Id.render (ReplicaLogs.levelsToken levels), "runs" .= [object ["level" .= level, "sources" .= map Id.render ids] | (level, ids) <- runs]])
+      pure (either failure (structured False) result)
+    LogUnfold digest -> either failure (structured False . ReplicaLogs.entriesJSON) <$> ReplicaLogs.unfold local digest
   _ -> pure (ToolResult "This tool is unavailable in the replicated tool set." True)
   where
     structured failed payload = StructuredToolResult (decodeUtf8 (BL.toStrict (A.encode payload))) failed payload

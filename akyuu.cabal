@@ -85,6 +85,7 @@ library
                    , Akyuu.Sync.Checkpoint
                    , Akyuu.Sync.Repository
                    , Akyuu.Sync.Topics
+                   , Akyuu.Sync.Logs
                    , Akyuu.Sync.Context
                    , Akyuu.Sync.Search
                    , Akyuu.Sync.Web
@@ -132,6 +133,7 @@ test-suite akyuu-test
                     , RepositoryTests
                     , ReplicaInterfaceTests
                     , ReplicaReadTests
+                    , ReplicaLogTests
                     , TopicsTests
                     , TierTests
                     , TopicTests
