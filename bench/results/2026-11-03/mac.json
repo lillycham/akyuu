@@ -1,0 +1,355 @@
+{
+  "created": "2026-11-03T07:34:59.873Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpu": "Apple M4",
+  "memory_gib": 16,
+  "samples": 5,
+  "profiles": [
+    {
+      "seed_entries": 100,
+      "seed_ms": 207.95274999999998,
+      "inventory": {
+        "events": 106,
+        "objects": 105,
+        "payload_bytes": 119698,
+        "seed_entries": 100
+      },
+      "local": {
+        "metrics": [
+          {
+            "first_ms": 17.753,
+            "max_ms": 23.24,
+            "median_ms": 17.753,
+            "operation": "snapshot",
+            "samples_ms": [
+              17.753,
+              23.24,
+              17.775,
+              17.219,
+              17.462
+            ]
+          },
+          {
+            "first_ms": 25.257,
+            "max_ms": 25.257,
+            "median_ms": 23.736,
+            "operation": "context",
+            "samples_ms": [
+              25.257,
+              24.986,
+              23.736,
+              23.684,
+              23.598
+            ]
+          },
+          {
+            "first_ms": 27.146,
+            "max_ms": 27.375,
+            "median_ms": 22.698,
+            "operation": "search",
+            "samples_ms": [
+              27.146,
+              22.128,
+              27.375,
+              22.698,
+              22.182
+            ]
+          },
+          {
+            "first_ms": 84.342,
+            "max_ms": 84.342,
+            "median_ms": 68.974,
+            "operation": "topic_replace",
+            "samples_ms": [
+              84.342,
+              76.415,
+              68.974,
+              66.878,
+              66.664
+            ]
+          },
+          {
+            "first_ms": 75.538,
+            "max_ms": 75.538,
+            "median_ms": 47.054,
+            "operation": "archive",
+            "samples_ms": [
+              75.538,
+              48.574,
+              46.148,
+              46.322,
+              47.054
+            ]
+          },
+          {
+            "first_ms": 32.332,
+            "max_ms": 32.831,
+            "median_ms": 32.32,
+            "operation": "commit_uncontended",
+            "samples_ms": [
+              32.332,
+              31.831,
+              32.32,
+              32.178,
+              32.831
+            ]
+          }
+        ],
+        "samples": 5
+      },
+      "concurrent_commits": {
+        "attempts": [
+          {
+            "busy": false,
+            "ms": 66.472,
+            "success": true
+          },
+          {
+            "busy": false,
+            "ms": 32.938,
+            "success": true
+          }
+        ]
+      },
+      "initial_sync_ms": 660.1790830000002,
+      "join_ms": 618.2252920000001,
+      "noop_sync_ms": [
+        610.4214589999992,
+        609.5820830000002,
+        590.0145830000001
+      ],
+      "status": "complete"
+    },
+    {
+      "seed_entries": 1000,
+      "seed_ms": 1102.7550410000003,
+      "inventory": {
+        "events": 1040,
+        "objects": 1039,
+        "payload_bytes": 1210927,
+        "seed_entries": 1000
+      },
+      "local": {
+        "metrics": [
+          {
+            "first_ms": 167.904,
+            "max_ms": 170.858,
+            "median_ms": 168.163,
+            "operation": "snapshot",
+            "samples_ms": [
+              167.904,
+              168.163,
+              169.287,
+              165.544,
+              170.858
+            ]
+          },
+          {
+            "first_ms": 227.078,
+            "max_ms": 237.23,
+            "median_ms": 227.078,
+            "operation": "context",
+            "samples_ms": [
+              227.078,
+              220.993,
+              235.921,
+              226.02,
+              237.23
+            ]
+          },
+          {
+            "first_ms": 202.698,
+            "max_ms": 202.698,
+            "median_ms": 199.401,
+            "operation": "search",
+            "samples_ms": [
+              202.698,
+              198.131,
+              198.387,
+              199.709,
+              199.401
+            ]
+          },
+          {
+            "first_ms": 626.833,
+            "max_ms": 659.057,
+            "median_ms": 641.777,
+            "operation": "topic_replace",
+            "samples_ms": [
+              626.833,
+              634.874,
+              641.777,
+              659.057,
+              645.721
+            ]
+          },
+          {
+            "first_ms": 707.639,
+            "max_ms": 707.639,
+            "median_ms": 437.369,
+            "operation": "archive",
+            "samples_ms": [
+              707.639,
+              437.369,
+              438.289,
+              435.466,
+              435.279
+            ]
+          },
+          {
+            "first_ms": 303.784,
+            "max_ms": 307.675,
+            "median_ms": 304.233,
+            "operation": "commit_uncontended",
+            "samples_ms": [
+              303.784,
+              300.574,
+              306.536,
+              307.675,
+              304.233
+            ]
+          }
+        ],
+        "samples": 5
+      },
+      "concurrent_commits": {
+        "attempts": [
+          {
+            "busy": false,
+            "ms": 306.787,
+            "success": true
+          },
+          {
+            "busy": false,
+            "ms": 621.569,
+            "success": true
+          }
+        ]
+      },
+      "initial_sync_ms": 1759.2172500000015,
+      "join_ms": 2618.782707999999,
+      "noop_sync_ms": [
+        2228.477082999998,
+        2366.473208000003,
+        2060.6555420000004
+      ],
+      "status": "complete"
+    },
+    {
+      "seed_entries": 5000,
+      "seed_ms": 5949.956541000007,
+      "inventory": {
+        "events": 5190,
+        "objects": 5189,
+        "payload_bytes": 6059114,
+        "seed_entries": 5000
+      },
+      "local": {
+        "metrics": [
+          {
+            "first_ms": 935.827,
+            "max_ms": 935.827,
+            "median_ms": 865.317,
+            "operation": "snapshot",
+            "samples_ms": [
+              935.827,
+              860.734,
+              862.452,
+              867.797,
+              865.317
+            ]
+          },
+          {
+            "first_ms": 1145.218,
+            "max_ms": 1154.252,
+            "median_ms": 1145.218,
+            "operation": "context",
+            "samples_ms": [
+              1145.218,
+              1154.252,
+              1144.613,
+              1143.504,
+              1151.334
+            ]
+          },
+          {
+            "first_ms": 1028.696,
+            "max_ms": 1062.176,
+            "median_ms": 1027.317,
+            "operation": "search",
+            "samples_ms": [
+              1028.696,
+              1022.832,
+              1019.274,
+              1027.317,
+              1062.176
+            ]
+          },
+          {
+            "first_ms": 3333.682,
+            "max_ms": 3377.032,
+            "median_ms": 3333.682,
+            "operation": "topic_replace",
+            "samples_ms": [
+              3333.682,
+              3336.84,
+              3326.842,
+              3377.032,
+              3311.402
+            ]
+          },
+          {
+            "first_ms": 3631.005,
+            "max_ms": 3631.005,
+            "median_ms": 2337.448,
+            "operation": "archive",
+            "samples_ms": [
+              3631.005,
+              2337.448,
+              2326.923,
+              2464.095,
+              2323.964
+            ]
+          },
+          {
+            "first_ms": 1927.799,
+            "max_ms": 1927.799,
+            "median_ms": 1660.552,
+            "operation": "commit_uncontended",
+            "samples_ms": [
+              1927.799,
+              1592.474,
+              1583.631,
+              1692.589,
+              1660.552
+            ]
+          }
+        ],
+        "samples": 5
+      },
+      "concurrent_commits": {
+        "attempts": [
+          {
+            "busy": true,
+            "ms": 1107.166,
+            "success": false
+          },
+          {
+            "busy": false,
+            "ms": 1603.701,
+            "success": true
+          }
+        ]
+      },
+      "initial_sync_ms": 8332.575041999997,
+      "join_ms": 12936.90991599999,
+      "noop_sync_ms": [
+        9070.48662499999,
+        9160.061957999977,
+        9104.267499999987
+      ],
+      "status": "complete"
+    }
+  ]
+}

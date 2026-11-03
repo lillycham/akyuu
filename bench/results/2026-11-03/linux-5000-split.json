@@ -1,0 +1,84 @@
+{
+  "created": "2026-11-03T07:46:34.172Z",
+  "platform": "linux",
+  "arch": "arm64",
+  "cpu": "unknown",
+  "memory_gib": 7.3252716064453125,
+  "body_profile": "compressible",
+  "measurement_mode": "process_per_metric",
+  "samples": 5,
+  "profiles": [
+    {
+      "seed_entries": 5000,
+      "stage": "measure",
+      "seed_ms": 84488.623556,
+      "inventory": {
+        "body_profile": "compressible",
+        "events": 5190,
+        "fixture_checkpoint": "sha256-e3ef7eb51915e9dd62dc3eda8b09339259a4b68354f7c0700a149c7f8b26c3d5",
+        "objects": 5189,
+        "payload_bytes": 6059114,
+        "seed_entries": 5000
+      },
+      "local": {
+        "samples": 5,
+        "metrics": [
+          {
+            "first_ms": 1320.302616,
+            "max_ms": 1320.302616,
+            "median_ms": 1066.839418,
+            "operation": "snapshot",
+            "samples_ms": [
+              1320.302616,
+              1066.839418,
+              1049.602179,
+              1058.754485,
+              1136.693513
+            ]
+          },
+          {
+            "first_ms": 1827.47781,
+            "max_ms": 2094.186238,
+            "median_ms": 1927.573944,
+            "operation": "context",
+            "samples_ms": [
+              1827.47781,
+              1927.573944,
+              1929.297642,
+              1921.740207,
+              2094.186238
+            ]
+          },
+          {
+            "first_ms": 1408.91013,
+            "max_ms": 1729.739155,
+            "median_ms": 1595.383163,
+            "operation": "search",
+            "samples_ms": [
+              1408.91013,
+              1579.926095,
+              1606.745642,
+              1729.739155,
+              1595.383163
+            ]
+          },
+          {
+            "first_ms": 5045.67285,
+            "max_ms": 5165.836167,
+            "median_ms": 5045.67285,
+            "operation": "topic_replace",
+            "samples_ms": [
+              5045.67285,
+              5148.541368,
+              4677.18277,
+              5165.836167,
+              4399.792637
+            ]
+          }
+        ]
+      },
+      "status": "failed",
+      "error": "Measure archive\nakyuu-sync-bench: user error (The experiment exceeded its 120-second deadline.)\nHasCallStack backtrace:\n  collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception\n  toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/IO.hs:260:11 in ghc-internal:GHC.Internal.IO\n  throwIO, called at libraries/ghc-internal/src/GHC/Internal/IO/Exception.hs:315:19 in ghc-internal:GHC.Internal.IO.Exception\n  ioException, called at libraries/ghc-internal/src/GHC/Internal/IO/Exception.hs:319:20 in ghc-internal:GHC.Internal.IO.Exception\n\n\n\n\n1 !== 0\n"
+    }
+  ]
+}

@@ -152,7 +152,7 @@ limits, deadlines, cancellation, surviving descendants and descriptor leaks.
 All 1,252 Haskell tests passed in the development shell and native Nix
 sandbox on 2026-11-03. Packaged CLI/MCP/HTTP and
 sync/join/GC/pin/conflict/migration smoke, format, man and legacy version
-compatibility checks passed. SSH/HTTPS authentication, real network faults,
+compatibility checks passed. At that stage, SSH/HTTPS authentication, real network faults,
 and coordinated live cutover remain unverified.
 
 On 2026-11-03, all 1,252 tests also passed in the native aarch64-linux Nix
@@ -168,6 +168,15 @@ cover shared history budgets, summary coverage across pages, stale
 continuation, invalid summary-level types, incomplete history and exact
 evidence reads. The browser access host was unavailable, so rendered UI
 interaction remains unverified.
+
+The later two-machine SSH experiment passed with disposable Mac and Linux
+replicas. Offline conflicts, DAG logs, summary evidence, unavailable-remote
+recovery and archived pin restoration converged. Performance acceptance did
+not pass: the M4 reproduced a busy independent writer at 5,000 entries, and
+Linux archive measurements exceeded their deadline. See the
+[experiment report](../../bench/results/2026-11-03.md) and
+[reproduction instructions](../../bench/README.md). HTTPS authentication,
+packet-loss recovery and coordinated live cutover remain open.
 
 ## Experimental repository
 
@@ -287,8 +296,9 @@ Close inherited descriptors in the child before Git executes. A full
 descriptor-limit scan proved expensive on Darwin. Bound stdout and discard
 excess stderr. Disable hooks, global/system Git configuration, interactive
 credentials and recursive submodules. SSH uses batch mode and the existing
-SSH agent/configuration. Authenticated network transports remain untested;
-the acceptance fixtures use local bare repositories.
+SSH agent/configuration. Automated acceptance fixtures use local bare
+repositories. A separate two-machine SSH experiment passed. HTTPS and
+packet-loss recovery remain unverified.
 
 The initial bounds are 100,000 tree entries, 256 MiB of expanded archive
 blobs, 16 MiB per memory and 64 KiB per event. Monitor private Git storage

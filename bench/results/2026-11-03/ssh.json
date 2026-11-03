@@ -1,0 +1,329 @@
+{
+  "created": "2026-11-03T07:30:27.330Z",
+  "transport": "ssh",
+  "checks": [
+    "SSH publication and distinct Linux join",
+    "Offline topic conflict and explicit resolution converge",
+    "Cross-device DAG branches, join and summary evidence converge",
+    "Missing remote refuses publication and preserves pending work",
+    "GC eviction and archived pin restoration cross SSH"
+  ],
+  "timings_ms": [
+    {
+      "side": "a",
+      "operation": "init",
+      "ms": 101.76641599999994
+    },
+    {
+      "side": "a",
+      "operation": "create",
+      "ms": 44.42829100000017
+    },
+    {
+      "side": "a",
+      "operation": "sync-config",
+      "ms": 136.270041
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 1889.401917
+    },
+    {
+      "side": "b",
+      "operation": "join",
+      "ms": 768.6778339999996
+    },
+    {
+      "side": "b",
+      "operation": "read",
+      "ms": 329.2916660000001
+    },
+    {
+      "side": "b",
+      "operation": "sync",
+      "ms": 1002.0945000000002
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 1118.1119170000002
+    },
+    {
+      "side": "a",
+      "operation": "read",
+      "ms": 21.637167000000773
+    },
+    {
+      "side": "a",
+      "operation": "replace",
+      "ms": 32.21016700000018
+    },
+    {
+      "side": "b",
+      "operation": "read",
+      "ms": 342.4192919999996
+    },
+    {
+      "side": "b",
+      "operation": "replace",
+      "ms": 358.6562920000006
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 2559.330917
+    },
+    {
+      "side": "b",
+      "operation": "sync",
+      "ms": 1093.1564169999983
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 1065.5130420000005
+    },
+    {
+      "side": "a",
+      "operation": "read",
+      "ms": 32.20612500000061
+    },
+    {
+      "side": "b",
+      "operation": "read",
+      "ms": 335.3070829999997
+    },
+    {
+      "side": "a",
+      "operation": "resolve",
+      "ms": 32.36741699999948
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 2674.7571660000012
+    },
+    {
+      "side": "b",
+      "operation": "sync",
+      "ms": 732.7819159999981
+    },
+    {
+      "side": "a",
+      "operation": "read",
+      "ms": 21.674958000003244
+    },
+    {
+      "side": "b",
+      "operation": "read",
+      "ms": 378.5314580000013
+    },
+    {
+      "side": "a",
+      "operation": "read",
+      "ms": 20.54595799999879
+    },
+    {
+      "side": "a",
+      "operation": "append",
+      "ms": 46.91675000000032
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 2648.1593749999993
+    },
+    {
+      "side": "b",
+      "operation": "sync",
+      "ms": 783.7851670000018
+    },
+    {
+      "side": "a",
+      "operation": "read",
+      "ms": 40.02533300000141
+    },
+    {
+      "side": "a",
+      "operation": "append",
+      "ms": 53.4407919999976
+    },
+    {
+      "side": "b",
+      "operation": "read",
+      "ms": 337.3590409999997
+    },
+    {
+      "side": "b",
+      "operation": "append",
+      "ms": 374.3187079999989
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 2524.860583999998
+    },
+    {
+      "side": "b",
+      "operation": "sync",
+      "ms": 1256.7035829999986
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 1065.259582999999
+    },
+    {
+      "side": "b",
+      "operation": "log",
+      "ms": 340.5066250000018
+    },
+    {
+      "side": "a",
+      "operation": "read",
+      "ms": 20.077790999999706
+    },
+    {
+      "side": "a",
+      "operation": "append",
+      "ms": 30.740375000001222
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 2570.177875000001
+    },
+    {
+      "side": "b",
+      "operation": "sync",
+      "ms": 809.2662920000002
+    },
+    {
+      "side": "a",
+      "operation": "log-levels",
+      "ms": 34.36162500000137
+    },
+    {
+      "side": "a",
+      "operation": "summarise",
+      "ms": 32.34941600000093
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 2612.9202920000025
+    },
+    {
+      "side": "b",
+      "operation": "sync",
+      "ms": 839.5325000000012
+    },
+    {
+      "side": "b",
+      "operation": "log-resolution",
+      "ms": 362.17175000000134
+    },
+    {
+      "side": "b",
+      "operation": "unfold",
+      "ms": 436.9180419999975
+    },
+    {
+      "side": "a",
+      "operation": "read",
+      "ms": 33.723541999999725
+    },
+    {
+      "side": "a",
+      "operation": "replace",
+      "ms": 31.887833000000683
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 439.502708
+    },
+    {
+      "side": "a",
+      "operation": "sync-status",
+      "ms": 33.74291600000288
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 2701.1439170000012
+    },
+    {
+      "side": "b",
+      "operation": "sync",
+      "ms": 848.8754580000023
+    },
+    {
+      "side": "b",
+      "operation": "read",
+      "ms": 366.8140829999975
+    },
+    {
+      "side": "a",
+      "operation": "gc",
+      "ms": 51.58237500000541
+    },
+    {
+      "side": "a",
+      "operation": "gc",
+      "ms": 41.58462500000314
+    },
+    {
+      "side": "b",
+      "operation": "gc",
+      "ms": 348.5878329999978
+    },
+    {
+      "side": "b",
+      "operation": "gc",
+      "ms": 395.5800420000014
+    },
+    {
+      "side": "a",
+      "operation": "pin-state",
+      "ms": 34.962665999999444
+    },
+    {
+      "side": "a",
+      "operation": "pin",
+      "ms": 44.48724999999831
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 2642.9484999999986
+    },
+    {
+      "side": "b",
+      "operation": "sync",
+      "ms": 890.7782499999958
+    },
+    {
+      "side": "b",
+      "operation": "pin-state",
+      "ms": 365.4928330000039
+    },
+    {
+      "side": "a",
+      "operation": "sync",
+      "ms": 1148.7157089999964
+    },
+    {
+      "side": "a",
+      "operation": "sync-status",
+      "ms": 33.803625000000466
+    },
+    {
+      "side": "b",
+      "operation": "sync-status",
+      "ms": 344.64116600000125
+    }
+  ],
+  "status": "passed"
+}
