@@ -86,6 +86,10 @@ library
                    , Akyuu.Sync.Repository
                    , Akyuu.Sync.Retention
                    , Akyuu.Sync.Resources
+                   , Akyuu.Sync.Process
+                   , Akyuu.Sync.Git
+                   , Akyuu.Sync.Run
+                   , Akyuu.Sync.Migration
                    , Akyuu.Sync.Topics
                    , Akyuu.Sync.Logs
                    , Akyuu.Sync.Context
@@ -134,6 +138,9 @@ test-suite akyuu-test
                     , ReviewTests
                     , RepositoryTests
                     , ArchiveTests
+                    , TransportTests
+                    , MigrationTests
+                    , SyncProcessTests
                     , ReplicaInterfaceTests
                     , ReplicaReadTests
                     , ReplicaLogTests
@@ -160,6 +167,7 @@ test-suite akyuu-test
     build-depends:    base >=4 && <5
                     , akyuu
                     , base16-bytestring
+                    , process
                     , bytestring
                     , containers
                     , cryptohash-sha256

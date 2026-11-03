@@ -5,9 +5,11 @@ Phase 3a adds opt-in local topic commands and a replicated MCP tool set.
 Phase 3b adds configured context, current-head search and a read-only browser.
 Phase 4 adds DAG log reads, appends and summary levels through CLI and MCP.
 Phase 5 adds a durable local archive, checkpoint eviction and replicated pins
-and reviews. The publication acknowledgement API is for future transport.
-These changes do not migrate the live store or add network transport. The wire format is
-experimental until the persistence and migration phases are complete.
+and reviews. Publication acknowledgement requires verified transport receipts.
+Phases 6 and 7 add manual Git exchange, fresh join and a journaled legacy
+snapshot copy. They do not perform live cutover or add background sync.
+These changes do not migrate the live store. The wire format remains
+experimental until consumer integration and performance acceptance are complete.
 
 ## Current modules
 
@@ -33,9 +35,14 @@ experimental until the persistence and migration phases are complete.
 - `Akyuu.Sync.Retention` derives roots from every causal branch, pending
   exports, live pins and retaining memory edges.
 - `Akyuu.Sync.Resources` exposes pin state and every surviving review reason.
+- `Akyuu.Sync.Process` bounds Git time, output and private repository size.
+- `Akyuu.Sync.Git` validates protocol trees and prepares immutable archive unions.
+- `Akyuu.Sync.Run` coordinates previews, manual exchange, receipts and fresh joins.
+- `Akyuu.Sync.Migration` validates explicitly classified legacy snapshots and
+  copies one deterministic baseline to a separate destination.
 
-`applyLocal` checks a resource version and its complete parent set. Future
-writers must call it under the mutation lock. Remote merge permits unseen
+`applyLocal` checks a resource version and its complete parent set. Local
+writers call it under the mutation lock. Remote merge permits unseen
 concurrent events and does not require a local version token.
 
 Resource versions include the store identity, resource key, and event heads.
@@ -132,8 +139,21 @@ of new live references. Barrier tests cover readers and the shared writer
 lock during collection. Process-death tests cover archive dependencies,
 acknowledgement pointers and eviction through directory flush.
 After phase 5, all 1,222 Haskell tests passed on 2026-11-03. Native format,
-man and packaged CLI/MCP/HTTP checks also passed. Remote publication remains
-untested; tests simulate the transport acknowledgement boundary.
+man and packaged CLI/MCP/HTTP checks also passed. At that stage, the archive
+tests simulated the transport acknowledgement boundary.
+
+`TransportTests` exercises a local bare remote, three replicas, offline
+conflicts, late branches, preview isolation, push races, lost-response
+recovery, later local obligations and invalid archive refusal. Join and
+migration tests inject failures at durable stages and verify idempotent
+resumption. Process tests use fresh executable workers, not a fork-only
+Haskell child, to avoid inherited runtime locks. They cover output/storage
+limits, deadlines, cancellation, surviving descendants and descriptor leaks.
+All 1,252 Haskell tests passed in the development shell and native Nix
+sandbox on 2026-11-03. Packaged CLI/MCP/HTTP and
+sync/join/GC/pin/conflict/migration smoke, format, man and legacy version
+compatibility checks passed. SSH/HTTPS authentication, real network faults,
+Linux execution and coordinated live cutover remain unverified.
 
 ## Experimental repository
 
@@ -194,11 +214,81 @@ The durability claim does not cover drive caches that survive an `fsync`.
 
 ## Next phase
 
-Implement migration tooling and Git transport against the archive contract.
+Complete log/context/browser integration and bounded traversal. Measure
+representative write, lock, join and archive costs before release acceptance.
 Bounded context pages, incremental validation and persistent search caches
 remain open. The current read interfaces use captured checkpoints.
 
-Keep transport and live-store migration behind their later acceptance checks.
+Keep network deployment and live cutover behind their acceptance checks.
+
+## Manual transport and supported snapshot copy
+
+Configure a separate protocol branch with `replica sync-config --remote URL`.
+The default branch is `akyuu-sync-v1`. This configures local transport only.
+`replica sync` performs exchange. `replica sync --dry-run` fetches and reports
+without changing `CURRENT`, acknowledging exports or pushing. Preview can
+change private Git data and the observed cursor. `replica sync-status` has
+no network call and does not claim knowledge of unseen remote writes.
+
+Git uses `transport.git`, never the live object's directory or its backup
+repository. Trees contain only protocol, store-id, registry events, ordinary
+events and sharded memory objects. Validate modes, paths, sizes, canonical
+bytes, store identity, parent closure and every required payload before import.
+Reject symlinks, submodules, unknown entries and duplicate event identities.
+The next fetched tip must descend from the last observed valid tip and retain
+its complete event and payload inventories. A descendant can still be an
+invalid rewrite if it deletes entries.
+
+Each exchange has three push attempts and a 60-second overall Git deadline.
+The private prepared ref can change after a rejected proposal; remote pushes
+never use force. A receipt fetch confirms the captured export inventory
+before acknowledgement. Later local writes remain pending. If confirmation
+fails, retry through a new fetch; do not infer that the push failed.
+Progress metadata failure after acknowledgement does not reject the accepted
+publication. The response reports whether status metadata was saved.
+
+Git subprocesses run in owned groups with a shell anchor until cleanup.
+Close inherited descriptors in the child before Git executes. A full
+descriptor-limit scan proved expensive on Darwin. Bound stdout and discard
+excess stderr. Disable hooks, global/system Git configuration, interactive
+credentials and recursive submodules. SSH uses batch mode and the existing
+SSH agent/configuration. Authenticated network transports remain untested;
+the acceptance fixtures use local bare repositories.
+
+The initial bounds are 100,000 tree entries, 256 MiB of expanded archive
+blobs, 16 MiB per memory and 64 KiB per event. Monitor private Git storage
+against 512 MiB during each command. The monitor can permit brief temporary
+overshoot. A deadline, size violation or process failure preserves pending
+local obligations. Incremental transport and archive compaction remain open.
+
+`replica join --remote URL --label TEXT` validates the remote before import.
+An empty destination gets its own identity and a matching recovery journal.
+After interruption, acknowledge only the verified remote inventory. Never
+acknowledge a local registration that the remote has not received. Each join
+keeps a fresh REPLICA identity across retries. Unrelated nonempty targets fail.
+
+`replica migrate --source DIR --classification FILE --dry-run` reads a legacy
+snapshot under the source mutation lock. The JSON classification must name
+every ref as topic or log; no name-based inference applies. Copy the returned
+version with `--expected VERSION` to a separate destination. A changed source
+or different journal refuses the copy. A nested destination is also refused.
+Do not run this against the live store without a separate cutover decision.
+
+Baseline IDs derive from the captured source inventory. Topic generations
+describe their known legacy order, while log baselines name the current DAG
+without rewriting memory bytes. The Unix epoch is an explicit baseline
+sentinel, not an invented date for an original action. Missing historical
+generations remain diagnostics; missing current or retaining payloads fail.
+Preserve pins, reviews and tombstones. A canonical legacy-baseline memory
+carries diagnostic metadata through the protocol archive, and LEGACY provides
+a local report. Matching journals resume after baseline import, local
+registration or archive preparation. The source stays unchanged.
+
+This is a snapshot-copy migration, not in-place conversion or live cutover.
+Cutover still requires a verified backup, a quiescent source and coordinated
+upgrades of all readers, writers, GC jobs and front ends. The legacy version
+helper now refuses checkpoint markers. Reconciliation of independently
+edited legacy stores remains unsupported.
 
 ## Local archive, collection, pins and reviews
 
@@ -206,12 +296,13 @@ Keep transport and live-store migration behind their later acceptance checks.
 not acknowledge remote publication or clear the outbox. Archive payloads,
 events and manifests remain indefinitely. No command prunes them.
 
-Future transport calls `acknowledgePublished` only after it verifies remote
+Transport calls `acknowledgePublished` only after it verifies remote
 inclusion of the archived checkpoint's complete payload and event sets.
 The API independently validates the complete local archive before it clears
 obligations. It clears only the captured sets; newer local writes remain
-pending. No CLI or MCP command can acknowledge publication. Current tests
-simulate that transport boundary. No real remote publication is tested yet.
+pending. No standalone CLI or MCP command can acknowledge publication.
+Direct archive tests simulate this boundary. Manual exchange tests verify
+real Git publication through temporary local bare repositories.
 
 `replica gc --dry-run --keep-generations N` reports a checkpoint-bound plan.
 The default depth is 5, including the current generation. Each causal branch
@@ -242,8 +333,8 @@ generation depth also restores required historical copies.
 All accepted events and payload IDs stay in the checkpoint. Load validates
 their complete bytes, including archive fallback, and rejects eviction of
 any current or pending dependency. Full inventory validation remains costly.
-The local archive is a filesystem pool for this prototype. The later Git
-transport must preserve the same immutable archive and acknowledgement rules.
+The local archive is a filesystem pool for this prototype. The separate Git
+transport preserves the same immutable archive and acknowledgement rules.
 
 `replica pin-state ID` and `replica review-state A B` return opaque resource
 versions. `pin`, `unpin`, `review` and `unreview` require the matching version

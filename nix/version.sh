@@ -47,6 +47,9 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$root" ] || { echo "akyuu-version: no store root. Use --root DIR or set AKYUU_ROOT." >&2; exit 2; }
+for marker in IDENTITY CURRENT REPLICA; do
+  [ ! -e "$root/$marker" ] || { echo "akyuu-version: checkpoint replicas need the sync transport, not legacy version snapshots." >&2; exit 1; }
+done
 [ -d "$root/store" ] || { echo "akyuu-version: $root has no store directory." >&2; exit 1; }
 
 g() { git -C "$root" "$@"; }
