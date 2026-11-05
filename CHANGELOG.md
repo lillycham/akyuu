@@ -18,6 +18,9 @@
   Read the current memory before each revision. A stale version causes an error.
 - Ordinary `add` requires a new `ref`. Ordinary `add` and `supersede` use
   the configured agent as the default author. An explicit `agent` overrides it.
+- Every command and MCP tool that writes a memory refuses a body that has no
+  text apart from white space. Before, `supersede` with an empty standard
+  input erased a topic. Reading an old empty memory still works.
 
 - Update all writers and GC jobs together. Old processes do not use the shared
   mutation lock. Restart old MCP servers before concurrent use.
@@ -28,6 +31,27 @@ Memory bytes, IDs and the ref file format do not change.
 
 ### Added
 
+- `mcp --tool-set topic`: tools for an agent that should not handle ids. It
+  names topics (refs) and writes plain text. `recall` finds topics or reads
+  one, `remember` makes a topic, `add_to` adds a line, `revise` changes a
+  part, `replace` rewrites the whole text, and `note` records an episode.
+  `context`, `log` and `unfold` are in the set too. `add_to`, `revise` and
+  `replace` change a topic under the store lock, so they never lose a race
+  and leave no spare memory. Only `replace` takes a version: the one that
+  `recall` shows. A stale version is refused with the current text. The
+  tools refuse a log. The list of tools is about 8 KB, against 13 KB for
+  the ordinary set. The default stays `ordinary`.
+- `recall` of a topic in the topic tool set ends with a `related:` line. It
+  lists up to three other topics that belong with the topic, each with a
+  reason: `linked`, `mentioned` or `similar text`. The list is computed when
+  `recall` runs and is never stored. It uses the vectors if an embedding
+  profile is set. Without vectors it lists only topics that are linked or
+  mentioned. Topics that the topic is about, or that are about it, are not
+  listed again. Set `[topic] related = false` (or `AKYUU_TOPIC_RELATED=false`)
+  to turn it off. `[topic] parallel` (or `AKYUU_TOPIC_PARALLEL`, a list
+  separated by commas) names namespaces whose topics are parallel instances
+  of one kind, such as `work/projects`. Two such topics are then related only
+  if they are linked or mentioned.
 - The web UI Graph tab opens on a topic map: one box for each ref, grouped by
   namespace, with the number of versions or episodes. Point at a box to see
   its links to other topics. The old view of every memory stays as "history".

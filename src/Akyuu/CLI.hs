@@ -47,6 +47,7 @@ import Akyuu.Memory (renderMemory)
 import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLevels, readLog, readLogSince, readRef, refLinksOf, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, summariseLog, supersedeMemory, unfoldMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
+import Akyuu.Related qualified as Related
 import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, episodeLines, evalLines, findingJSON, findingLines, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refLinkLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines, viewLines)
 import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
@@ -425,10 +426,11 @@ commandParser =
       Mcp
         <$> optional (option nameReader (long "policy-ref" <> metavar "NAME" <> help "The ref that holds the policy of this store. The default is $AKYUU_POLICY_REF, then policy/memory."))
         <*> optional (option nameReader (long "tiers-ref" <> metavar "NAME" <> help "The ref of the manifest of the tiers. The default is $AKYUU_TIERS_REF, then policy/tiers."))
-        <*> option (eitherReader toolSetReader) (long "tool-set" <> metavar "ordinary|maintenance" <> value MCP.Ordinary <> help "The MCP tools to expose. The default is ordinary; maintenance exposes raw store and consolidation tools.")
+        <*> option (eitherReader toolSetReader) (long "tool-set" <> metavar "ordinary|maintenance|topic" <> value MCP.Ordinary <> help "The MCP tools to expose. The default is ordinary; maintenance exposes raw store and consolidation tools; topic exposes tools that name topics and need no ids.")
     toolSetReader "ordinary" = Right MCP.Ordinary
     toolSetReader "maintenance" = Right MCP.Maintenance
-    toolSetReader _ = Left "The tool set must be ordinary or maintenance."
+    toolSetReader "topic" = Right MCP.Topic
+    toolSetReader _ = Left "The tool set must be ordinary, maintenance or topic."
     checkP =
       CheckArgs
         <$> ( CheckOptions
@@ -677,7 +679,10 @@ runCommand env c = runExceptT $ case c of
     let agent = case Config.cfgAgent cfg of
           Config.Sourced _ Config.Default -> ""
           s -> Config.sValue s
-    mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place) toolSet) <$> policy <*> tiers))
+    let related
+          | Config.sValue (Config.cfgRelated cfg) = Just (Related.Config (Config.sValue (Config.cfgParallel cfg)))
+          | otherwise = Nothing
+    mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place) toolSet related) <$> policy <*> tiers))
     liftIO (MCP.serve mcpConfig env)
     pure (Output BS.empty True False)
   Serve port -> do

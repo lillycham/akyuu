@@ -37,7 +37,9 @@ commands below.
 *add* *--kind* _text_ *--agent* _text_ [*--ref* _name_] [_edges_] [_body_]
 	Write a memory and print its id. The _kind_ says what it is (*fact*,
 	*preference*, *decision*, ...) and the _agent_ who wrote it. The _body_ is
-	*--body* _text_, *-f* _file_ or *--file* _file_, or the standard input.
+	*--body* _text_, *-f* _file_ or *--file* _file_, or the standard input. A
+	body that has no text apart from white space is refused, here and in
+	every command that writes a memory.
 	The _edges_ are *--about*, *--derived-from*, *--refines* and *--supersedes*,
 	each with an _id_, each repeatable: the new memory is about the target,
 	comes from it, adds detail to it, or replaces it. With *--ref*, also make the
@@ -234,6 +236,17 @@ be *\**, and *~* is the home directory).
 	Ordinary add requires a new ref. Ordinary add and supersede use the
 	configured agent as the default author. An explicit agent overrides it.
 	Both sets require expected for amend and supersede. Use the id from get.
+	Select *--tool-set topic* for an agent that should not handle ids. The
+	tools are context, log, unfold, and these, which name topics (refs) and
+	use plain text: *recall* finds topics or reads one, *remember* makes a
+	topic, *add_to* adds a line, *revise* changes a part of the text, *replace*
+	rewrites the whole text, and *note* records an episode. The server
+	retries a busy store lock, and it adds and revises under the lock, so a
+	writer needs no version for them. Only *replace* takes a version: the one
+	that *recall* shows. A stale version is refused with the current text.
+	*recall* of a topic ends with a *related:* line: up to three other topics
+	that belong with it, each with a reason (*linked*, *mentioned* or
+	*similar text*). See *topic.related* in CONFIGURATION.
 	The server
 	tells the agent to read the policy (*policy/memory*, or *--policy-ref*, or
 	*$AKYUU_POLICY_REF*, or *policy-ref* in the config file) first.
@@ -277,6 +290,10 @@ policy-ref = "me/policy"
 tiers-ref = "policy/tiers"
 agent = "me"
 
+[topic]
+related = true
+parallel = ["notes/recipes"]
+
 [embed]
 profile = "nomic"
 
@@ -293,6 +310,17 @@ args = { gguf = "/models/nomic-embed-text-v1.5.Q8_0.gguf" }
 *root*, *policy-ref*, *tiers-ref* and *agent* are the store, the refs of the
 policy and the manifest, and the agent of *note* and *mcp*; *~/* at the start
 of *root* is the home directory.
+
+*topic.related* (true by default) shows the related topics when an agent of
+the topic tool set recalls a topic. Akyuu works the list out each time and
+does not store it. A topic scores higher when its text is near, when one
+topic links to the other, and when one topic names the other in its text. A
+link or a name counts less when its source points at many topics. Only a topic
+with a positive score is listed. Without vectors the list holds only topics
+that are linked or mentioned. *topic.parallel* is a list of namespaces whose
+topics are parallel instances of one kind (for example *notes/recipes*):
+such topics look alike because they share a form, so two of them are related
+only if they are linked or mentioned. The default is no namespace.
 
 An embedding profile turns search by meaning on. Its *command*, run by *sh -c*,
 reads a text on its standard input and prints a vector as JSON. *key* names
@@ -314,6 +342,10 @@ command, which suits a comparison of models with *search-eval*.
 *AKYUU_ROOT*, *AKYUU_POLICY_REF*, *AKYUU_TIERS_REF*, *AKYUU_AGENT*
 	The settings *root*, *policy-ref*, *tiers-ref* and *agent*, over the
 	config file. An empty value is no value.
+
+*AKYUU_TOPIC_RELATED*, *AKYUU_TOPIC_PARALLEL*
+	The settings *topic.related* (true, false, yes, no, on, off, 1 or 0) and
+	*topic.parallel* (names separated by commas), over the config file.
 
 *AKYUU_EMBED_PROFILE*
 	The embedding profile in use, over *embed.profile*.

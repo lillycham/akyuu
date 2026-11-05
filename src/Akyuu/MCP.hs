@@ -21,6 +21,8 @@
 module Akyuu.MCP
   ( -- * Tools
     ToolCall (..),
+    RememberArgs (..),
+    ReplaceArgs (..),
     ToolResult (..),
     CallError (..),
     toolList,
@@ -53,11 +55,14 @@ import Akyuu.Graph (Edge (Edge), EdgeType (About, DerivedFrom, Refines, Supersed
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep, defaultSize)
-import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLevels, readLog, readLogSince, readRef, refLinksOf, resolveId, reviewPair, searchMemoriesMode, setRefTo, summariseLog, supersedeMemory, unfoldMemory)
+import Akyuu.Memory (Memory (memBody))
+import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), TopicView (tvAbout, tvId, tvMemory, tvMentionedBy, tvName), addMemory, addToTopic, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLevels, readLog, readLogSince, readRef, recallQuery, recallTopic, refLinksOf, relatedTopics, rememberTopic, replaceTopic, resolveId, reviewPair, reviseTopic, searchMemoriesMode, setRefTo, summariseLog, supersedeMemory, unfoldMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
+import Akyuu.Related qualified as Related
 import Akyuu.Render (compareLines, edgeName, episodeLines, findingLines, heldBy, idLine, logLines, memoryText, neighbourLines, refLines, refLinkLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage, viewLines)
 import Akyuu.Tier (Place (Place), defaultPolicyRef, defaultTiersRef)
+import Akyuu.Topic qualified as Topic
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
 import Control.Monad (forM_, unless)
 import Control.Monad.Trans.Class (lift)
@@ -125,6 +130,38 @@ data ToolCall
     CallNote (Maybe Text) (Maybe Text) NewMemory
   | -- | The options, the kinds to show (none means all), and the lowest severity.
     CallCheck CheckOptions [FindingKind] (Maybe Severity)
+  | -- | The topic tools. Search for topics: the words, and the most entries
+    -- to show.
+    CallRecallQuery Text Int
+  | -- | Read one topic.
+    CallRecallTopic Name
+  | CallRemember RememberArgs
+  | -- | Add a line to a topic: the topic and the text.
+    CallAddTo Name Text
+  | -- | Change a part of a topic: the topic and the edits.
+    CallRevise Name [Amend.Edit]
+  | CallReplace ReplaceArgs
+  deriving (Eq, Show)
+
+-- | The arguments of @remember@.
+data RememberArgs = RememberArgs
+  { remTopic :: Name,
+    remKind :: Text,
+    remText :: Text,
+    -- | The topics that the new memory is about.
+    remAbout :: Set.Set Name
+  }
+  deriving (Eq, Show)
+
+-- | The arguments of @replace@.
+data ReplaceArgs = ReplaceArgs
+  { repTopic :: Name,
+    -- | The version that @recall@ showed, as the agent gave it.
+    repVersion :: Text,
+    repText :: Text,
+    -- | New links. 'Nothing' keeps the links of the old memory.
+    repAbout :: Maybe (Set.Set Name)
+  }
   deriving (Eq, Show)
 
 -- | The result of a tool: text, and whether it is an error.
@@ -357,6 +394,76 @@ toolList =
     tool :: Text -> Text -> Value -> Value
     tool n d s = object ["name" .= n, "description" .= d, "inputSchema" .= s]
 
+-- | The tools of the topic set. An agent names topics and writes plain text.
+-- It never gives an id. A version, which @recall@ shows, is needed only to
+-- rewrite a whole text. @context@, @log@ and @unfold@ are the tools of the
+-- other sets.
+topicTools :: [Value]
+topicTools =
+  [ topicTool
+      "recall"
+      "Find topics, or read one. With query: search the text. Each hit is a topic with its version and its current text, cut if it is long. With topic: the whole text of the topic, its version, and the topics it links to. Give exactly one of query and topic."
+      ( objectSchema
+          [ ("query", stringSchema "The words to find. A topic matches if its text has all of them."),
+            ("topic", topicSchema "The topic to read."),
+            ("limit", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "default" .= (5 :: Int), "description" .= ("With query, the most topics to return." :: Text)])
+          ]
+          []
+      ),
+    topicTool
+      "remember"
+      "Make a new topic with its first text. Make one topic for each thing that can change on its own, for example one topic for each fact about a person, and not one topic for the whole person. The topic must not exist: to change one, use add_to, revise or replace. The answer names topics with similar text, in case this repeats one."
+      ( objectSchema
+          [ ("topic", topicSchema "The new topic, for example kitchen/oven."),
+            ("text", stringSchema "What is true about the topic. It can have many lines."),
+            ("kind", stringSchema "What the text is, for example fact, preference or decision. The default is fact."),
+            ("about", topicsSchema "Topics that this text is about. Each must exist.")
+          ]
+          ["topic", "text"]
+      ),
+    topicTool
+      "add_to"
+      "Add a line to the end of a topic. Use it for something new about the topic. Other agents can add at the same time: you need no version."
+      (objectSchema [("topic", topicSchema "The topic to add to. It must exist."), ("text", stringSchema "The line to add.")] ["topic", "text"]),
+    topicTool
+      "revise"
+      "Change a part of a topic. Each replacement gives text that occurs once in the topic, and the text to put in its place. It applies to the current text of the topic, also if another agent changed it after you read it. A text that is not there, or that occurs more than once, is an error that shows the current text."
+      ( objectSchema
+          [ ("topic", topicSchema "The topic to change."),
+            ("replace", object ["type" .= ("array" :: Text), "items" .= objectSchema [("from", stringSchema "The text to replace. It must occur exactly once."), ("to", stringSchema "The text to put in its place. It can be empty.")] ["from", "to"], "description" .= ("The replacements, applied in order." :: Text)])
+          ]
+          ["topic", "replace"]
+      ),
+    topicTool
+      "replace"
+      "Rewrite the whole text of a topic. Give the version that recall showed. If the topic has changed since, nothing is written, and the error shows the current version and text: merge your change into it, and call again. Use revise for a small change."
+      ( objectSchema
+          [ ("topic", topicSchema "The topic to rewrite."),
+            ("version", stringSchema "The version of the topic that you read, as recall showed it."),
+            ("text", stringSchema "The new text. It replaces the whole text."),
+            ("about", topicsSchema "New links: topics that the new text is about. Each must exist. Leave it out to keep the links.")
+          ]
+          ["topic", "version", "text"]
+      ),
+    topicTool
+      "note"
+      "Record what happened or was said, in the log for this directory. Use add_to or replace for what is true now."
+      ( objectSchema
+          [ ("text", stringSchema "The text of the note."),
+            ("kind", stringSchema "The kind of the note. The default is note."),
+            ("topics", topicsSchema "Topics that the note is about. Each must exist."),
+            ("cwd", stringSchema "The directory that you work in. The default is the directory of the server.")
+          ]
+          ["text"]
+      )
+  ]
+    <> [t | t@(Object o) <- toolList, Just (String n) <- [KM.lookup "name" o], n `elem` ["context", "log", "unfold"]]
+  where
+    topicTool :: Text -> Text -> Value -> Value
+    topicTool n d s = object ["name" .= n, "description" .= d, "inputSchema" .= s]
+    topicSchema d = stringSchema (d <> " A topic name: parts of a-z, 0-9, '-', '_' and '.', joined with '/'.")
+    topicsSchema d = object ["type" .= ("array" :: Text), "items" .= topicSchema "A topic.", "description" .= (d :: Text)]
+
 -- Arguments ------------------------------------------------------------
 
 type Args = KeyMap Value
@@ -457,11 +564,14 @@ parseToolCall n args = checkArgNames n args *> parseArgs n args
 
 -- | Ordinary writers use retained creation and version-checked revisions.
 -- Maintenance exposes the full interface, with the same version checks.
-data ToolSet = Ordinary | Maintenance
+-- Topic speaks in topics and plain text: no ids, no edge kinds, and a version
+-- only where a whole text is rewritten.
+data ToolSet = Ordinary | Maintenance | Topic
   deriving (Eq, Show)
 
 toolsFor :: ToolSet -> [Value]
 toolsFor Maintenance = toolList
+toolsFor Topic = topicTools
 toolsFor Ordinary = map ordinarySchema (filter ordinaryTool toolList)
   where
     ordinaryTool (Object t) = case KM.lookup "name" t of
@@ -486,13 +596,13 @@ parseToolCallFor :: McpConfig -> Text -> Args -> Either CallError ToolCall
 parseToolCallFor cfg n args
   | not (any named (toolsFor (mcpToolSet cfg))) = Left (UnknownTool n)
   | otherwise = do
-      checkArgNames n args
+      checkArgNamesIn (argNamesOf (toolsFor (mcpToolSet cfg))) n args
       if mcpToolSet cfg == Ordinary && n == "add" then () <$ refArg args else pure ()
       let args' =
             if mcpToolSet cfg == Ordinary && n `elem` ["add", "supersede"] && not (KM.member "agent" args)
               then KM.insert "agent" (String author) args
               else args
-      parseArgs n args'
+      if mcpToolSet cfg == Topic then parseTopicArgs n args else parseArgs n args'
   where
     author = if T.null (mcpAgent cfg) then "agent" else mcpAgent cfg
     named (Object t) = KM.lookup "name" t == Just (String n)
@@ -500,10 +610,14 @@ parseToolCallFor cfg n args
 
 -- | The names of the arguments of each tool, from the schemas of 'toolList'.
 toolArgNames :: Map.Map Text [Text]
-toolArgNames =
+toolArgNames = argNamesOf toolList
+
+-- | The names of the arguments of each tool of a list, from its schemas.
+argNamesOf :: [Value] -> Map.Map Text [Text]
+argNamesOf tools =
   Map.fromList
     [ (n, maybe [] (map K.toText . KM.keys) (props s))
-    | Object t <- toolList,
+    | Object t <- tools,
       Just (String n) <- [KM.lookup "name" t],
       Just (Object s) <- [KM.lookup "inputSchema" t]
     ]
@@ -518,7 +632,11 @@ toolArgNames =
 -- place of @expected@ would lose the check of the ref. The error names the
 -- nearest argument, if one is near, and all of them.
 checkArgNames :: Text -> Args -> Either CallError ()
-checkArgNames n args = case Map.lookup n toolArgNames of
+checkArgNames = checkArgNamesIn toolArgNames
+
+-- | 'checkArgNames' against the tools of one set.
+checkArgNamesIn :: Map.Map Text [Text] -> Text -> Args -> Either CallError ()
+checkArgNamesIn names n args = case Map.lookup n names of
   Nothing -> Right () -- 'parseArgs' reports an unknown tool
   Just known -> case filter (`notElem` known) (map K.toText (KM.keys args)) of
     [] -> Right ()
@@ -537,6 +655,12 @@ checkArgNames n args = case Map.lookup n toolArgNames of
     nearest w ks = case sortOn fst [(Fuzzy.editDistance w k, k) | k <- ks] of
       ((d, k) : _) | d <= 2 -> Just k
       _ -> Nothing
+
+-- | A number that must be at least a lower bound.
+atLeast :: Text -> Int -> Int -> Either CallError Int
+atLeast k lo v
+  | v >= lo = Right v
+  | otherwise = argError k ("must be at least " <> T.pack (show lo) <> ".")
 
 parseArgs :: Text -> Args -> Either CallError ToolCall
 parseArgs n args = case n of
@@ -651,9 +775,6 @@ parseArgs n args = case n of
     pure (CallCheck defaultCheckOptions {nearThreshold = thr, hubDegree = hub, longLog = longN} kinds sev)
   _ -> Left (UnknownTool n)
   where
-    atLeast k lo v
-      | v >= lo = Right v
-      | otherwise = argError k ("must be at least " <> T.pack (show lo) <> ".")
     kindName' t =
       maybe
         (argError "kinds" ("has '" <> t <> "', which is not a kind of finding."))
@@ -674,6 +795,53 @@ parseArgs n args = case n of
         (argError "follow" ("has '" <> t <> "', which is not a kind of edge."))
         Right
         (lookup t [(edgeName k, k) | k <- [minBound .. maxBound]])
+
+-- | The arguments of a tool of the topic set. @context@, @log@ and @unfold@ are
+-- the tools of the other sets; @log@ shows the bodies unless told not to, so
+-- that an agent never needs an id to read an episode.
+parseTopicArgs :: Text -> Args -> Either CallError ToolCall
+parseTopicArgs n args = case n of
+  "recall" -> do
+    q <- optional' args "query" asText "a string"
+    t <- optional' args "topic" asText "a string" >>= traverse parseName
+    limit <- optional' args "limit" asInt "a whole number" >>= atLeast "limit" 1 . fromMaybe 5
+    case (q, t) of
+      (Just x, Nothing) -> pure (CallRecallQuery x limit)
+      (Nothing, Just x) -> pure (CallRecallTopic x)
+      _ -> Left (BadArguments "Give exactly one of the arguments 'query' and 'topic'.")
+  "remember" -> do
+    t <- topicArg
+    k <- maybe "fact" id <$> optional' args "kind" asText "a string" >>= check . checkField "kind"
+    x <- required args "text" asText "a string"
+    a <- aboutTopics
+    pure (CallRemember RememberArgs {remTopic = t, remKind = k, remText = x, remAbout = fromMaybe Set.empty a})
+  "add_to" -> CallAddTo <$> topicArg <*> required args "text" asText "a string"
+  "revise" -> do
+    t <- topicArg
+    rs <- required args "replace" (asList asObject) "a list of objects with from and to"
+    if null rs then argError "replace" "needs at least one object with from and to." else pure ()
+    reps <- traverse (\o -> Amend.Replace <$> required o "from" asText "a string" <*> required o "to" asText "a string") rs
+    pure (CallRevise t reps)
+  "replace" -> do
+    t <- topicArg
+    v <- required args "version" asText "a string"
+    x <- required args "text" asText "a string"
+    a <- aboutTopics
+    pure (CallReplace ReplaceArgs {repTopic = t, repVersion = v, repText = x, repAbout = a})
+  "note" -> do
+    c <- optional' args "cwd" asText "a string"
+    k <- maybe "note" id <$> optional' args "kind" asText "a string" >>= check . checkField "kind"
+    x <- required args "text" asText "a string"
+    ts <- fromMaybe Set.empty <$> aboutTopicsKey "topics"
+    pure (CallNote c Nothing NewMemory {newKind = k, newAgent = "", newEdges = Set.empty, newBody = x, newAboutRefs = ts})
+  "log" -> parseArgs n (if KM.member "full" args then args else KM.insert "full" (Bool True) args)
+  _ -> parseArgs n args
+  where
+    topicArg = required args "topic" asText "a string" >>= parseName
+    aboutTopics = aboutTopicsKey "about"
+    aboutTopicsKey k = do
+      ts <- optional' args k (asList asText) "a list of topic names"
+      traverse (fmap Set.fromList . traverse parseName) ts
 
 -- Id prefixes ----------------------------------------------------------
 
@@ -789,9 +957,26 @@ runTool cfg env c = either failed id <$> go
         (Left e, _) -> pure (Left (BadName (mcpTiersRef cfg) e))
         (_, Nothing) -> pure (Left (BadInput "The server does not know its directory. Give cwd."))
         (Right manifest, Just p) -> do
-          let m' = m {newAgent = fromMaybe (if T.null (mcpAgent cfg) then "agent" else mcpAgent cfg) ag}
+          let m' = m {newAgent = fromMaybe author ag}
           r <- noteEpisode env manifest p m'
-          pure (fmap (\(n, i) -> okText ("noted in " <> nameText n <> " " <> Id.render i) False) r)
+          pure (fmap (\(n, i) -> okText (if mcpToolSet cfg == Topic then Topic.renderNoted n else "noted in " <> nameText n <> " " <> Id.render i) False) r)
+      CallRecallQuery q l ->
+        fmap (\es -> okText (if null es then Topic.noMatch else T.intercalate "\n\n" (map (Topic.renderEntry 600) es)) False) <$> recallQuery env l q
+      CallRecallTopic n -> do
+        r <- recallTopic env n
+        case r of
+          Left e -> pure (Left e)
+          Right v -> do
+            rel <- relatedFor v
+            pure (Right (okText (Topic.renderTopic (tvName v) (tvId v) (tvMemory v) (tvAbout v) (tvMentionedBy v) rel) False))
+      CallRemember a ->
+        fmap (\(i, close) -> okText (Topic.renderMade (remTopic a) i close) False) <$> rememberTopic env (remTopic a) author (remKind a) (remText a) (remAbout a)
+      CallAddTo n t -> withManifest $ \mf ->
+        fmap (\(i, _) -> okText (Topic.renderAdded n i) False) <$> addToTopic env mf author n t
+      CallRevise n es -> withManifest $ \mf ->
+        fmap (\(i, m) -> okText (Topic.renderRevised n i (Topic.changedLines es (memBody m))) False) <$> reviseTopic env mf author n es
+      CallReplace a -> withManifest $ \mf ->
+        fmap (\(i, _) -> okText (Topic.renderReplaced (repTopic a) i) False) <$> replaceTopic env mf author (repTopic a) (repVersion a) (repText a) (repAbout a)
       CallCheck o ks s -> do
         r <- checkStore env o
         refs <- listRefValues env
@@ -800,6 +985,17 @@ runTool cfg env c = either failed id <$> go
       r <- searchMemoriesMode env md o q
       held <- either (const Map.empty) heldBy <$> listRefValues env
       pure (fmap (shorten . lines' "No matches." . searchLinesWith held) r)
+    -- The default author of a write: the name that the server was given.
+    author = if T.null (mcpAgent cfg) then "agent" else mcpAgent cfg
+    -- The topics that go with a topic, unless the setting is off. The topics
+    -- that the view shows already are not listed again.
+    relatedFor v = case (mcpRelated cfg, mkName (mcpTiersRef cfg)) of
+      (Just rc, Right mf) -> relatedTopics env mf rc (Set.fromList (tvAbout v <> tvMentionedBy v)) (tvName v)
+      _ -> pure []
+    -- The topic writers need the manifest, to find the logs that it names.
+    withManifest act = case mkName (mcpTiersRef cfg) of
+      Left e -> pure (Left (BadName (mcpTiersRef cfg) e))
+      Right mf -> act mf
     -- The place of the session: the directory that the caller gave, with the
     -- home directory of the server, or else where the server runs.
     placeOf (Just d) = Just (Place (maybe "" (\(Place h _) -> h) (mcpPlace cfg)) d)
@@ -844,7 +1040,10 @@ data McpConfig = McpConfig
     mcpAgent :: Text,
     -- | Where the server runs, to find the refs and the log of this place.
     mcpPlace :: Maybe Place,
-    mcpToolSet :: ToolSet
+    mcpToolSet :: ToolSet,
+    -- | Show the topics that are related to a topic when it is recalled
+    -- ("Akyuu.Related"). 'Nothing': do not.
+    mcpRelated :: Maybe Related.Config
   }
   deriving (Eq, Show)
 
@@ -852,7 +1051,7 @@ data McpConfig = McpConfig
 -- one agent. A store that uses another name sets it with @--policy-ref@ or
 -- @AKYUU_POLICY_REF@.
 defaultMcpConfig :: McpConfig
-defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing Ordinary
+defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing Ordinary Nothing
 
 -- | The result of @initialize@.
 initializeResult :: McpConfig -> Maybe Text -> Value
@@ -861,18 +1060,30 @@ initializeResult cfg asked =
     [ "protocolVersion" .= version,
       "capabilities" .= object ["tools" .= object ["listChanged" .= False]],
       "serverInfo" .= object ["name" .= ("akyuu" :: Text), "version" .= showVersion Pkg.version],
-      "instructions"
-        .= ( "akyuu is a content-addressed memory store. A memory never changes. \
-             \A ref (such as me/notes) names the current memory of a topic. \
-             \To change a memory, read its ref, then call supersede with the id that you read as expected. \
-             \Search shows when a hit is superseded: read the newer memory. \
-             \If the store has the ref "
-               <> mcpPolicyRef cfg
-               <> ", it says how this store is used for memory. \
-                  \At the start of work, call the tool context: it returns the memories that every session needs."
-           )
+      "instructions" .= instructions
     ]
   where
+    instructions = case mcpToolSet cfg of
+      Topic ->
+        "akyuu is a memory store. A topic is a name, such as kitchen/oven, with the text that is current about it. \
+        \Use recall to find a topic or to read one, remember to make a topic, add_to to add a line, \
+        \revise to change a part of the text, replace to rewrite the whole text (give the version that recall showed), \
+        \and note for what happened. A topic is never an id: you do not need one. \
+        \A change does not delete the old text: the store keeps the old versions of a topic until a clean-up removes them, which can take days. \
+        \If a person asks you to forget something, remove it from the topic, and tell them that the old text stays until then. \
+        \If the store has the ref "
+          <> mcpPolicyRef cfg
+          <> ", it says how this store is used for memory. \
+             \At the start of work, call the tool context: it returns the memories that every session needs."
+      _ ->
+        "akyuu is a content-addressed memory store. A memory never changes. \
+        \A ref (such as me/notes) names the current memory of a topic. \
+        \To change a memory, read its ref, then call supersede with the id that you read as expected. \
+        \Search shows when a hit is superseded: read the newer memory. \
+        \If the store has the ref "
+          <> mcpPolicyRef cfg
+          <> ", it says how this store is used for memory. \
+             \At the start of work, call the tool context: it returns the memories that every session needs."
     version = case asked of
       Just v | v `elem` supportedVersions -> v
       _ -> head' supportedVersions

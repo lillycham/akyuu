@@ -2,6 +2,7 @@
 
 module MCPTests (mcpTests) where
 
+import Akyuu.Amend (Edit (Replace))
 import Akyuu.Check (CheckOptions (hubDegree, nearThreshold), FindingKind (Fork), Severity (Problem), defaultCheckOptions)
 import Akyuu.Error (AkyuuError (BadField, BadId, StoreFailed), describe)
 import Akyuu.GC (Policy (gracePeriod), defaultPolicy)
@@ -36,6 +37,7 @@ mcpTests =
   testGroup
     "Akyuu.MCP"
     [ ordinaryCases,
+      topicSetCases,
       protocolCases,
       toolCallCases,
       runToolCases
@@ -490,4 +492,134 @@ runToolCases =
         withOpsEnv $ \_ env -> do
           r <- runTool defaultMcpConfig env (CallSearch defaultSearchOptions "nothing")
           r @?= ToolResult "No matches." False
+    ]
+
+-- The topic tool set ---------------------------------------------------
+
+topicCfg :: McpConfig
+topicCfg = defaultMcpConfig {MCP.mcpToolSet = MCP.Topic, mcpAgent = "test-agent", mcpPlace = Just (Place "/h" "/h/work")}
+
+toolNames :: MCP.ToolSet -> [Text]
+toolNames set = [n | t <- MCP.toolsFor set, Just (String n) <- [at ["name"] t]]
+
+-- Parse a call in the topic set.
+topicCall :: Text -> [(Text, Value)] -> Either CallError ToolCall
+topicCall t kvs = MCP.parseToolCallFor topicCfg t (args kvs)
+
+topicSetCases :: TestTree
+topicSetCases =
+  testGroup
+    "topic tools"
+    [ testCase "the set lists the topic verbs and the three shared tools" $
+        Set.fromList (toolNames MCP.Topic) @?= Set.fromList ["recall", "remember", "add_to", "revise", "replace", "note", "context", "log", "unfold"],
+      testCase "a tool outside the set cannot run by name" $
+        sequence_
+          [ errCode (runIdentity (handleMessage topicCfg (pure . fake) (callReq t (object [])))) @?= Just (Number (-32602))
+          | t <- ["get", "search", "add", "supersede", "amend", "append", "ref_set", "ref_list", "check"]
+          ],
+      testCase "no tool but unfold takes an id or an edge kind" $ do
+        let propsOf t = [(n, k) | Just (String n) <- [at ["name"] t], Just (Object o) <- [at ["inputSchema", "properties"] t], k <- map K.toText (KM.keys o)]
+            banned = ["id", "expected", "supersedes", "derived_from", "refines", "about_refs", "a", "b", "sources"]
+        [p | p@(n, k) <- concatMap propsOf (MCP.toolsFor MCP.Topic), k `elem` banned, n /= "unfold"] @?= [],
+      testCase "tools/list of the topic set is smaller than that of the ordinary set" $
+        (BL.length (A.encode (MCP.toolsFor MCP.Topic)) < BL.length (A.encode (MCP.toolsFor MCP.Ordinary))) @? "the topic set is not smaller",
+      testCase "recall wants exactly one of query and topic, and the limit defaults to 5" $ do
+        topicCall "recall" [("query", "oven")] @?= Right (MCP.CallRecallQuery "oven" 5)
+        topicCall "recall" [("topic", "kitchen/oven"), ("limit", Number 2)] @?= Right (MCP.CallRecallTopic (ref "kitchen/oven"))
+        topicCall "recall" [("query", "oven"), ("limit", Number 2)] @?= Right (MCP.CallRecallQuery "oven" 2)
+        topicCall "recall" [] @?= Left (BadArguments "Give exactly one of the arguments 'query' and 'topic'.")
+        topicCall "recall" [("query", "a"), ("topic", "b")] @?= Left (BadArguments "Give exactly one of the arguments 'query' and 'topic'.")
+        topicCall "recall" [("query", "a"), ("limit", Number 0)] @?= Left (BadArguments "The argument 'limit' must be at least 1."),
+      testCase "remember defaults the kind, and takes topics that it is about" $ do
+        topicCall "remember" [("topic", "kitchen/oven"), ("text", "x")]
+          @?= Right (MCP.CallRemember (MCP.RememberArgs (ref "kitchen/oven") "fact" "x" Set.empty))
+        topicCall "remember" [("topic", "kitchen/oven"), ("text", "x"), ("kind", "preference"), ("about", A.toJSON ["kitchen/rota" :: Text])]
+          @?= Right (MCP.CallRemember (MCP.RememberArgs (ref "kitchen/oven") "preference" "x" (Set.singleton (ref "kitchen/rota")))),
+      testCase "a topic name that is not a ref name is refused" $
+        assertBool "bad name" (either (const True) (const False) (topicCall "add_to" [("topic", "Kitchen Oven!"), ("text", "x")])),
+      testCase "replace needs the version, and the links are optional" $ do
+        topicCall "replace" [("topic", "kitchen/oven"), ("text", "x")] @?= Left (BadArguments "The argument 'version' is missing.")
+        topicCall "replace" [("topic", "kitchen/oven"), ("text", "x"), ("version", "0a0b0c0d0e0f")]
+          @?= Right (MCP.CallReplace (MCP.ReplaceArgs (ref "kitchen/oven") "0a0b0c0d0e0f" "x" Nothing))
+        topicCall "replace" [("topic", "kitchen/oven"), ("text", "x"), ("version", "0a0b0c0d0e0f"), ("about", A.toJSON ([] :: [Text]))]
+          @?= Right (MCP.CallReplace (MCP.ReplaceArgs (ref "kitchen/oven") "0a0b0c0d0e0f" "x" (Just Set.empty))),
+      testCase "revise needs at least one replacement" $ do
+        topicCall "revise" [("topic", "kitchen/oven"), ("replace", A.toJSON ([] :: [Value]))]
+          @?= Left (BadArguments "The argument 'replace' needs at least one object with from and to.")
+        topicCall "revise" [("topic", "kitchen/oven"), ("replace", A.toJSON [object ["from" .= ("90" :: Text), "to" .= ("60" :: Text)]])]
+          @?= Right (MCP.CallRevise (ref "kitchen/oven") [Replace "90" "60"]),
+      testCase "an argument that the tool lacks is refused, with its arguments" $
+        case topicCall "add_to" [("topic", "kitchen/oven"), ("body", "x")] of
+          Left (BadArguments t) -> do
+            assertBool "named" ("The tool add_to has no argument 'body'" `T.isInfixOf` t)
+            assertBool "lists" ("text" `T.isInfixOf` t && "topic" `T.isInfixOf` t)
+          other -> assertFailure (show other),
+      testCase "log shows the bodies unless told not to" $ do
+        topicCall "log" [("ref", "me/log")] @?= Right (CallLog (ref "me/log") Nothing True Nothing Plain)
+        topicCall "log" [("ref", "me/log"), ("full", Bool False)] @?= Right (CallLog (ref "me/log") Nothing False Nothing Plain),
+      testCase "note takes text and topics" $
+        topicCall "note" [("text", "x"), ("topics", A.toJSON ["kitchen/oven" :: Text])]
+          @?= Right (CallNote Nothing Nothing (newMem "note" "" Set.empty "x") {newAboutRefs = Set.singleton (ref "kitchen/oven")}),
+      testCase "the instructions of the topic set speak of topics, not of supersede" $ do
+        let r = runIdentity (handleMessage topicCfg (pure . fake) (req (Number 1) "initialize" (object [])))
+        case r >>= at ["result", "instructions"] of
+          Just (String t) -> do
+            assertBool "recall" ("recall" `T.isInfixOf` t)
+            assertBool "no supersede" (not ("supersede" `T.isInfixOf` t))
+            assertBool "old text stays" ("does not delete the old text" `T.isInfixOf` t && "the old text stays" `T.isInfixOf` t)
+          other -> assertFailure (show other),
+      testCase "remember asks for one topic for each thing that can change on its own" $
+        case [d | t <- MCP.toolsFor MCP.Topic, at ["name"] t == Just (String "remember"), Just (String d) <- [at ["description"] t]] of
+          [d] -> assertBool "granularity" ("one topic for each fact about a person" `T.isInfixOf` d)
+          other -> assertFailure (show other),
+      testCase "the verbs work end to end, and no answer shows an id" $
+        withOpsEnv $ \_ env -> do
+          let call t kvs = do
+                c <- either (assertFailure . show) pure (topicCall t kvs)
+                ToolResult out failed <- runTool topicCfg env c
+                assertBool ("no id in: " <> T.unpack out) (not ("sha256-" `T.isInfixOf` out))
+                pure (out, failed)
+              versionIn out = case [T.drop 9 l | l <- T.lines out, "version: " `T.isPrefixOf` l] of
+                (v : _) -> pure v
+                [] -> assertFailure ("no version in: " <> T.unpack out)
+          (made, madeFailed) <- call "remember" [("topic", "kitchen/oven"), ("text", "The oven is 90 cm.")]
+          madeFailed @?= False
+          assertBool "made" ("Made topic kitchen/oven." `T.isPrefixOf` made)
+          (read1, _) <- call "recall" [("topic", "kitchen/oven")]
+          assertBool "text" ("The oven is 90 cm." `T.isInfixOf` read1)
+          old <- versionIn read1
+          (_, addedFailed) <- call "add_to" [("topic", "kitchen/oven"), ("text", "It has a grill.")]
+          addedFailed @?= False
+          (revised, revisedFailed) <- call "revise" [("topic", "kitchen/oven"), ("replace", A.toJSON [object ["from" .= ("90 cm" :: Text), "to" .= ("60 cm" :: Text)]])]
+          revisedFailed @?= False
+          assertBool "shows the changed line" ("The oven is 60 cm." `T.isInfixOf` revised)
+          (stale, staleFailed) <- call "replace" [("topic", "kitchen/oven"), ("text", "A rewrite."), ("version", String old)]
+          staleFailed @?= True
+          assertBool "says the topic changed" ("changed since you read it" `T.isInfixOf` stale)
+          (read2, _) <- call "recall" [("topic", "kitchen/oven")]
+          current <- versionIn read2
+          (_, replacedFailed) <- call "replace" [("topic", "kitchen/oven"), ("text", "The oven is 60 cm. It has a grill."), ("version", String current)]
+          replacedFailed @?= False
+          (found, _) <- call "recall" [("query", "grill")]
+          assertBool "the topic is found" ("topic kitchen/oven" `T.isInfixOf` found)
+          -- The hit shows the version, and the agent can rewrite with it.
+          let hitVersion = T.takeWhile (/= ';') (T.drop (T.length "(version ") (snd (T.breakOn "(version " found)))
+          assertBool ("the hit shows a version: " <> T.unpack found) (T.length hitVersion == 12)
+          (_, viaHitFailed) <- call "replace" [("topic", "kitchen/oven"), ("text", "The oven is 60 cm. It has a grill and a fan."), ("version", String hitVersion)]
+          viaHitFailed @?= False
+          (none, noneFailed) <- call "recall" [("query", "zeppelin")]
+          (none, noneFailed) @?= ("No topic matches.", False),
+      testCase "a note goes to the log, and a log is refused by the writers" $
+        withOpsEnv $ \_ env -> do
+          let call t kvs = do
+                c <- either (assertFailure . show) pure (topicCall t kvs)
+                ToolResult out failed <- runTool topicCfg env c
+                assertBool ("no id in: " <> T.unpack out) (not ("sha256-" `T.isInfixOf` out))
+                pure (out, failed)
+          _ <- call "remember" [("topic", "policy/tiers"), ("text", "log *: me/log")]
+          noted <- call "note" [("text", "a small thing")]
+          noted @?= ("Noted in me/log.", False)
+          (why, failed) <- call "add_to" [("topic", "me/log"), ("text", "x")]
+          failed @?= True
+          assertBool "log" ("is a log" `T.isInfixOf` why)
     ]
