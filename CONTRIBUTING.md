@@ -16,6 +16,9 @@ ormolu -i $(git ls-files '*.hs')  # the formatter; nix flake check checks it
 
 The tests do not touch your own store or your own embedding settings.
 
+`eval/` has a second kind of test: shell checks of the whole program, and scenarios for an agent to
+do. `eval/checks.sh` takes about 25 seconds. See [eval/README.md](eval/README.md).
+
 ## Changes
 
 - Open an issue first for a big change, so that we can agree on the shape.

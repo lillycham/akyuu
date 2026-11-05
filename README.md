@@ -90,6 +90,7 @@ start of each session, and adds a status line
 | The format on disk, and what is stable | [docs/format.md](docs/format.md) |
 | Install, the home-manager module, backup, versioning | [docs/install.md](docs/install.md) |
 | An install guide for an agent to follow | [docs/agent-install.md](docs/agent-install.md) |
+| Test akyuu with an agent that has no memory | [eval/README.md](eval/README.md) |
 | Search by meaning, models, evaluation | [docs/embeddings.md](docs/embeddings.md) |
 | Logs and forgetting | [docs/episodes.md](docs/episodes.md) |
 | Finding duplicates, forks, stale links | [docs/check.md](docs/check.md), [docs/judgement.md](docs/judgement.md) |

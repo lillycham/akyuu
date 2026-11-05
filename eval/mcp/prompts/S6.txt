@@ -1,0 +1,4 @@
+akyuu is a memory store, and its tools are available to you. What time do deploys run? Answer from the store. Put the answers in your final message, as lines that start with a: and b:.
+
+a. The time that deploys run.
+b. Anything about the store that the person should know.
