@@ -5,10 +5,14 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
 
 ## Next
 
-- **Evaluate the topic tool set.** `mcp --tool-set topic` is built (see
-  [docs/plans/topic-verbs.md](docs/plans/topic-verbs.md)). Run the agent
-  scenarios on it and on the ordinary set with the same model, compare
-  success, errors and calls, and then decide which set is the default.
+- **Extend the topic evaluation.** The Sonnet and Haiku runs are in
+  [docs/plans/mcp-eval-results.md](docs/plans/mcp-eval-results.md).
+  The ordinary set remains the default. Add tasks not used to design the topic
+  set before a default change.
+- **Evaluate related-topic suggestions.** Exact-topic recall can show related
+  topics. Measure agent discovery with the feature on and off. Use a new
+  scenario ID: S8 already tests graph history. Synthetic recall measurements
+  cover up to 500 topics, not large stores or the quality of real embeddings.
 - **A test of the systemd units on a real machine.** The module is checked by
   evaluation, and the package builds on Linux, but nobody has run the timers.
 ## Later

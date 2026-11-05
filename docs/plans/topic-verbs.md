@@ -1,6 +1,8 @@
 # Topic verbs for agents
 
-Status as of 2026-10-23: steps 1 to 4 are built on the feature branch (blank-body refusal, the topic operations, the `topic` tool set, and the documents). The evaluation (step 6) has not run. Nothing here is merged or installed.
+Status as of 2026-11-05: the integration includes blank-body refusal, topic operations and the opt-in `topic` tool set.
+The Sonnet and Haiku runs are in [mcp-eval-results.md](mcp-eval-results.md).
+The ordinary tool set remains the default. A default change needs tasks not used to design the topic set.
 
 ## Goal
 

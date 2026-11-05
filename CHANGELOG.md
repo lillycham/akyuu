@@ -2,35 +2,16 @@
 
 ## Unreleased
 
+### Compatibility
+
+- Every command and MCP tool that writes a memory refuses a body with only
+  white space. Old empty memories remain readable.
+
 ### Added
 
 - A Claude Code plugin in `contrib/claude-code`, with a marketplace at the
   root of the repository. It adds the MCP server and the `SessionStart` hooks.
   It also adds a `memory` skill, a status line and `/akyuu-note`.
-
-## 0.4.0.0 (2026-10-25)
-
-### Compatibility
-
-- MCP uses the ordinary tool set by default. Use `mcp --tool-set maintenance`
-  for raw object, ref, and consolidation tools.
-- MCP `supersede` and `amend` require `expected` in both tool sets.
-  Read the current memory before each revision. A stale version causes an error.
-- Ordinary `add` requires a new `ref`. Ordinary `add` and `supersede` use
-  the configured agent as the default author. An explicit `agent` overrides it.
-- Every command and MCP tool that writes a memory refuses a body that has no
-  text apart from white space. Before, `supersede` with an empty standard
-  input erased a topic. Reading an old empty memory still works.
-
-- Update all writers and GC jobs together. Old processes do not use the shared
-  mutation lock. Restart old MCP servers before concurrent use.
-- An unreadable log returns an error instead of a complete or empty history.
-  The CLI preserves its readable prefix and fails. MCP sets `isError`.
-
-Memory bytes, IDs and the ref file format do not change.
-
-### Added
-
 - `mcp --tool-set topic`: tools for an agent that should not handle ids. It
   names topics (refs) and writes plain text. `recall` finds topics or reads
   one, `remember` makes a topic, `add_to` adds a line, `revise` changes a
@@ -52,6 +33,40 @@ Memory bytes, IDs and the ref file format do not change.
   separated by commas) names namespaces whose topics are parallel instances
   of one kind, such as `work/projects`. Two such topics are then related only
   if they are linked or mentioned.
+
+- An evaluation harness for the CLI and MCP, with isolated fixture stores
+  and model-free checks of the agent scenarios.
+
+### Fixed
+
+- Parallel namespaces require a link or a mention for related topics.
+  A high cosine score cannot bypass this requirement.
+- Related-topic statistics compute each vector's norm once and do not retain
+  the list of all pair scores.
+- Evaluation checks use the maintenance tool set for maintenance operations.
+  They supply the required version for `amend`. A note does not invalidate
+  the scenario that changes an existing fact.
+
+## 0.4.0.0 (2026-10-25)
+
+### Compatibility
+
+- MCP uses the ordinary tool set by default. Use `mcp --tool-set maintenance`
+  for raw object, ref, and consolidation tools.
+- MCP `supersede` and `amend` require `expected` in both tool sets.
+  Read the current memory before each revision. A stale version causes an error.
+- Ordinary `add` requires a new `ref`. Ordinary `add` and `supersede` use
+  the configured agent as the default author. An explicit `agent` overrides it.
+
+- Update all writers and GC jobs together. Old processes do not use the shared
+  mutation lock. Restart old MCP servers before concurrent use.
+- An unreadable log returns an error instead of a complete or empty history.
+  The CLI preserves its readable prefix and fails. MCP sets `isError`.
+
+Memory bytes, IDs and the ref file format do not change.
+
+### Added
+
 - The web UI Graph tab opens on a topic map: one box for each ref, grouped by
   namespace, with the number of versions or episodes. Point at a box to see
   its links to other topics. The old view of every memory stays as "history".

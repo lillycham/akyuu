@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Related topics: which other topics belong with a topic, and why.
@@ -8,7 +9,7 @@
 --
 -- For a topic @a@ and another topic @b@ the score is
 --
--- > z(cosine a b) + 2 * link a b + 1 * mention a b - penalty
+-- > z(cosine a b) + 2 * link a b + 1 * mention a b
 --
 -- * @z@ is the cosine minus the mean over all pairs of topics, divided by the
 --   spread over all pairs ('Stats').
@@ -18,10 +19,9 @@
 --   source points at many topics: the strength is @1 / sqrt n@ for a source
 --   that points at @n@ topics. Without this a summary that links to every
 --   project would become a hub.
--- * The penalty is for two topics that sit side by side in a namespace that
---   the person lists as made of parallel instances (projects, say), and that
---   have neither a link nor a mention. Such topics look alike because they
---   share a template, not because they are related.
+-- * Two topics directly under a namespace configured as parallel instances
+--   need a link or a mention. Similarity alone never qualifies them: such
+--   topics can share a template without being related.
 --
 -- Only a candidate with a score above zero is listed, and at most
 -- 'relatedLimit' of them, the best first, ties by name. A topic without a
@@ -57,7 +57,7 @@ where
 import Akyuu.Embed (Vector, cosine)
 import Akyuu.Refs (Name, nameText)
 import Data.Char (isAlphaNum)
-import Data.List (find, sortOn, tails)
+import Data.List (find, sortOn)
 import Data.Map qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.Ord (Down (Down))
@@ -121,17 +121,28 @@ unit v
 data Stats = Stats Double Double
 
 -- | The mean and the spread of the cosine of every pair of topics that have
--- a vector. This costs one cosine for each pair.
+-- a vector. Each vector's length and norm are computed once. Welford's
+-- recurrence avoids retaining the quadratic list of pair similarities.
 similarityStats :: [Topic] -> Stats
-similarityStats topics
-  | null sims = Stats 0 0
-  | otherwise = Stats m (sqrt var)
+similarityStats topics = case pairs prepared (0, 0, 0) of
+  (0, _, _) -> Stats 0 0
+  (n, m, m2) -> Stats m (sqrt (max 0 (m2 / n)))
   where
-    vs = mapMaybe rtVector topics
-    sims = [cosine u v | (u : rest) <- tails vs, v <- rest]
-    n = fromIntegral (length sims)
-    m = sum sims / n
-    var = sum [(s - m) ^ (2 :: Int) | s <- sims] / n
+    prepared = [(v, length v, sqrt (foldl' sumSq 0 v)) | Just v <- map rtVector topics]
+    sumSq s x = s + realToFrac x * realToFrac x
+    pairs [] acc = acc
+    pairs (u : rest) acc = pairs rest (foldl' (sample u) acc rest)
+    sample u (!n, !m, !m2) v =
+      let !x = pairCosine u v
+          !n' = n + 1
+          !delta = x - m
+          !m' = m + delta / n'
+       in (n', m', m2 + delta * (x - m'))
+    pairCosine (a, la, na) (b, lb, nb)
+      | la /= lb || na == 0 || nb == 0 = 0
+      | otherwise = dot 0 a b / (na * nb)
+    dot !s (a : as) (b : bs) = dot (s + realToFrac a * realToFrac b) as bs
+    dot !s _ _ = s
 
 -- | The cosine in units of the spread. With no spread, nothing stands out.
 zScore :: Stats -> Double -> Double
@@ -160,10 +171,9 @@ data Related = Related
 relatedLimit :: Int
 relatedLimit = 3
 
-linkWeight, mentionWeight, siblingPenalty :: Double
+linkWeight, mentionWeight :: Double
 linkWeight = 2
 mentionWeight = 1
-siblingPenalty = 2
 
 -- | The topics that are related to one topic, the best first. An empty list
 -- for a name that is not among the topics.
@@ -181,11 +191,12 @@ relatedTo cfg stats leaveOut self topics = case find ((== self) . rtName) topics
     shown t = rtName t /= self && rtName t `Set.notMember` leaveOut
     g = graph topics
     candidate v b
+      | siblings cfg self (rtName b) && not (hasEvidence ev) = Nothing
       | s > 0 = Just (Related (rtName b) (reason ev) s)
       | otherwise = Nothing
       where
         ev = evidenceBetween g self (rtName b)
-        s = score cfg stats self (rtName b) (cosine <$> v <*> rtVector b) ev
+        s = score stats (cosine <$> v <*> rtVector b) ev
 
 -- | The best first. Scores that differ only in the last digits, because the
 -- sums ran in another order, are equal: the name decides, as the order of the
@@ -234,16 +245,11 @@ strength m from to = case Map.lookup from m of
   Just s | to `Set.member` s -> 1 / sqrt (fromIntegral (Set.size s))
   _ -> 0
 
--- | The score in the module header, for a topic @a@ and a candidate @b@, with
--- their cosine if both have a vector. Without a cosine and without evidence
--- the score is at most zero, so such a candidate is never listed.
-score :: Config -> Stats -> Name -> Name -> Maybe Double -> Evidence -> Double
-score cfg stats a b sim ev =
-  maybe 0 (zScore stats) sim + linkWeight * evLink ev + mentionWeight * evMention ev - penalty
-  where
-    penalty
-      | siblings cfg a b && not (hasEvidence ev) = siblingPenalty
-      | otherwise = 0
+-- | The score in the module header, with the cosine if both topics have a
+-- vector. Without a cosine and without evidence the score is zero.
+score :: Stats -> Maybe Double -> Evidence -> Double
+score stats sim ev =
+  maybe 0 (zScore stats) sim + linkWeight * evLink ev + mentionWeight * evMention ev
 
 -- | The strongest reason that applies.
 reason :: Evidence -> Reason

@@ -1,11 +1,12 @@
 # Related topics for agents
 
-Status as of 2026-10-25: steps 1 and 2 of the delivery order are written.
-Step 1 is committed: the pure module `Akyuu.Related` and its tests.
-Step 2 is not committed: `Ops.relatedTopics` reads the inputs, `Topic.renderTopic` shows a `related:` line, `recall` of a topic in the topic tool set calls it, and `[topic] related` and `[topic] parallel` are settings (with `AKYUU_TOPIC_RELATED` and `AKYUU_TOPIC_PARALLEL`).
-The man page and the changelog describe it. The full suite (1127 tests) and `ormolu` pass.
-The cost of the `z` term on a large store is not measured. Steps 3 to 7 are not started.
-The ranking was tried on a copy of the maintainer's own store (below).
+Status as of 2026-11-05: the integration includes the pure ranker, exact-topic
+recall, configuration and documentation. The maintainer approved integration
+after contract fixes and performance checks. Ordinary MCP remains the default.
+Parallel namespaces now require explicit evidence, rather than a score penalty.
+The model-free measurements below cover up to 500 fixture topics.
+Agent discovery quality and larger stores remain unverified. Query-hit
+suggestions are not part of this integration.
 
 ## Goal
 
@@ -41,14 +42,13 @@ The strict precision of the top three was 0.63 for the new score and 0.62 for th
 For a topic `a` and a candidate `b`:
 
     score(a, b) = z(cos(a, b)) + 2 * link(a, b) + 1 * mention(a, b)
-                  - penalty, when a and b are siblings and have no link and no mention
 
 - `cos`: the cosine of the topic vectors. A topic vector is the mean of the unit-length chunk vectors of its current memory.
   `z` uses the mean and the spread over all pairs of topics.
 - `link(a, b)`: the larger of two directions. A direction counts when the current memory of one topic has an `about-ref` to the other, or an `about`, `derived-from` or `refines` edge to a memory that the other ref held now or before.
   Its strength is 1 / sqrt(the number of topics that its source links to).
 - `mention(a, b)`: the name of one topic appears in the text of the other, as a whole name. The same damping.
-- The sibling penalty is 1.5 to 3. It is the rule of the last finding. See the decisions.
+- Siblings under a configured parallel namespace need a link or a mention. No cosine score can bypass this rule.
 - Only a candidate with a score above zero is listed: above the average similarity, or with some evidence. Of the 166 judged pairs, the 6 at or below zero held no yes (5 no, 1 maybe), and only one topic had no candidate above zero.
 - Ties break by name. Scores that differ only in the ninth decimal count as equal, so the order of the topics on disk cannot change the result.
   The list has at most three entries and every entry has a reason: `linked`, `mentioned` or `similar text`, the strongest one first.
@@ -69,7 +69,8 @@ The ordinary tool set is not changed in the first version.
 - `Akyuu.Ops` reads the inputs (current memories, the about-ref links from the cache, the chunk vectors from the embedding table) and calls it.
 - `Akyuu.Topic` renders the lines. The names of topics are the only strings of the store in the result: a ref name has a restricted character set, and no memory text is shown, so a memory cannot put an instruction into the list.
 - A setting turns the feature off, so that the evaluation can run it on and off: `[topic] related = true` in `config.toml`, and the environment variable that goes with it.
-- The cost of `z` is one cosine for each pair of topics. Compute it when asked for stores up to a few hundred topics, measure it, and cache it per store state if it is slow.
+- The cost of `z` is one dot product for each pair of topics. Each vector's norm is computed once.
+  A running mean and variance avoid the quadratic list of pair scores.
 - The core modules stay as they are. No store format change, no cache schema change.
 
 ## Tests
@@ -82,7 +83,7 @@ The tests use hand-made vectors and the neutral demo store (`seed --demo`, topic
 - No vector: only linked and mentioned topics appear. A topic with neither gets an empty list, and the line is left out.
 - Logs are not topics and never appear. The topic itself never appears.
 - A topic that was renamed or superseded: the current memory is used, and a link to an old version of a ref still counts.
-- The sibling penalty applies to siblings only, and not when there is a link or a mention.
+- Parallel siblings without evidence never appear, even with a high cosine z-score.
 - The result for a given store is stable when the order of the refs on disk changes.
 - `recall` of a topic prints at most three topics and a reason for each. No result has an id.
 
@@ -90,12 +91,35 @@ The tests use hand-made vectors and the neutral demo store (`seed --demo`, topic
 
 Offline: done once, on the maintainer's store (above). Do not tune further on those 166 labels: every change makes the numbers look better than they are.
 
-With agents: the harness on `feat/mcp-eval` (not merged; merge it first or copy the scenarios).
-Add one scenario, S8: the store holds about ten topics. An agent must record a fact that belongs with an existing topic whose name it cannot guess from the task.
+With agents: use the integrated harness in `eval/mcp/`.
+Add a discovery scenario with a new ID; S8 already tests graph history.
+The store should hold about ten topics. An agent must record a fact under an existing topic whose name it cannot guess.
 Run it with the feature on and off, on Sonnet and Haiku, three runs each, as the topic evaluation did.
 Record: the topic that got the fact, new duplicate topics, number of calls, tool errors, the size of a `recall` answer, and cost.
 Also run S1 to S3 again, to check that the extra line does not make agents merge things that should stay apart.
-The feature stays if S8 improves and S1 to S3 do not get worse.
+Use the discovery result and S1 to S3 to decide whether to extend the feature.
+The present integration does not establish an agent-quality gain.
+
+### Synthetic recall cost, 2026-11-05
+
+The aarch64-darwin development executable used Cabal's `-O1` build.
+Each fixture added the listed topic count to a small smoke store.
+Bodies held about 1,110 characters. Each current fixture memory had one
+deterministic 768-dimensional vector. No model ran.
+Each value is the median of three warm MCP `recall` calls after one warm-up.
+The clock includes JSON-RPC transport and complete response generation.
+
+| Added topics | Related off, ms | No vectors, ms | Cached vectors, ms |
+| --- | ---: | ---: | ---: |
+| 40 | 1.52 | 6.12 | 12.46 |
+| 200 | 6.43 | 25.16 | 144.58 |
+| 500 | 13.63 | 65.99 | 651.74 |
+
+Before norm reuse and running statistics, cached-vector recall at 500 topics
+took 2,464 ms with the same fixture method.
+These small samples do not establish tail latency or performance at thousands
+of topics. Real embeddings and discovery quality remain separate checks.
+
 
 ## Delivery order
 
@@ -107,7 +131,8 @@ The feature stays if S8 improves and S1 to S3 do not get worse.
 6. The evaluation.
 7. Search the whole repository for private setup details before a PR (`git grep`, not only the diff).
 
-Do not merge, push, restart an MCP client or change the installed version as part of this plan.
+Integration and publication were approved on 2026-11-05. Do not restart clients
+or change the installed version as part of this plan.
 
 ## Decisions (the maintainer's)
 
@@ -128,7 +153,7 @@ Do not merge, push, restart an MCP client or change the installed version as par
 - A change of the embedding model changes every cosine and the spread. The fallback and the key check (as `status` does) must cover it.
 - An agent may merge topics because they are listed as related. S1 to S3 test this.
 - The reason is a guess about why two topics are near. `similar text` is the weakest reason, and the text says so.
-- The sibling penalty is the least proven part of the score.
+- The parallel-namespace rule is a configured exclusion, not evidence that all siblings are unrelated.
 
 ## Code style
 

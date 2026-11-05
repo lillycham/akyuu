@@ -4,7 +4,7 @@ module RelatedTests (relatedTests) where
 
 import Akyuu.Embed (Vector)
 import Akyuu.Refs (Name, mkName, nameText)
-import Akyuu.Related (Config (Config), Reason (Linked, Mentioned, SimilarText), Related (relName, relReason, relScore), Topic (Topic, rtLinks, rtName, rtText), defaultConfig, mentions, reasonText, relatedLimit, relatedTo, similarityStats, topicVector)
+import Akyuu.Related (Config (Config), Reason (Linked, Mentioned, SimilarText), Related (relName, relReason, relScore), Topic (Topic, rtLinks, rtName, rtText), defaultConfig, mentions, relatedLimit, relatedTo, similarityStats, topicVector)
 import Control.Monad (forM)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -22,7 +22,6 @@ relatedTests =
       mentionCases,
       siblingCases,
       vectorCases,
-      reasonCases,
       propertyCases
     ]
 
@@ -95,6 +94,17 @@ cosineCases =
               "notes/a"
           )
           @?= [("notes/b", Linked)],
+      testCase "pair statistics preserve zero and mismatched vector semantics" $ do
+        let ts =
+              [ topic "notes/q" (Just [2, 0]) [] "",
+                topic "notes/a" (Just [3, 0]) [] "",
+                topic "notes/b" (Just [0, 4]) [] "",
+                topic "notes/zero" (Just [0, 0]) [] "",
+                topic "notes/short" (Just [1]) [] ""
+              ]
+            rs = related defaultConfig ts "notes/q"
+        shown rs @?= [("notes/a", SimilarText)]
+        closeTo (map relScore rs) [3],
       testCase "a topic that is left out is skipped" $
         shown (relatedWithout defaultConfig ["notes/a"] population "notes/q") @?= [("notes/b", SimilarText)],
       testCase "the limit counts what is left after the topics that are left out" $ do
@@ -233,10 +243,19 @@ siblingCases =
           @?= [("p/projects/a", SimilarText), ("g/b", SimilarText)],
       testCase "a listed namespace needs evidence for siblings" $
         shown (related parallel projects "p/projects/q") @?= [("g/b", SimilarText)],
-      testCase "a link lifts the penalty" $
+      testCase "a high cosine z-score cannot bypass the sibling evidence requirement" $ do
+        let basis i = [if i == j then 1 else 0 | j <- [0 .. 8 :: Int]]
+            ts =
+              [ topic "p/projects/q" (Just (basis 0)) [] "",
+                topic "p/projects/a" (Just (basis 0)) [] ""
+              ]
+                <> [topic ("other/t" <> T.pack (show i)) (Just (basis i)) [] "" | i <- [1 .. 8]]
+        shown (related defaultConfig ts "p/projects/q") @?= [("p/projects/a", SimilarText)]
+        related parallel ts "p/projects/q" @?= [],
+      testCase "a link qualifies a parallel sibling" $
         shown (related parallel (adjust "p/projects/q" (\t -> t {rtLinks = Set.fromList [name "p/projects/a"]}) projects) "p/projects/q")
           @?= [("p/projects/a", Linked), ("g/b", SimilarText)],
-      testCase "a mention lifts the penalty" $
+      testCase "a mention qualifies a parallel sibling" $
         shown (related parallel (adjust "p/projects/a" (\t -> t {rtText = "builds on p/projects/q"}) projects) "p/projects/q")
           @?= [("p/projects/a", Mentioned), ("g/b", SimilarText)],
       testCase "a namespace that is not listed changes nothing" $
@@ -263,13 +282,6 @@ vectorCases =
       testCase "a chunk of another length is left out" $
         topicVector [[1, 0], [0, 1, 0]] @?= Just [1, 0]
     ]
-
--- Reasons -------------------------------------------------------------------
-
-reasonCases :: TestTree
-reasonCases =
-  testCase "the words of the reasons" $
-    map reasonText [Linked, Mentioned, SimilarText] @?= ["linked", "mentioned", "similar text"]
 
 -- Properties ------------------------------------------------------------------
 
