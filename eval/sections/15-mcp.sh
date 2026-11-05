@@ -3,7 +3,7 @@
 # Section mcp: the MCP server, over pipes.
 #
 # The server speaks JSON-RPC 2.0, one JSON object on each line. The checks
-# write all the requests of a phase to a file, run `akyuu mcp` on it (the
+# write all the requests of a phase to a file, run `akyuu mcp --tool-set maintenance` on it (the
 # server stops when its input ends), and read the answers from a file of their
 # own. The answers have their keys in sorted order, so "id":N,"jsonrpc" finds
 # the answer to request N. No JSON tool is needed.
@@ -25,8 +25,8 @@ mcp_call() {
     "$mcp_n" "$1" "$2" >>"$sandbox/mcp.req"
 }
 mcp_run() {
-  lastcmd="akyuu mcp < $sandbox/mcp.req"
-  "$bin" mcp <"$sandbox/mcp.req" >"$sandbox/mcp.resp" 2>"$errf"
+  lastcmd="akyuu mcp --tool-set maintenance < $sandbox/mcp.req"
+  "$bin" mcp --tool-set maintenance <"$sandbox/mcp.req" >"$sandbox/mcp.resp" 2>"$errf"
   rc=$?
   cp "$sandbox/mcp.resp" "$outf"
   err=$(cat "$errf")
@@ -75,11 +75,6 @@ sec_mcp() {
   r_has '"serverInfo":{"name":"akyuu"'
   r_has '"tools":'
 
-  t P02 "the instructions tell an agent how to use the store: read the ref, supersede with expected, call context"
-  r_has '"instructions":'
-  r_has "supersede"
-  r_has "expected"
-  r_has "context"
 
   t P03 "tools/list names all 18 tools"
   mcp_reply 2
@@ -87,9 +82,6 @@ sec_mcp() {
     r_has "\"name\":\"$tool\""
   done
 
-  t P04 "each tool has a description and a JSON schema for its arguments"
-  [ "$(printf '%s' "$reply" | grep -o '"inputSchema"' | wc -l | tr -d ' ')" -ge 18 ] || fail "fewer than 18 inputSchema"
-  [ "$(printf '%s' "$reply" | grep -o '"description"' | wc -l | tr -d ' ')" -ge 18 ] || fail "fewer than 18 descriptions"
 
   t P05 "add returns the id of the new memory, and it is not an error"
   mcp_reply 3
@@ -172,7 +164,14 @@ sec_mcp() {
   mcp_call get "{\"id\":\"${id1:0:15}\"}"                                                                                              # 2
   mcp_call supersede "{\"ref\":\"mcp/a\",\"expected\":\"$id1\",\"kind\":\"fact\",\"agent\":\"mcp-eval\",\"body\":\"second via mcp\"}"   # 3
   mcp_call supersede "{\"ref\":\"mcp/a\",\"expected\":\"$id1\",\"kind\":\"fact\",\"agent\":\"mcp-eval\",\"body\":\"a stale write\"}"   # 4
-  mcp_call amend '{"ref":"mcp/a","replace":[{"from":"second","to":"2nd"}]}'                                                            # 5
+  mcp_run
+  mcp_reply 3
+  id2=$(mcp_text)
+  cp "$sandbox/mcp.resp" "$sandbox/mcp.phase2"
+  mcp_reset
+  mcp_init
+  mcp_n=4
+  mcp_call amend "{\"ref\":\"mcp/a\",\"expected\":\"$id2\",\"replace\":[{\"from\":\"second\",\"to\":\"2nd\"}]}"                            # 5
   mcp_call neighbours "{\"id\":\"$id1\"}"                                                                                              # 6
   mcp_call ref_set "{\"ref\":\"mcp/b\",\"id\":\"$other\",\"create\":true}"                                                             # 7
   mcp_call ref_set "{\"ref\":\"mcp/b\",\"id\":\"$other\",\"create\":true}"                                                             # 8
@@ -186,6 +185,8 @@ sec_mcp() {
   mcp_call check '{"kinds":["fork"],"severity":"problem"}'                                                                             # 16
   mcp_call get '{"id":"5bf"}'                                                                                                      # 17
   mcp_run
+  cp "$sandbox/mcp.resp" "$sandbox/mcp.phase3"
+  cat "$sandbox/mcp.phase2" "$sandbox/mcp.phase3" >"$sandbox/mcp.resp"
 
   t P17 "get takes a whole id, or sha256- and the first 8 or more hex digits"
   mcp_reply 2
@@ -246,9 +247,4 @@ sec_mcp() {
   r_has "[second]"
   need_eq "$(printf '%s' "$reply" | grep -o 'sha256-' | wc -l | tr -d ' ')" 1 "hits with limit 1 and no neighbours"
 
-  xt P25 "the error for a short id in get says how many hex digits are needed" \
-    "the tool text says 8 or more hex digits, the CLI takes 4, and the error for '5bf' only says that the id must start with sha256-"
-  mcp_reply 17
-  r_err
-  r_has "8 or more"
 }

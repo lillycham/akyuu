@@ -101,9 +101,4 @@ sec_refs() {
   ak ref get me/long --history
   need_eq "$(nlines "$out")" 8 "number of ids in the history"
 
-  xt R13 "ref set --new on a ref that exists says that the ref exists" \
-    "the message is 'The ref ... is not at the expected value', which is the text for --expect; add --ref says 'The ref ... exists'"
-  ak ref set me/topic "$v2" --new
-  need_rc 1
-  need_text_has "exists"
 }

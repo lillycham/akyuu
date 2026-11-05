@@ -173,8 +173,7 @@ sec_check() {
   need_out_has '"a":{'
   need_out_has '"b":{'
 
-  xt K16 "a lost supersede race leaves nothing that check calls a problem" \
-    "A supersede with a stale --expect fails, but it has already written its new memory. That memory supersedes the same old memory as the winner's, so check reports a [problem] fork until GC collects the orphan (after the grace period, 1 hour)."
+  t K16 "a lost supersede race leaves nothing that check calls a problem"
   use_root check-race
   mk "base text of the topic"
   base=$id
@@ -186,8 +185,7 @@ sec_check() {
   ak check --severity problem
   need_out_has "No findings."
 
-  xt K17 "a lost amend race leaves nothing that check calls a problem" \
-    "amend --expect with a stale value fails, but the memory it wrote stays and is reported as a [problem] fork (the same as K16, for amend)"
+  t K17 "a lost amend race leaves nothing that check calls a problem"
   use_root check-race-amend
   mk "base text of the topic, for amend"
   base=$id

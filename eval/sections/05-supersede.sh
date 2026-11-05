@@ -128,8 +128,7 @@ sec_supersede() {
   ak amend no/such --append x
   need_rc 1
 
-  xt U16 "supersede with no body at all is refused, and does not blank the memory" \
-    "a call with no --body and an empty standard input writes an empty memory and moves the ref to it (a footgun for an agent that forgets the body)"
+  t U16 "supersede with no body at all is refused, and does not blank the memory"
   ak ref get me/plan
   before=$out
   ak supersede me/plan --kind decision --agent tester
@@ -137,8 +136,7 @@ sec_supersede() {
   ak ref get me/plan
   need_out_eq "$before" "the ref moved to an empty memory"
 
-  xt U17 "add and append refuse an empty body, as supersede should" \
-    "add --body '' and append with an empty body succeed and write an empty memory (an empty memory is also a duplicate-body finding)"
+  t U17 "add and append refuse an empty body, as supersede should"
   ak add --kind fact --agent tester --body ""
   [ "$rc" != 0 ] || fail "add accepted an empty body"
   ak append me/empty-log --kind episode --agent tester --body ""

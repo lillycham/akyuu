@@ -259,10 +259,12 @@ verify_S2() {
   r=$(holder Sunday) || fail "no ref holds a memory with Sunday"
   r=$(current_claims Saturday) && fail "a current memory still states Saturday as current: $r"
 
-  t S2.2 "the change is a new version of the same ref: no new ref, and the history has the old id"
-  need_eq "$(nrefs)" 6 "number of refs (the 2 of init, 3 facts, the log)"
+  t S2.2 "the routine changes on its original ref, and its history keeps the original memory"
+  current people/mira/routine | states_as_current Sunday || fail "the original routine ref does not state Sunday"
+  old=$(grep '^people/mira/routine ' "$(sdir S2)/ids" | cut -d' ' -f2)
   ak ref get people/mira/routine --history
-  [ "$(nlines "$out")" -ge 2 ] || fail "the history of people/mira/routine has fewer than 2 ids"
+  [ "$(head -1 "$outf")" != "$old" ] || fail "the routine ref did not change"
+  grep -F -x -q "$old" "$outf" || fail "the history lost the original routine"
 
   t S2.3 "the old text can still be found, and the search says that a newer memory replaces it"
   ak search --mode text --hops 0 Saturdays
@@ -308,8 +310,7 @@ verify_S3() {
   ak verify
   need_rc 0
 
-  xt S3.4 "after the lost race, check has no problem to report" \
-    "The write that lost the race (stale --expect) has already written its memory. That memory replaces the same old memory as the winner's, so check shows a [problem] fork until GC collects it (grace period, 1 hour). See K16 in checks.sh."
+  t S3.4 "after the lost race, check has no problem to report"
   ak check --severity problem
   need_out_has "No findings."
 }
@@ -542,6 +543,9 @@ selftest)
     if ! (
       use_scenario "$s"
       "solve_$s"
+      if [ "$s" = S2 ]; then
+        a note "The baking routine changed to Sunday."
+      fi
     ) >/dev/null 2>&1; then
       echo "the reference solution failed"
       bad=1

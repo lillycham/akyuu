@@ -1,7 +1,9 @@
 # An MCP-only evaluation of the ordinary and topic tool sets
 
-Status as of 2026-10-23: the harness is built and self-tested with a fake
-agent. It has not run with a model. Nothing here is merged.
+Status as of 2026-11-05: the integration includes the harness and its historical
+Sonnet and Haiku runs. See [mcp-eval-results.md](mcp-eval-results.md).
+Model-free selftests check the current interfaces. No new model runs form part
+of this integration.
 
 ## Question
 
