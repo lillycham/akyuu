@@ -167,7 +167,6 @@ test-suite akyuu-test
     build-depends:    base >=4 && <5
                     , akyuu
                     , base16-bytestring
-                    , process
                     , bytestring
                     , containers
                     , cryptohash-sha256

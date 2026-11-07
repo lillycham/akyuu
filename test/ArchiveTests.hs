@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module ArchiveTests (archiveTests) where
+module ArchiveTests (archiveTests, archiveCrashWorker) where
 
 import Akyuu.Fs (AtomicStep (DirectorySynced, FileSynced, Renamed, TemporaryWritten))
 import Akyuu.Graph (Edge (Edge), EdgeType (About))
@@ -31,9 +31,11 @@ import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
 import Support (right)
 import System.Directory (doesFileExist, listDirectory, removeFile)
+import System.Environment (getExecutablePath)
 import System.Exit (ExitCode (ExitFailure))
 import System.FilePath ((</>))
-import System.Posix.Process (ProcessStatus (Exited), exitImmediately, forkProcess, getProcessStatus)
+import System.Posix.Process (exitImmediately)
+import System.Process (CreateProcess (close_fds), proc, readCreateProcessWithExitCode)
 import System.Timeout (timeout)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
@@ -429,19 +431,15 @@ crashTests =
     "process death"
     [ testGroup
         "archive dependencies and manifest"
-        [ testCase (label <> " / " <> show step) $ withRepository $ \_ local repo -> do
+        [ testCase (label <> " / " <> show step) $ withRepository $ \root local repo -> do
             old <- versions local
             before <- loadSnapshot repo >>= right
-            dies (archiveSnapshotWith (\boundary -> when (matches step boundary) (exitImmediately (ExitFailure 77))) repo before)
+            dies root "archive" label (show step)
             after <- loadSnapshot repo >>= right
             after @?= before
             _ <- archiveSnapshot repo after >>= right
             forM_ old (\entry -> readMemory after (headMemoryId entry) >>= (@?= Right (headMemory entry)))
-        | (label, matches) <-
-            [ ("payload", \step boundary -> case boundary of WriteBoundary (ArchiveMemoryFile _) actual -> actual == step; _ -> False),
-              ("event", \step boundary -> case boundary of WriteBoundary (ArchiveEventFile _) actual -> actual == step; _ -> False),
-              ("manifest", \step boundary -> case boundary of WriteBoundary (ArchiveCheckpointFile _) actual -> actual == step; _ -> False)
-            ],
+        | label <- ["payload", "event", "manifest"],
           step <- [TemporaryWritten, FileSynced, Renamed, DirectorySynced]
         ],
       testGroup
@@ -449,7 +447,7 @@ crashTests =
         [ testCase label $ withRepository $ \root local repo -> do
             old <- versions local
             before <- publish repo
-            dies (collectWith (\boundary -> when (matches boundary) (exitImmediately (ExitFailure 77))) repo (snapshotId before) 1)
+            dies root "collect" target step
             reopened <- openRepository root >>= right
             after <- loadSnapshot reopened >>= right
             let gone = evictedObjects (snapshotCheckpoint after)
@@ -458,17 +456,17 @@ crashTests =
             forM_ old (\entry -> readMemory before (headMemoryId entry) >>= (@?= Right (headMemory entry)))
             _ <- collect reopened (snapshotId after) 1 >>= right
             pure ()
-        | (label, matches) <-
-            [(show step, (== WriteBoundary CurrentFile step)) | step <- [TemporaryWritten, FileSynced, Renamed, DirectorySynced]]
-              <> [("unlink", \boundary -> case boundary of MemoryEvicted _ -> True; _ -> False), ("directory flush", (== EvictionsSynced))]
+        | (label, target, step) <-
+            [(show step, "current", show step) | step <- [TemporaryWritten, FileSynced, Renamed, DirectorySynced]]
+              <> [("unlink", "unlink", ""), ("directory flush", "flush", "")]
         ],
       testGroup
         "acknowledgement pointer"
-        [ testCase (show step) $ withRepository $ \_ local repo -> do
+        [ testCase (show step) $ withRepository $ \root local repo -> do
             _ <- versions local
             before <- loadSnapshot repo >>= right
             key <- archiveSnapshot repo before >>= right
-            dies (acknowledgePublishedWith (\boundary -> when (boundary == WriteBoundary CurrentFile step) (exitImmediately (ExitFailure 77))) repo key)
+            dies root "acknowledge" "current" (show step)
             after <- loadSnapshot repo >>= right
             let pending = pendingObjects (snapshotCheckpoint after)
             assertBool "partial acknowledgement" (Set.null pending || pending == pendingObjects (snapshotCheckpoint before))
@@ -478,11 +476,35 @@ crashTests =
         ]
     ]
 
-dies :: IO a -> IO ()
-dies action = do
-  child <- forkProcess (void action >> exitImmediately (ExitFailure 78))
-  status <- getProcessStatus True False child
-  status @?= Just (Exited (ExitFailure 77))
+-- Start a fresh runtime: fork-only workers can inherit Haskell runtime locks
+-- or crash on macOS after the parent has used concurrent I/O.
+dies :: FilePath -> String -> String -> String -> IO ()
+dies root operation target step = do
+  executable <- getExecutablePath
+  result <- timeout 15000000 (readCreateProcessWithExitCode (proc executable ["--archive-crash", root, operation, target, step]) {close_fds = True} "")
+  case result of
+    Just (code, out, err) -> assertBool ("Crash worker: " <> show code <> "\n" <> out <> err) (code == ExitFailure 77)
+    Nothing -> assertFailure "The archive crash worker exceeded its deadline."
+
+archiveCrashWorker :: FilePath -> String -> String -> String -> IO ()
+archiveCrashWorker root operation target step = do
+  repo <- openRepository root >>= right
+  captured <- loadSnapshot repo >>= right
+  let hook boundary = when (matches boundary) (exitImmediately (ExitFailure 77))
+      matches boundary = case boundary of
+        WriteBoundary (ArchiveMemoryFile _) actual -> target == "payload" && show actual == step
+        WriteBoundary (ArchiveEventFile _) actual -> target == "event" && show actual == step
+        WriteBoundary (ArchiveCheckpointFile _) actual -> target == "manifest" && show actual == step
+        WriteBoundary CurrentFile actual -> target == "current" && show actual == step
+        MemoryEvicted _ -> target == "unlink"
+        EvictionsSynced -> target == "flush"
+        _ -> False
+  case operation of
+    "archive" -> void (archiveSnapshotWith hook repo captured >>= right)
+    "collect" -> void (collectWith hook repo (snapshotId captured) 1 >>= right)
+    "acknowledge" -> void (acknowledgePublishedWith hook repo (snapshotId captured) >>= right)
+    _ -> assertFailure "Unknown archive crash operation."
+  exitImmediately (ExitFailure 78)
 
 assertLeft :: (Show a, Show e) => Either e a -> IO ()
 assertLeft (Left _) = pure ()
