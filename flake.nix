@@ -31,7 +31,7 @@
           base = lib.justStaticExecutables (lib.dontHaddock (lib.dontCheck (withTests pkgs)));
         in
         lib.overrideCabal base (drv: {
-          buildTools = (drv.buildTools or [ ]) ++ [ pkgs.scdoc pkgs.installShellFiles ];
+          buildTools = (drv.buildTools or [ ]) ++ [ pkgs.scdoc pkgs.installShellFiles pkgs.makeWrapper ];
           postInstall = (drv.postInstall or "") + ''
             export SOURCE_DATE_EPOCH=${toString (self.lastModified or 1)}
             for p in man/*.scd; do scdoc < "$p" > "''${p%.scd}"; done
@@ -40,6 +40,10 @@
               --bash <($out/bin/akyuu --bash-completion-script $out/bin/akyuu) \
               --zsh <($out/bin/akyuu --zsh-completion-script $out/bin/akyuu) \
               --fish <($out/bin/akyuu --fish-completion-script $out/bin/akyuu)
+            # `source show` reads an archived session with zstd. Wrap last: the
+            # completions above run the plain binary. A client that starts
+            # `akyuu mcp` does not have the PATH of a shell.
+            wrapProgram $out/bin/akyuu --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.zstd ]}
           '';
         });
 
