@@ -6,23 +6,24 @@ import Akyuu.Fs (AtomicStep (DirectorySynced, FileSynced, Renamed, TemporaryWrit
 import Akyuu.Graph (Edge (Edge), EdgeType (About))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (renderMemory)
+import Akyuu.Memory (Memory (memBody), renderMemory)
 import Akyuu.Ops (NewMemory (newEdges))
 import Akyuu.Refs (mkName)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), activeObjects, checkpointEvents, checkpointId, checkpointObjects, evictedObjects, pendingEvents, pendingObjects, renderCheckpoint, withEvicted)
 import Akyuu.Sync.Event (mkEvent)
 import Akyuu.Sync.Logs qualified as Logs
-import Akyuu.Sync.Repository (Boundary (EvictionsSynced, MemoryEvicted, WriteBoundary), CollectionPlan (collectionCandidates, collectionCheckpoint, collectionEvicted, collectionRetained), Repository, RepositoryError (CollectionIncomplete, InvalidResidency, RepositoryBusy, StaleCheckpoint, UnacceptedObject), Snapshot, WriteTarget (ArchiveCheckpointFile, ArchiveEventFile, ArchiveMemoryFile, CurrentFile), acknowledgePublished, acknowledgePublishedWith, archiveSnapshot, archiveSnapshotWith, collect, collectWith, importState, loadSnapshot, openRepository, planCollection, readMemory, snapshotCheckpoint, snapshotId, snapshotState)
+import Akyuu.Sync.Repository (Boundary (EvictionsSynced, MemoryEvicted, WriteBoundary), CollectionPlan (collectionCandidates, collectionCheckpoint, collectionEvicted, collectionRetained), FaultHook, Repository, RepositoryError (ArchiveNotAccepted, CollectionIncomplete, InvalidResidency, RepositoryBusy, StaleCheckpoint, UnacceptedObject), Snapshot, WriteTarget (ArchiveCheckpointFile, ArchiveEventFile, ArchiveMemoryFile, CurrentFile), acknowledgePublished, acknowledgePublishedWith, archiveSnapshot, archiveSnapshotWith, collect, collectWith, importState, loadSnapshot, openRepository, planCollection, readMemory, snapshotCheckpoint, snapshotId, snapshotState)
 import Akyuu.Sync.Resources (writeResource)
 import Akyuu.Sync.Search (SearchReport (SearchReport), searchTopics)
 import Akyuu.Sync.State qualified as State
 import Akyuu.Sync.Topics (LocalReplica, TopicHead (headMemory, headMemoryId), TopicView (viewVersion), changeResource, createTopic, readTopic, replaceTopic)
 import Akyuu.Sync.Topics qualified as Topics
 import Akyuu.Sync.Types (Action (ClearPin, ClearReview, RegisterReplica, SetPin, SetReview), EventId, Nonce (Nonce), ReplicaId (ReplicaId), Resource (PinResource, RegistryResource, ReviewResource), ReviewValue (ReviewValue), mkIdentifier)
-import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (finally)
+import Control.Concurrent (forkFinally, forkIO, newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (finally, throwIO)
 import Control.Monad (foldM, forM_, void, when)
 import Data.ByteString qualified as BS
+import Data.IORef (atomicModifyIORef', newIORef)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -66,7 +67,78 @@ archivePath :: FilePath -> Id -> FilePath
 archivePath root digest = root </> "archive" </> "objects" </> T.unpack (Id.render digest)
 
 archiveTests :: TestTree
-archiveTests = testGroup "replica archive and GC" [storageTests, retentionTests, removalTests, resourceTests, crashTests]
+archiveTests = testGroup "replica archive and GC" [storageTests, concurrencyTests, retentionTests, removalTests, resourceTests, crashTests]
+
+-- Pause just once, with bounded waits and exception propagation from the worker.
+whilePaused :: (Boundary -> Bool) -> (FaultHook -> IO a) -> IO () -> IO a
+whilePaused matches action during = do
+  ready <- newEmptyMVar
+  release <- newEmptyMVar
+  done <- newEmptyMVar
+  waiting <- newIORef True
+  let hook boundary = when (matches boundary) $ do
+        first <- atomicModifyIORef' waiting (\value -> (False, value))
+        when first (putMVar ready () >> takeMVar release)
+  _ <- forkFinally (action hook) (putMVar done)
+  (timeout 5000000 (takeMVar ready) >>= (@?= Just ()) >> during)
+    `finally` putMVar release ()
+  result <- timeout 5000000 (takeMVar done)
+  case result of
+    Just outcome -> either throwIO pure outcome
+    Nothing -> assertFailure "The paused archive operation did not finish."
+
+concurrencyTests :: TestTree
+concurrencyTests =
+  testGroup
+    "archive concurrency"
+    [ testCase "a writer finishes while archive payload preparation is paused" $ withRepository $ \_ local repo -> do
+        _ <- versions local
+        captured <- loadSnapshot repo >>= right
+        let copying (WriteBoundary (ArchiveMemoryFile _) TemporaryWritten) = True
+            copying _ = False
+        key <- whilePaused copying (\hook -> archiveSnapshotWith hook repo captured) $ do
+          before <- readTopic local topicName >>= right
+          void (replaceTopic local topicName (viewVersion before) (newTopic "written during archive") >>= right)
+        key @?= Right (snapshotId captured)
+        after <- acknowledgePublished repo (snapshotId captured) >>= right
+        Set.size (pendingObjects (snapshotCheckpoint after)) @?= 1
+        Set.size (pendingEvents (snapshotCheckpoint after)) @?= 1,
+      testCase "concurrent preparers save the same complete archive" $ withRepository $ \_ local repo -> do
+        _ <- versions local
+        captured <- loadSnapshot repo >>= right
+        let copying (WriteBoundary (ArchiveMemoryFile _) TemporaryWritten) = True
+            copying _ = False
+        first <-
+          whilePaused copying (\hook -> archiveSnapshotWith hook repo captured) $
+            archiveSnapshot repo captured >>= (@?= Right (snapshotId captured))
+        first @?= Right (snapshotId captured)
+        void (acknowledgePublished repo (snapshotId captured) >>= right),
+      testCase "GC can evict while an older archive manifest is prepared" $ withRepository $ \root local repo -> do
+        old <- versions local
+        captured <- publish repo
+        let marker = WriteBoundary (ArchiveCheckpointFile (snapshotId captured)) TemporaryWritten
+        archived <- whilePaused (== marker) (\hook -> archiveSnapshotWith hook repo captured) $ do
+          void (collect repo (snapshotId captured) 1 >>= right)
+          forM_ old (\entry -> doesFileExist (objectPath root (headMemoryId entry)) >>= (@?= False))
+        archived @?= Right (snapshotId captured)
+        forM_ old (\entry -> readMemory captured (headMemoryId entry) >>= (@?= Right (headMemory entry)))
+        void (acknowledgePublished repo (snapshotId captured) >>= right),
+      testCase "a write during GC archive preparation invalidates the plan" $ withRepository $ \root local repo -> do
+        old <- versions local
+        captured <- publish repo
+        let marker = WriteBoundary (ArchiveCheckpointFile (snapshotId captured)) TemporaryWritten
+        result <- whilePaused (== marker) (\hook -> collectWith hook repo (snapshotId captured) 1) $ do
+          before <- readTopic local topicName >>= right
+          void (replaceTopic local topicName (viewVersion before) (newTopic "new pending value") >>= right)
+        result @?= Left StaleCheckpoint
+        forM_ old (\entry -> doesFileExist (objectPath root (headMemoryId entry)) >>= (@?= True))
+        after <- readTopic local topicName >>= right >>= onlyHead
+        memBody (headMemory after) @?= "new pending value",
+      testCase "archive refuses a snapshot from another repository" $ withRepository $ \_ _ repo ->
+        withRepository $ \_ _ other -> do
+          captured <- loadSnapshot other >>= right
+          archiveSnapshot repo captured >>= (@?= Left ArchiveNotAccepted)
+    ]
 
 storageTests :: TestTree
 storageTests =

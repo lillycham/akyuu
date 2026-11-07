@@ -363,7 +363,12 @@ Published review records do not root their endpoints. GC preserves the
 records and emits no replicated pin or review removal.
 
 Collection saves a complete durable archive before it publishes an eviction
-manifest. It removes active copies only after `CURRENT` accepts that manifest.
+manifest. Archive preparation runs outside the mutation lock. Accepted
+inventories only grow, and concurrent preparers save identical immutable bytes.
+GC checks the expected checkpoint again under the lock after preparation.
+A concurrent write makes that collection stale before any eviction.
+GC then recomputes roots and publishes under the shared mutation lock.
+It removes active copies only after `CURRENT` accepts that manifest.
 An unlink failure reports `collection-incomplete` and the accepted checkpoint.
 A retry completes removal. This prototype uses archive copies and eviction
 metadata, rather than the legacy trash or tombstone mechanism.
@@ -426,9 +431,10 @@ All commands support JSON. MCP exposes `log_read`, `log_append`, `log_levels`,
 tool set. Legacy readers retain their existing chain semantics.
 
 This prototype loads full history before it orders or limits a log read.
-Time filters, resumable traversal, bounded summary views and log integration
-in configured context and the browser remain open. Archive-backed collection
-is described above. No command resets a log or replaces it with a summary.
+Time filters and resumable traversal remain open. Configured context and the
+browser use the bounded summary pages described above. Archive-backed
+collection is described above. No command resets a log or replaces it with
+a summary.
 
 ## Experimental topic interfaces
 

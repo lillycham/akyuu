@@ -93,3 +93,18 @@ The harness removes only its own fresh local and remote temporary directories.
 Its timing log is diagnostic. Use a separate controlled run for SSH latency.
 
 See [the measured results](results/2026-11-03.md) for observations and limits.
+
+## Archive and writer barrier
+
+Use `seed` to make a fresh fixture, then run:
+
+```sh
+/tmp/akyuu-sync-bench archive-writer /tmp/fresh-fixture +RTS -N2 -M2G -RTS
+```
+
+The fixture must have no archive. The experiment pauses its first archive
+payload write and runs an ordinary topic replacement before it permits
+archive progress. It records the writer duration. The total archive timer
+includes this deliberate pause and is not an independent archive latency.
+Acknowledgement must preserve the later write as pending. The command uses
+the same 120-second deadline as the other fixture commands.

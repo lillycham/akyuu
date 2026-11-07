@@ -6,12 +6,13 @@
 -- Fixtures are synthetic, deterministic, and confined to a new destination.
 module Main (main) where
 
+import Akyuu.Fs (AtomicStep (TemporaryWritten))
 import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom, Follows))
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (memoryId, mkMemory, renderMemory)
 import Akyuu.Ops (NewMemory (NewMemory))
 import Akyuu.Refs (Name, mkName)
-import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointObjects)
+import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointObjects, pendingEvents, pendingObjects)
 import Akyuu.Sync.Context qualified as Context
 import Akyuu.Sync.Event (Event, eventId, mkEvent)
 import Akyuu.Sync.Logs qualified as Logs
@@ -26,6 +27,7 @@ import Control.Monad (forM, unless)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (sort)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -219,6 +221,37 @@ race root = do
     pure (object ["success" .= success, "ms" .= ms, "busy" .= not success])
   pure (object ["attempts" .= attempts])
 
+-- Hold archive preparation at its first payload write while an ordinary topic
+-- writer runs. The enclosing archive timer intentionally includes that writer.
+archiveWriter :: FilePath -> IO Value
+archiveWriter root = do
+  requireFixture root
+  exists <- doesPathExist (root </> "archive")
+  unless (not exists) (ioError (userError "Use a fresh fixture without an archive."))
+  repo <- Repo.openRepository root >>= checked
+  local <- Topics.openLocal root >>= checked
+  captured <- Repo.loadSnapshot repo >>= checked
+  waiting <- newIORef True
+  measured <- newIORef Nothing
+  let hook (Repo.WriteBoundary (Repo.ArchiveMemoryFile _) TemporaryWritten) = do
+        first <- atomicModifyIORef' waiting (\value -> (False, value))
+        if not first
+          then pure ()
+          else do
+            ms <- timed $ do
+              before <- Topics.readTopic local (name "bench/topic-0") >>= checked
+              after <- Topics.replaceTopic local (name "bench/topic-0") (Topics.viewVersion before) (NewMemory "fact" "benchmark" Set.empty "written while archive preparation is paused" Set.empty) >>= checked
+              pure (Topics.viewJSON after)
+            writeIORef measured (Just ms)
+      hook _ = pure ()
+  total <- timed $ do
+    key <- Repo.archiveSnapshotWith hook repo captured >>= checked
+    pure (object ["checkpoint" .= let CheckpointId digest = key in Id.render digest])
+  writer <- readIORef measured >>= maybe (ioError (userError "The archive barrier was not reached.")) pure
+  after <- Repo.acknowledgePublished repo (Repo.snapshotId captured) >>= checked
+  unless (Set.size (pendingObjects (Repo.snapshotCheckpoint after)) == 1 && Set.size (pendingEvents (Repo.snapshotCheckpoint after)) == 1) (ioError (userError "Archive acknowledgement lost the later write obligation."))
+  pure (object ["writer_ms" .= writer, "archive_including_paused_writer_ms" .= total, "later_write_pending" .= True])
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -228,5 +261,6 @@ main = do
     ["measure", root, samples] -> measure root (read samples) Nothing
     ["metric", root, operation, samples] -> measure root (read samples) (Just (T.pack operation))
     ["race", root] -> race root
-    _ -> ioError (userError "Use seed NEW_ROOT COUNT [BODY], measure ROOT SAMPLES, metric ROOT OPERATION SAMPLES, or race ROOT.")
+    ["archive-writer", root] -> archiveWriter root
+    _ -> ioError (userError "Use seed NEW_ROOT COUNT [BODY], measure ROOT SAMPLES, metric ROOT OPERATION SAMPLES, race ROOT, or archive-writer ROOT.")
   maybe (ioError (userError "The experiment exceeded its 120-second deadline.")) (BL.putStr . (<> "\n") . encode) result
