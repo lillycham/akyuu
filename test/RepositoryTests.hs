@@ -169,7 +169,11 @@ validationTests =
         BS.writeFile (root </> "objects" </> digestName (memoryId (memory "first"))) "corrupt"
         result <- loadSnapshot repo
         assertBool "corruption hidden" (isLeft result)
-        readMemory accepted (memoryId (memory "first")) >>= (@?= Left (CorruptData (canonicalRoot </> "objects" </> digestName (memoryId (memory "first"))))),
+        readMemory accepted (memoryId (memory "first")) >>= (@?= Left (CorruptData (canonicalRoot </> "objects" </> digestName (memoryId (memory "first")))))
+        let next = event 3 [topicEvent] (SetTopic name (memoryId (memory "second")))
+        commitLocal repo (State.version (snapshotState accepted) (RefResource name)) next [payload (memory "second")] >>= assertLeft
+        importState repo (snapshotState accepted) [payload (memory "first")] >>= assertLeft
+        BS.readFile (root </> "objects" </> digestName (memoryId (memory "first"))) >>= (@?= "corrupt"),
       testCase "malformed CURRENT never resets the repository" $ withRepository $ \root repo _ -> do
         BS.writeFile (root </> "CURRENT") "bad\n"
         loadSnapshot repo >>= assertLeft
@@ -180,9 +184,11 @@ validationTests =
         removeFile (root </> "CURRENT")
         initialise root store >>= (@?= Left MissingCurrent)
         doesFileExist (root </> "CURRENT") >>= (@?= False),
-      testCase "corrupt accepted event is refused" $ withRepository $ \root repo _ -> do
+      testCase "corrupt accepted event is refused" $ withRepository $ \root repo before -> do
         BS.writeFile (root </> "events" </> eventName registration) "corrupt"
-        loadSnapshot repo >>= assertLeft,
+        loadSnapshot repo >>= assertLeft
+        writeFirst repo before >>= assertLeft
+        importState repo (snapshotState before) [] >>= assertLeft,
       testCase "corrupt checkpoint is refused" $ withRepository $ \root repo before -> do
         let CheckpointId digest = snapshotId before
         BS.writeFile (root </> "checkpoints" </> digestName digest) "corrupt"

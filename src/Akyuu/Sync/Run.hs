@@ -4,7 +4,7 @@ module Akyuu.Sync.Run (SyncError (..), SyncPoint (..), configure, runSync, runSy
 
 import Akyuu.Fs (atomicWrite, ifMissing, ignoreIO, tryWith)
 import Akyuu.Id qualified as Id
-import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), pendingEvents, pendingObjects)
+import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointEvents, checkpointObjects, pendingEvents, pendingObjects)
 import Akyuu.Sync.Event (eventAction)
 import Akyuu.Sync.Git (Bundle (bundlePayloads, bundleState), GitError, ancestor, bundleAt, describeGitError, fetch, prepare, push, readBundle, writeBundle)
 import Akyuu.Sync.Process (Deadline, deadline)
@@ -110,13 +110,13 @@ verifiedFetch end root (Settings remote branch) = do
   tip <- transport (fetch end gitRoot remote branch)
   case (old, tip) of
     (Just _, Nothing) -> throwE RemoteRewritten
-    (Just previous, Just current) -> do
+    (Just previous, Just current) | previous /= current -> do
       follows <- transport (ancestor end gitRoot previous current)
       unless follows (throwE RemoteRewritten)
     _ -> pure ()
   bundle <- traverse (transport . readBundle end gitRoot) tip
   case (old, bundle) of
-    (Just previous, Just incoming) -> do
+    (Just previous, Just incoming) | Just previous /= tip -> do
       accepted <- transport (readBundle end gitRoot previous)
       unless (contains incoming accepted) (throwE RemoteRewritten)
     _ -> pure ()
@@ -152,7 +152,14 @@ runSyncWith hook seconds root preview = withSync root $ do
           combined <- maybe (pure (snapshotState before)) (either (const (throwE (SyncInvalid "The remote history cannot merge."))) pure . merge (snapshotState before) . bundleState) incoming
           pure (object ["preview" .= True, "checkpoint" .= checkpointText (snapshotId before), "remote_tip" .= tip, "import_events" .= maybe 0 (\bundle -> Set.size (Map.keysSet (events (bundleState bundle)) `Set.difference` Map.keysSet (events (snapshotState before)))) incoming, "conflicts" .= countConflicts combined])
         else do
-          forM_ incoming $ \bundle -> void (storage (importState repo (bundleState bundle) (Map.toList (bundlePayloads bundle))))
+          forM_ incoming $ \bundle -> do
+            -- The fetched bundle and local checkpoint were both fully verified.
+            -- Accepted inventories only grow, so a subset needs no import even
+            -- if another writer advances CURRENT after this comparison.
+            let known =
+                  Map.keysSet (events (bundleState bundle)) `Set.isSubsetOf` checkpointEvents (snapshotCheckpoint before)
+                    && Map.keysSet (bundlePayloads bundle) `Set.isSubsetOf` checkpointObjects (snapshotCheckpoint before)
+            unless known (void (storage (importState repo (bundleState bundle) (Map.toList (bundlePayloads bundle)))))
           captured <- storage (loadSnapshot repo)
           key <- storage (archiveSnapshot repo captured)
           outgoing <- transport (bundleAt captured)
