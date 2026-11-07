@@ -67,7 +67,7 @@ edge, and `append` already refuses it.
 Kind `source`, agent as for any memory, body of `key: value` lines:
 
 ```
-agent: claude-code
+format: claude-code
 session: 0775d85c-5836-4715-a3a7-f306d261bf49
 from: 1a65b40b-18eb-42b1-befb-ecd00702cc97
 to: e1c8399c-1294-4b30-937d-6e0d363a28cd
@@ -76,7 +76,7 @@ sha256: <hash of the bytes of the records from `from` to `to`>
 hint: projects/-Users-me-code-app/0775d85c-5836-4715-a3a7-f306d261bf49.jsonl
 ```
 
-- `agent` names the transcript format, so the right reader is used. It is not
+- `format` names the transcript format, so the right reader is used. It is not
   the author of the memory.
 - `session` is the key. Resolution looks for it under configured roots. It does
   not use the hint if the file is elsewhere.
@@ -127,11 +127,14 @@ akyuu only reads the archive.
   differs on every run, so the export must remember which files it sent. It
   must never encrypt a file again to compare it.
 
-### Archive form: images are stripped
+### Archive form: images and signatures are stripped
 
-The archive drops the base64 data of images, which is most of what does not
-compress. It keeps a placeholder with the size, the media type and the hash of
-the dropped data. The originals still have the images.
+The archive drops the base64 data of images and the signatures of thinking
+blocks. These are high-entropy and do not compress. On one 45 MB session the
+two together saved about a fifth of the compressed size. The rest of the file
+is text that compresses about three times. The archive keeps a placeholder with
+the length and the hash of the dropped value. The originals still have the
+data. The exact rule is in the engi repository, `docs/strip-rule.md`.
 
 The strip must not change anything else. It replaces the text of the data value
 inside its line and leaves every other byte alone. It does not parse the JSON
@@ -221,15 +224,34 @@ Capture comes later and is the hard part:
 4. The Codex reader. Search over transcripts is a separate decision, probably an
    index outside the store.
 
+## Decided for phase 1 (2026-11-07)
+
+- A pointer is a memory of kind `source` (no format change).
+- The normal pointer is a session and a time: `format`, `session` and `at`. The
+  record range `from`/`to` is optional and used when something knows it. The
+  note's own `created` time is a good `at`. `source show` prints the few records
+  just before that time, and a few after.
+- The field that names the transcript format is `format`, not `agent`, so that
+  it is not mistaken for the author of the memory.
+- `source show` is always on the command line. As an MCP tool it exists only if
+  the config turns it on, and it is off by default (`[source] mcp = false`).
+- The roots are in the config file, as a list of `{ format, path }`. A root is
+  a folder that is scanned for sessions. The same root type reads live folders
+  and an engi archive, because both are files named for the session.
+- The live folders come first. Then the archive, with the newest version of the
+  session.
+- A compressed file is read with `zstd -d`. akyuu does not link a zstd library.
+  If `zstd` is not on the PATH, the archive is not available, and `source show`
+  says so.
+- `source verify` in phase 1 checks that the session is found and where. It does
+  not compare a hash: that needs the strip rule, which lives in engi. A hash
+  check is a later step, probably by a small shared library.
+- The Claude Code reader comes first. Codex and omp readers are the same shape
+  and follow.
+
 ## Open questions
 
-1. Pointer as a memory (this note), a header, or a side index?
-2. Is `at` plus the session enough for phase 1, with `from`/`to` only when known?
-3. May `source show` be an MCP tool, or terminal only at first?
-4. Where do the roots live: the config file, or the manifest of the tiers?
-5. Should the dream pass in phase 3 be allowed to write a `review` or a note
+1. Should the dream pass in phase 3 be allowed to write a `review` or a note
    about a mismatch, or only report?
-6. The name of the archive program. (Language, idle time, grown sessions and
-   encryption are decided above.)
-7. Is the proposal to encrypt at the export step, and not in the local archive,
-   right?
+2. How do `engi` and akyuu share the strip rule for hash checks: a shared
+   library, or akyuu calls `engi strip`?
