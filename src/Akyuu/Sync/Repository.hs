@@ -199,7 +199,12 @@ parseIdentity bytes = do
   pure store
 
 loadSnapshot :: Repository -> IO (Either RepositoryError Snapshot)
-loadSnapshot repo@(Repository root store) = fmap join $ tryWith RepositoryIO $ runExceptT $ do
+loadSnapshot repo = fmap (fmap fst) (loadSnapshotMemories repo)
+
+-- Keep verified payloads for the duration of one operation. This is not a
+-- cross-call cache: every new load still verifies the full on-disk inventory.
+loadSnapshotMemories :: Repository -> IO (Either RepositoryError (Snapshot, Map Id Memory))
+loadSnapshotMemories repo@(Repository root store) = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   identity <- liftIO (boundedRead 256 (root </> "IDENTITY"))
   unless (identity == identityBytes store) (throwE IdentityMismatch)
   pointer <- liftIO (boundedRead 128 (root </> "CURRENT"))
@@ -212,7 +217,7 @@ loadSnapshot repo@(Repository root store) = fmap join $ tryWith RepositoryIO $ r
   memories <- loadMemories repo (checkpointObjects checkpoint)
   validatePayloads state memories
   unless (Set.null (evictedObjects checkpoint `Set.intersection` retained 1 checkpoint state memories)) (throwE InvalidResidency)
-  pure (Snapshot root checkpoint state)
+  pure (Snapshot root checkpoint state, memories)
 
 parsePointer :: ByteString -> Either RepositoryError Id
 parsePointer bytes = do
@@ -244,13 +249,12 @@ importStateWith hook repo incoming payloads = transact hook repo payloads (first
 
 transact :: FaultHook -> Repository -> [(Id, ByteString)] -> (State -> Either RepositoryError State) -> IO (Either RepositoryError Snapshot)
 transact hook repo@(Repository root store) payloads advance = withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
-  old <- ExceptT (loadSnapshot repo)
+  (old, oldMemories) <- ExceptT (loadSnapshotMemories repo)
   state <- either throwE pure (advance (snapshotState old))
   supplied <- Map.fromList <$> traverse verifyPayload payloads
   let previous = snapshotCheckpoint old
       objectIds = checkpointObjects previous <> Map.keysSet supplied
       eventIds = Map.keysSet (State.events state)
-  oldMemories <- loadMemories repo (checkpointObjects previous)
   let memories = Map.union (Map.map snd supplied) oldMemories
   validatePayloads state memories
   base <-
@@ -264,14 +268,20 @@ transact hook repo@(Repository root store) payloads advance = withMutation root 
   let gone = evictedObjects previous `Set.difference` retained 1 base state memories
       restored = evictedObjects previous `Set.difference` gone
   checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone base)
-  traverse_ (\(digest, (bytes, _)) -> unless (digest `Set.member` gone) (saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes)) (Map.toAscList supplied)
+  -- Accepted files were verified above and became durable before their old
+  -- CURRENT publication. Only new payloads and restored copies need a save.
+  -- Prepared but unaccepted files still pass through saveImmutable and its
+  -- directory flush, including retries after a rename interrupted by death.
+  let newPayloads = Map.withoutKeys supplied (checkpointObjects previous)
+      newEvents = Map.withoutKeys (State.events state) (checkpointEvents previous)
+  traverse_ (\(digest, (bytes, _)) -> saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes) (Map.toAscList newPayloads)
   traverse_
     ( \digest -> do
         bytes <- readObjectBytes repo digest
         saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes
     )
     (Set.toAscList restored)
-  traverse_ (\(key, event) -> saveImmutable hook (EventFile key) (eventPath repo key) (renderEvent event)) (Map.toAscList (State.events state))
+  traverse_ (\(key, event) -> saveImmutable hook (EventFile key) (eventPath repo key) (renderEvent event)) (Map.toAscList newEvents)
   saveCheckpoint hook repo checkpoint
   publishCurrent hook repo checkpoint
   pure (Snapshot root checkpoint state)
@@ -344,15 +354,14 @@ data CollectionPlan = CollectionPlan
 
 planCollection :: Repository -> Int -> IO (Either RepositoryError CollectionPlan)
 planCollection repo depth = fmap join $ tryWith RepositoryIO $ runExceptT $ do
-  snapshot <- ExceptT (loadSnapshot repo)
-  collectionPlan repo snapshot depth
+  (snapshot, memories) <- ExceptT (loadSnapshotMemories repo)
+  either throwE pure (collectionPlan snapshot memories depth)
 
-collectionPlan :: Repository -> Snapshot -> Int -> ExceptT RepositoryError IO CollectionPlan
-collectionPlan repo snapshot depth = do
-  unless (depth >= 1 && depth <= 1000) (throwE InvalidRetentionDepth)
+collectionPlan :: Snapshot -> Map Id Memory -> Int -> Either RepositoryError CollectionPlan
+collectionPlan snapshot memories depth = do
+  unless (depth >= 1 && depth <= 1000) (Left InvalidRetentionDepth)
   let checkpoint = snapshotCheckpoint snapshot
-  memories <- loadMemories repo (checkpointObjects checkpoint)
-  let live = retained depth checkpoint (snapshotState snapshot) memories
+      live = retained depth checkpoint (snapshotState snapshot) memories
   pure (CollectionPlan (snapshotId snapshot) live (activeObjects checkpoint `Set.difference` live) (evictedObjects checkpoint))
 
 -- | Prepare a complete durable local archive of one accepted checkpoint.
@@ -375,10 +384,10 @@ archiveSnapshotWith hook repo@(Repository root _) captured = fmap join $ tryWith
 -- Used by resumable joins before the first local registration is published.
 archiveIncoming :: Repository -> State -> Set.Set Id -> IO (Either RepositoryError CheckpointId)
 archiveIncoming repo@(Repository root store) state objects = fmap join $ tryWith RepositoryIO $ runExceptT $ do
-  current <- ExceptT (loadSnapshot repo)
+  (current, available) <- ExceptT (loadSnapshotMemories repo)
   checkpoint <- either (throwE . InvalidCheckpoint) pure (mkCheckpoint (State.storeId state) (Map.keysSet (State.events state)) objects Set.empty Set.empty)
   unless (State.storeId state == store && included checkpoint (snapshotCheckpoint current)) (throwE ArchiveNotAccepted)
-  memories <- loadMemories repo objects
+  let memories = Map.restrictKeys available objects
   validatePayloads state memories
   let snapshot = Snapshot root checkpoint state
   saveArchive (const (pure ())) repo snapshot
@@ -449,9 +458,9 @@ collectWith hook repo@(Repository root _) expected depth = fmap join $ tryWith R
   unless (snapshotId captured == expected) (throwE StaleCheckpoint)
   saveArchive hook repo captured
   ExceptT $ withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
-    current <- ExceptT (loadSnapshot repo)
+    (current, memories) <- ExceptT (loadSnapshotMemories repo)
     unless (snapshotId current == expected) (throwE StaleCheckpoint)
-    plan <- collectionPlan repo current depth
+    plan <- either throwE pure (collectionPlan current memories depth)
     let gone = (collectionEvicted plan <> collectionCandidates plan) `Set.difference` collectionRetained plan
         restored = collectionEvicted plan `Set.difference` gone
     traverse_ (\digest -> readObjectBytes repo digest >>= saveImmutable hook (MemoryFile digest) (objectPath repo digest)) (Set.toAscList restored)

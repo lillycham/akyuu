@@ -8,7 +8,7 @@ import Akyuu.Sync.Checkpoint (pendingEvents, pendingObjects)
 import Akyuu.Sync.Git qualified as Git
 import Akyuu.Sync.Process (deadline, runGit)
 import Akyuu.Sync.Repository (loadSnapshot, openRepository, snapshotCheckpoint)
-import Akyuu.Sync.Run (SyncError (RemoteRewritten), SyncPoint (AfterPush, BeforePush, JoinImported, JoinRegistered), configure, joinReplica, joinReplicaWith, runSync, runSyncWith)
+import Akyuu.Sync.Run (SyncError (RemoteRewritten), SyncPoint (AfterFetch, AfterPush, BeforePush, JoinImported, JoinRegistered), configure, joinReplica, joinReplicaWith, runSync, runSyncWith)
 import Akyuu.Sync.State qualified as State
 import Akyuu.Sync.Topics (LocalReplica, TopicError (NeedsResolution), TopicHead (headMemoryId), TopicStatus (Conflicted, Resolved), TopicView (viewHeads, viewStatus, viewVersion), createTopic, initialiseLocal, openLocal, readTopic, replaceTopic, selectTopic)
 import Control.Monad (void, when)
@@ -26,7 +26,7 @@ import System.Directory (removeFile, renameDirectory)
 import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import TopicsTests (newTopic, topicName)
+import TopicsTests (newTopic, onlyHead, topicName)
 
 withPeers :: (FilePath -> FilePath -> LocalReplica -> FilePath -> LocalReplica -> IO a) -> IO a
 withPeers action = withTempDir $ \base -> do
@@ -86,6 +86,17 @@ transportTests =
         _ <- runSync a False >>= right
         after <- loadSnapshot repoB >>= right
         pendingEvents (snapshotCheckpoint after) @?= Set.empty,
+      testCase "unchanged sync preserves the checkpoint and still checks local bytes" $ withPeers $ \_ a localA _ _ -> do
+        before <- BS.readFile (a </> "CURRENT")
+        _ <- runSync a False >>= right
+        BS.readFile (a </> "CURRENT") >>= (@?= before)
+        entry <- readTopic localA topicName >>= right >>= onlyHead
+        let path = a </> "objects" </> T.unpack (Id.render (headMemoryId entry))
+            hook point = when (point == AfterFetch) (BS.writeFile path "corrupt after open")
+        outcome <- runSyncWith hook 60 a False
+        assertBool "unchanged sync hid local corruption" (case outcome of Left _ -> True; _ -> False)
+        BS.readFile (a </> "CURRENT") >>= (@?= before)
+        BS.readFile path >>= (@?= "corrupt after open"),
       testCase "join resumption never acknowledges its unpublished local registration" $ withPeers $ \remote _ _ b _ -> do
         identity <- BS.readFile (b </> "REPLICA")
         removeFile (b </> "SYNC")
