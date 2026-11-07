@@ -358,11 +358,14 @@ collectionPlan repo snapshot depth = do
 -- | Prepare a complete durable local archive of one accepted checkpoint.
 -- This is NOT acknowledgement of remote publication. Transport calls the
 -- separate acknowledgement API only after it verifies remote inclusion.
+-- Accepted inventories only grow and archive files are immutable. Preparation
+-- therefore needs no mutation lock. Concurrent GC saves the same bytes before
+-- unlinking an active copy, so readers can always use archive fallback.
 archiveSnapshot :: Repository -> Snapshot -> IO (Either RepositoryError CheckpointId)
 archiveSnapshot = archiveSnapshotWith (const (pure ()))
 
 archiveSnapshotWith :: FaultHook -> Repository -> Snapshot -> IO (Either RepositoryError CheckpointId)
-archiveSnapshotWith hook repo@(Repository root _) captured = withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
+archiveSnapshotWith hook repo@(Repository root _) captured = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   current <- ExceptT (loadSnapshot repo)
   unless (snapshotRoot captured == root && included (snapshotCheckpoint captured) (snapshotCheckpoint current)) (throwE ArchiveNotAccepted)
   saveArchive hook repo captured
@@ -371,7 +374,7 @@ archiveSnapshotWith hook repo@(Repository root _) captured = withMutation root R
 -- | Archive exactly the remotely verified inventory, not newer local events.
 -- Used by resumable joins before the first local registration is published.
 archiveIncoming :: Repository -> State -> Set.Set Id -> IO (Either RepositoryError CheckpointId)
-archiveIncoming repo@(Repository root store) state objects = withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
+archiveIncoming repo@(Repository root store) state objects = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   current <- ExceptT (loadSnapshot repo)
   checkpoint <- either (throwE . InvalidCheckpoint) pure (mkCheckpoint (State.storeId state) (Map.keysSet (State.events state)) objects Set.empty Set.empty)
   unless (State.storeId state == store && included checkpoint (snapshotCheckpoint current)) (throwE ArchiveNotAccepted)
@@ -432,36 +435,41 @@ acknowledgePublishedWith hook repo@(Repository root store) key = withMutation ro
   publishCurrent hook repo checkpoint
   pure (Snapshot root checkpoint (snapshotState current))
 
--- | Recompute under the mutation lock; never sweep a caller's stale plan.
--- All accepted bytes enter the durable archive before CURRENT permits eviction.
--- Unlink follows publication, so every old captured snapshot has fallback.
+-- | Prepare the archive outside the lock, then recheck and recompute under
+-- the mutation lock; never sweep a caller's stale plan. All accepted bytes
+-- enter the durable archive before CURRENT permits eviction. Unlink follows
+-- publication, so every old captured snapshot has fallback.
 collect :: Repository -> CheckpointId -> Int -> IO (Either RepositoryError CollectionPlan)
 collect = collectWith (const (pure ()))
 
 collectWith :: FaultHook -> Repository -> CheckpointId -> Int -> IO (Either RepositoryError CollectionPlan)
-collectWith hook repo@(Repository root _) expected depth = withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
-  current <- ExceptT (loadSnapshot repo)
-  unless (snapshotId current == expected) (throwE StaleCheckpoint)
-  plan <- collectionPlan repo current depth
-  saveArchive hook repo current
-  let gone = (collectionEvicted plan <> collectionCandidates plan) `Set.difference` collectionRetained plan
-      restored = collectionEvicted plan `Set.difference` gone
-  traverse_ (\digest -> readObjectBytes repo digest >>= saveImmutable hook (MemoryFile digest) (objectPath repo digest)) (Set.toAscList restored)
-  checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone (snapshotCheckpoint current))
-  saveCheckpoint hook repo checkpoint
-  publishCurrent hook repo checkpoint
-  -- A failed unlink is retryable: CURRENT already excludes these active copies.
-  removal <- liftIO $ tryWith (CollectionIncomplete (checkpointId checkpoint)) $ do
-    traverse_
-      ( \digest -> do
-          ifMissing () (removeFile (objectPath repo digest))
-          hook (MemoryEvicted digest)
-      )
-      (Set.toAscList gone)
-    syncDir (root </> "objects")
-    hook EvictionsSynced
-  either throwE pure removal
-  pure plan {collectionCheckpoint = checkpointId checkpoint, collectionEvicted = gone}
+collectWith hook repo@(Repository root _) expected depth = fmap join $ tryWith RepositoryIO $ runExceptT $ do
+  unless (depth >= 1 && depth <= 1000) (throwE InvalidRetentionDepth)
+  captured <- ExceptT (loadSnapshot repo)
+  unless (snapshotId captured == expected) (throwE StaleCheckpoint)
+  saveArchive hook repo captured
+  ExceptT $ withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
+    current <- ExceptT (loadSnapshot repo)
+    unless (snapshotId current == expected) (throwE StaleCheckpoint)
+    plan <- collectionPlan repo current depth
+    let gone = (collectionEvicted plan <> collectionCandidates plan) `Set.difference` collectionRetained plan
+        restored = collectionEvicted plan `Set.difference` gone
+    traverse_ (\digest -> readObjectBytes repo digest >>= saveImmutable hook (MemoryFile digest) (objectPath repo digest)) (Set.toAscList restored)
+    checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone (snapshotCheckpoint current))
+    saveCheckpoint hook repo checkpoint
+    publishCurrent hook repo checkpoint
+    -- A failed unlink is retryable: CURRENT already excludes these active copies.
+    removal <- liftIO $ tryWith (CollectionIncomplete (checkpointId checkpoint)) $ do
+      traverse_
+        ( \digest -> do
+            ifMissing () (removeFile (objectPath repo digest))
+            hook (MemoryEvicted digest)
+        )
+        (Set.toAscList gone)
+      syncDir (root </> "objects")
+      hook EvictionsSynced
+    either throwE pure removal
+    pure plan {collectionCheckpoint = checkpointId checkpoint, collectionEvicted = gone}
 
 saveCheckpoint :: FaultHook -> Repository -> Checkpoint -> ExceptT RepositoryError IO ()
 saveCheckpoint hook repo checkpoint = saveImmutable hook (CheckpointFile (checkpointId checkpoint)) (checkpointPath repo (checkpointId checkpoint)) (renderCheckpoint checkpoint)
