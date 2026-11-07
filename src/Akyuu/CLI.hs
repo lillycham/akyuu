@@ -49,7 +49,7 @@ import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAboutRefs, ne
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Related qualified as Related
-import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, episodeLines, evalLines, findingJSON, findingLines, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refLinkLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines, viewLines)
+import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, episodeLines, evalLines, findingJSON, findingLines, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refLinkLines, refListLines, reviewLines, runLines, searchLinesWith, sourceShowLines, sourceVerifyLine, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines, viewLines)
 import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Source qualified as Source
@@ -611,42 +611,6 @@ withNewline bs
   | BS.null bs || BS.last bs == 10 = bs
   | otherwise = bs <> BS.singleton 10
 
--- | A line for a pointer: its id, the format and the session, and the time.
-sourceHeader :: (Id, Source.Pointer) -> Text
-sourceHeader (pid, p) =
-  "source "
-    <> T.take 19 (Id.render pid)
-    <> ": "
-    <> Source.pointerFormat p
-    <> " session "
-    <> Source.pointerSession p
-    <> ", around "
-    <> T.pack (show (Source.pointerAt p))
-
--- | Where a file is, for a person.
-locatedText :: Source.Located -> Text
-locatedText l = case Source.locatedWhere l of
-  Source.Live -> "live file " <> T.pack (Source.locatedPath l)
-  Source.Archived v -> "archive, version " <> T.pack (show v) <> ": " <> T.pack (Source.locatedPath l)
-
--- | What @source show@ prints for one pointer: the header, where the records
--- were read, and the records; or why the session is not available.
-sourceShowLines :: ((Id, Source.Pointer), Either Text Source.Shown) -> [Text]
-sourceShowLines (ip, r) =
-  sourceHeader ip : case r of
-    Left why -> ["  " <> why]
-    Right s -> ("  read from " <> locatedText (Source.shownLocated s)) : "" : concatMap (\rec -> [Source.renderRecord rec, ""]) (Source.shownRecords s)
-
--- | What @source verify@ prints for one pointer: where its session is, or that
--- it is not available.
-sourceVerifyLine :: [Source.Root] -> ((Id, Source.Pointer), [Source.Located]) -> Text
-sourceVerifyLine roots (ip@(_, p), found) = case found of
-  (best : rest) -> sourceHeader ip <> ": " <> locatedText best <> (if null rest then "" else " (and " <> T.pack (show (length rest)) <> " more)")
-  []
-    | not (any ((== Source.pointerFormat p) . Source.rootFormat) roots) ->
-        sourceHeader ip <> ": not available: no root is set for the format " <> Source.pointerFormat p <> ". Add one to [source] in the config file."
-    | otherwise -> sourceHeader ip <> ": not available on this machine"
-
 -- | Run one command against an open store. 'Mcp' takes over stdin and
 -- stdout until stdin ends, and then prints nothing more.
 runCommand :: Env -> Command Id -> IO (Either AkyuuError Output)
@@ -785,7 +749,11 @@ runCommand env c = runExceptT $ case c of
     let related
           | Config.sValue (Config.cfgRelated cfg) = Just (Related.Config (Config.sValue (Config.cfgParallel cfg)))
           | otherwise = Nothing
-    mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place) toolSet related) <$> policy <*> tiers))
+    -- The tool that shows a session is offered only if the config turns it on.
+    let source
+          | Config.sValue (Config.cfgSourceMcp cfg) = Just (Config.sValue (Config.cfgSourceRoots cfg))
+          | otherwise = Nothing
+    mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place) toolSet related source) <$> policy <*> tiers))
     liftIO (MCP.serve mcpConfig env)
     pure (Output BS.empty True False)
   Serve port -> do

@@ -131,6 +131,7 @@ test-suite akyuu-test
                     , StoreTests
                     , SeedTests
                     , SourceCliTests
+                    , SourceMcpTests
                     , SourceTests
                     , SupersedeTests
                     , WebTests

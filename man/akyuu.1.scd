@@ -284,7 +284,9 @@ be *\**, and *~* is the home directory).
 	*recall* of a topic ends with a *related:* line: up to three other topics
 	that belong with it, each with a reason (*linked*, *mentioned* or
 	*similar text*). See *topic.related* in CONFIGURATION.
-	The server
+	If the config has *source.mcp = true*, every tool set also has
+	*source_show*, with the arguments *id*, *before* and *after* of *source
+	show*. The server
 	tells the agent to read the policy (*policy/memory*, or *--policy-ref*, or
 	*$AKYUU_POLICY_REF*, or *policy-ref* in the config file) first.
 
@@ -367,10 +369,9 @@ only if they are linked or mentioned. The default is no namespace.
 _format_ of the transcripts in it and a _path_ (*~/* at the start is the home
 directory). A root is searched below its folders; it can be the agent's own
 folder or an archive of it. There is no default: akyuu does not guess where a
-person keeps them. *source.mcp* (false by default) is for offering *source
-show* to agents over MCP. That tool is not there yet, so for now the setting
-changes nothing. It is off by default because the tool would hand the text of
-one agent's sessions to another.
+person keeps them. *source.mcp* (false by default) makes *akyuu mcp* offer the
+tool *source_show* in every tool set. It is off by default because the tool
+hands the text of one agent's sessions to another. See *source show*.
 
 An embedding profile turns search by meaning on. Its *command*, run by *sh -c*,
 reads a text on its standard input and prints a vector as JSON. *key* names

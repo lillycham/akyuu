@@ -28,6 +28,7 @@ module Akyuu.MCP
     toolList,
     ToolSet (..),
     toolsFor,
+    toolsForConfig,
     parseToolCallFor,
     parseToolCall,
     runTool,
@@ -56,11 +57,12 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep, defaultSize)
 import Akyuu.Memory (Memory (memBody))
-import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), TopicView (tvAbout, tvId, tvMemory, tvMentionedBy, tvName), addMemory, addToTopic, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLevels, readLog, readLogSince, readRef, recallQuery, recallTopic, refLinksOf, relatedTopics, rememberTopic, replaceTopic, resolveId, reviewPair, reviseTopic, searchMemoriesMode, setRefTo, summariseLog, supersedeMemory, unfoldMemory)
+import Akyuu.Ops (Env, IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), TopicView (tvAbout, tvId, tvMemory, tvMentionedBy, tvName), addMemory, addToTopic, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, firstLines, getMemory, listRefValues, neighboursOf, noteEpisode, parseDuration, parseIdSpec, readLevels, readLog, readLogSince, readRef, recallQuery, recallTopic, refLinksOf, relatedTopics, rememberTopic, replaceTopic, resolveId, reviewPair, reviseTopic, searchMemoriesMode, setRefTo, sourcePointers, summariseLog, supersedeMemory, unfoldMemory)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent), Name, Ref (current), mkName, nameText)
 import Akyuu.Related qualified as Related
-import Akyuu.Render (compareLines, edgeName, episodeLines, findingLines, heldBy, idLine, logLines, memoryText, neighbourLines, refLines, refLinkLines, refListLinesWith, searchLinesWith, shortIds, tierLinesWithin, tierPage, viewLines)
+import Akyuu.Render (compareLines, edgeName, episodeLines, findingLines, heldBy, idLine, logLines, memoryText, neighbourLines, refLines, refLinkLines, refListLinesWith, searchLinesWith, shortIds, sourceShowLines, tierLinesWithin, tierPage, viewLines)
+import Akyuu.Source qualified as Source
 import Akyuu.Tier (Place (Place), defaultPolicyRef, defaultTiersRef)
 import Akyuu.Topic qualified as Topic
 import Control.Exception (SomeAsyncException, SomeException, displayException, fromException, tryJust)
@@ -122,6 +124,9 @@ data ToolCall
     CallSummarise Name Int [Id] NewMemory
   | -- | The sources of a summary.
     CallUnfold Id
+  | -- | The records of the session that a memory came from: the memory, and
+    -- how many records to show before the time and after it.
+    CallSourceShow Id Int Int
   | -- | The tier ('Nothing' for always), the directory that stands for where
     -- the session works, and extra refs.
     CallContext (Maybe Text) (Maybe Text) [Name] (Maybe Int) (Maybe Int)
@@ -591,12 +596,34 @@ toolsFor Ordinary = map ordinarySchema (filter ordinaryTool toolList)
            in Object (if n == "add" then KM.insert "description" (String "Create current knowledge under a new ref. The ref is required and must not exist. Use note for an episode and supersede to revise current knowledge. The configured agent is the default author.") t' else t')
     ordinarySchema t = t
 
+-- | The tool that shows the session that a memory came from. The config
+-- offers it ('toolsForConfig'), in every tool set, only if the person turned
+-- it on: it hands text from the transcripts of one agent to another.
+sourceShowTool :: Value
+sourceShowTool =
+  object
+    [ "name" .= ("source_show" :: Text),
+      "description" .= ("Read the part of an agent session that a memory came from: the records around the time of its pointer, or the range that the pointer names. Use it to check what a note was based on before you rely on it. The id is a pointer, or a memory with a derived_from link to one. A session that is not on this machine gives an error that says so." :: Text),
+      "inputSchema"
+        .= objectSchema
+          [ ("id", idSchema "The id of a pointer, or of a memory that derives from one."),
+            ("before", object ["type" .= ("integer" :: Text), "minimum" .= (0 :: Int), "default" .= (6 :: Int), "description" .= ("How many records to show before the time." :: Text)]),
+            ("after", object ["type" .= ("integer" :: Text), "minimum" .= (0 :: Int), "default" .= (2 :: Int), "description" .= ("How many records to show after the time." :: Text)])
+          ]
+          ["id"]
+    ]
+
+-- | The tools that a server offers: those of its tool set, and
+-- 'sourceShowTool' if the config turns it on.
+toolsForConfig :: McpConfig -> [Value]
+toolsForConfig cfg = toolsFor (mcpToolSet cfg) <> [sourceShowTool | Just _ <- [mcpSource cfg]]
+
 -- | Enforce the selected set at dispatch as well as in tools/list.
 parseToolCallFor :: McpConfig -> Text -> Args -> Either CallError ToolCall
 parseToolCallFor cfg n args
-  | not (any named (toolsFor (mcpToolSet cfg))) = Left (UnknownTool n)
+  | not (any named (toolsForConfig cfg)) = Left (UnknownTool n)
   | otherwise = do
-      checkArgNamesIn (argNamesOf (toolsFor (mcpToolSet cfg))) n args
+      checkArgNamesIn (argNamesOf (toolsForConfig cfg)) n args
       if mcpToolSet cfg == Ordinary && n == "add" then () <$ refArg args else pure ()
       let args' =
             if mcpToolSet cfg == Ordinary && n `elem` ["add", "supersede"] && not (KM.member "agent" args)
@@ -746,6 +773,11 @@ parseArgs n args = case n of
     b <- required args "body" asText "a string"
     pure (CallSummarise r level ss NewMemory {newKind = k, newAgent = a, newEdges = Set.empty, newBody = b, newAboutRefs = Set.empty})
   "unfold" -> CallUnfold <$> idArg args "id"
+  "source_show" -> do
+    i <- idArg args "id"
+    before <- optional' args "before" asInt "a whole number" >>= atLeast "before" 0 . fromMaybe 6
+    after <- optional' args "after" asInt "a whole number" >>= atLeast "after" 0 . fromMaybe 2
+    pure (CallSourceShow i before after)
   "context" -> do
     t <- optional' args "tier" asText "a string"
     rs <- maybe [] id <$> optional' args "refs" (asList asText) "a list of strings"
@@ -943,6 +975,11 @@ runTool cfg env c = either failed id <$> go
             Right xs -> Right (okText (T.intercalate "\n" xs) False)
       CallSummarise n level ss m -> fmap (\i -> okText (Id.render i) False) <$> summariseLog env n level ss m
       CallUnfold i -> fmap (\ms -> okText (T.intercalate "\n" (concatMap (episodeLines True) ms)) False) <$> unfoldMemory env i
+      CallSourceShow i before after -> runExceptT $ do
+        ps <- ExceptT (sourcePointers env i)
+        let roots = fromMaybe [] (mcpSource cfg)
+        shown <- lift (mapM (\(pid, p) -> (,) (pid, p) <$> Source.showPointer roots (Source.Window before after) p) ps)
+        pure (okText (T.intercalate "\n" (concatMap sourceShowLines shown)) (any (either (const True) (const False) . snd) shown))
       CallRefList -> do
         r <- listRefValues env
         case r of
@@ -1043,7 +1080,12 @@ data McpConfig = McpConfig
     mcpToolSet :: ToolSet,
     -- | Show the topics that are related to a topic when it is recalled
     -- ("Akyuu.Related"). 'Nothing': do not.
-    mcpRelated :: Maybe Related.Config
+    mcpRelated :: Maybe Related.Config,
+    -- | Offer the tool @source_show@ ("Akyuu.Source"), with these roots to
+    -- find sessions under. 'Nothing': do not offer it. It is off unless the
+    -- person sets @[source] mcp = true@, because it hands text from the
+    -- transcripts of one agent to another.
+    mcpSource :: Maybe [Source.Root]
   }
   deriving (Eq, Show)
 
@@ -1051,7 +1093,7 @@ data McpConfig = McpConfig
 -- one agent. A store that uses another name sets it with @--policy-ref@ or
 -- @AKYUU_POLICY_REF@.
 defaultMcpConfig :: McpConfig
-defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing Ordinary Nothing
+defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing Ordinary Nothing Nothing
 
 -- | The result of @initialize@.
 initializeResult :: McpConfig -> Maybe Text -> Value
@@ -1134,7 +1176,7 @@ handleMessage cfg run msg = case msg of
     request i m p = case m of
       "initialize" -> pure (response i (initializeResult cfg (p >>= KM.lookup "protocolVersion" >>= asText)))
       "ping" -> pure (response i (object []))
-      "tools/list" -> pure (response i (object ["tools" .= toolsFor (mcpToolSet cfg)]))
+      "tools/list" -> pure (response i (object ["tools" .= toolsForConfig cfg]))
       "tools/call" -> call i p
       _ -> pure (errorResponse i methodNotFound ("Method not found: " <> m))
     call i p = case p of

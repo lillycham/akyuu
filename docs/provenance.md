@@ -1,8 +1,8 @@
 # Provenance: where a memory came from
 
-Status: the pointer, `source add`, `source show` and `source verify` are built,
-for Claude Code transcripts. An MCP tool, a check of the hash of a span, and
-the Codex and omp formats are not built yet.
+Status: the pointer, `source add`, `source show`, `source verify` and the MCP
+tool `source_show` are built, for Claude Code transcripts. A check of the hash
+of a span, and the Codex and omp formats, are not built yet.
 
 An agent writes a note after a session. A month later the note is all that is
 left of the session, and you cannot tell whether it is right. A pointer fixes
@@ -112,14 +112,25 @@ report it.
 ## What it prints, and who sees it
 
 `source show` prints the text of a transcript on the terminal. That is text
-that you can already read in the files. It is on the command line only. The
-`[source] mcp` flag of the config is reserved for offering the same to agents
-over MCP. It is off by default, and no MCP tool exists yet, because such a
-tool would hand the text of one agent's sessions to another agent.
+that you can already read in the files.
+
+The MCP tool `source_show` does the same for an agent. It takes `id`, `before`
+and `after`, like the command, and returns the same text. It is off by default,
+and it exists only if the config says so:
+
+```toml
+[source]
+mcp = true
+roots = [{ format = "claude-code", path = "~/.claude/projects" }]
+```
+
+It is off because it hands the text of one agent's sessions to another agent.
+With the flag on, every tool set (`ordinary`, `maintenance` and `topic`) offers
+it. A session that is not on the machine, or a missing root, is a tool error
+that says so.
 
 ## Not built yet
 
-- The MCP tool, behind `[source] mcp = true`.
 - A check that the bytes of a span are the ones that the pointer saw (a hash).
   It needs the same rule for removing images and signatures that the archive
   tool uses, so that a live file and its archived copy give the same hash.

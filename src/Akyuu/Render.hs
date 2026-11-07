@@ -43,6 +43,8 @@ module Akyuu.Render
     resolutionLines,
     viewLines,
     verifyLines,
+    sourceShowLines,
+    sourceVerifyLine,
     edgeName,
     dirName,
   )
@@ -67,6 +69,7 @@ import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Akyuu.Review (Review (reviewAgent, reviewAt, reviewNote))
 import Akyuu.SearchEval (Case (caseCategory, caseGuess, caseQuery), passes)
 import Akyuu.Source (Root (rootFormat, rootPath))
+import Akyuu.Source qualified as Source
 import Data.Aeson (Value, object, (.=))
 import Data.List (sort)
 import Data.Map.Strict (Map)
@@ -328,6 +331,42 @@ configLines c =
     setting name (v, src) = name <> " = " <> v <> "  (" <> sourceText src <> ")"
     pair (k, v) = k <> " = " <> v
     quoted t = "\"" <> t <> "\""
+
+-- | A line for a pointer: its id, the format and the session, and the time.
+sourceHeader :: (Id, Source.Pointer) -> Text
+sourceHeader (pid, p) =
+  "source "
+    <> T.take 19 (render pid)
+    <> ": "
+    <> Source.pointerFormat p
+    <> " session "
+    <> Source.pointerSession p
+    <> ", around "
+    <> T.pack (show (Source.pointerAt p))
+
+-- | Where a file is, for a person.
+locatedText :: Source.Located -> Text
+locatedText l = case Source.locatedWhere l of
+  Source.Live -> "live file " <> T.pack (Source.locatedPath l)
+  Source.Archived v -> "archive, version " <> T.pack (show v) <> ": " <> T.pack (Source.locatedPath l)
+
+-- | What @source show@ prints for one pointer: the header, where the records
+-- were read, and the records; or why the session is not available.
+sourceShowLines :: ((Id, Source.Pointer), Either Text Source.Shown) -> [Text]
+sourceShowLines (ip, r) =
+  sourceHeader ip : case r of
+    Left why -> ["  " <> why]
+    Right s -> ("  read from " <> locatedText (Source.shownLocated s)) : "" : concatMap (\rec -> [Source.renderRecord rec, ""]) (Source.shownRecords s)
+
+-- | What @source verify@ prints for one pointer: where its session is, or that
+-- it is not available.
+sourceVerifyLine :: [Source.Root] -> ((Id, Source.Pointer), [Source.Located]) -> Text
+sourceVerifyLine roots (ip@(_, p), found) = case found of
+  (best : rest) -> sourceHeader ip <> ": " <> locatedText best <> (if null rest then "" else " (and " <> T.pack (show (length rest)) <> " more)")
+  []
+    | not (any ((== Source.pointerFormat p) . Source.rootFormat) roots) ->
+        sourceHeader ip <> ": not available: no root is set for the format " <> Source.pointerFormat p <> ". Add one to [source] in the config file."
+    | otherwise -> sourceHeader ip <> ": not available on this machine"
 
 -- | The refs that hold each memory now, from the list of refs.
 heldBy :: [(Name, Id)] -> Map Id [Name]
