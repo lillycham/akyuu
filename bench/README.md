@@ -108,3 +108,7 @@ archive progress. It records the writer duration. The total archive timer
 includes this deliberate pause and is not an independent archive latency.
 Acknowledgement must preserve the later write as pending. The command uses
 the same 120-second deadline as the other fixture commands.
+
+See the [before/after measurements](results/2026-11-07-performance.md) for
+the later changes to inventory reuse and unchanged sync. The raw records
+include all fixture sizes, samples and concurrent writer outcomes.
