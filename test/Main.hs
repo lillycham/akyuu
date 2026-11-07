@@ -4,7 +4,7 @@ module Main (main) where
 
 import Akyuu.Id (Id, IdParseError (BadHex, BadLength, BadPrefix), fromDigest, hashBytes, hashFile, parse, render, toBytes, verify)
 import AmendTests (amendTests)
-import ArchiveTests (archiveTests)
+import ArchiveTests (archiveCrashWorker, archiveTests)
 import CLITests (cliTests)
 import CacheTests (cacheTests)
 import CheckTests (checkTests)
@@ -47,7 +47,7 @@ import SupersedeTests (supersedeTests)
 import SyncProcessTests (syncProcessTests)
 import SyncTests (syncTests)
 import System.Directory (getTemporaryDirectory, removeFile)
-import System.Environment (setEnv, unsetEnv)
+import System.Environment (getArgs, setEnv, unsetEnv)
 import System.IO (hClose, openBinaryTempFile)
 import Test.Tasty (TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
@@ -61,6 +61,13 @@ import WebTests (webTests)
 
 main :: IO ()
 main = do
+  args <- getArgs
+  case args of
+    ["--archive-crash", root, operation, target, step] -> archiveCrashWorker root operation target step
+    _ -> runTests
+
+runTests :: IO ()
+runTests = do
   -- The tests must not read the settings of the person that runs them: a
   -- real embedding command would change the results and start a model.
   mapM_ unsetEnv ["AKYUU_EMBED_COMMAND", "AKYUU_EMBED_MODEL", "AKYUU_EMBED_MIN", "AKYUU_EMBED_TIMEOUT", "AKYUU_EMBED_MAX_CHARS", "AKYUU_EMBED_PROFILE", "AKYUU_EMBED_QUERY_PREFIX", "AKYUU_EMBED_DOCUMENT_PREFIX", "AKYUU_POLICY_REF", "AKYUU_TIERS_REF", "AKYUU_AGENT", "AKYUU_TOPIC_RELATED", "AKYUU_TOPIC_PARALLEL"]
