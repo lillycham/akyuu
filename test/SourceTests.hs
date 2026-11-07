@@ -60,6 +60,8 @@ sourceTests =
       testGroup "names" nameCases,
       testGroup "locate" locateCases,
       testGroup "records" recordCases,
+      testGroup "codex" codexCases,
+      testGroup "omp" ompCases,
       testGroup "window" windowCases,
       testGroup "show" showCases
     ]
@@ -117,9 +119,30 @@ nameCases =
       classify "claude-code" "s1" "s1.x.jsonl.zst" @?= Nothing
       classify "claude-code" "s1" "s1.jsonl.zst.age" @?= Nothing
       classify "claude-code" "s1" "s1.jsonl.tmp" @?= Nothing,
-    testCase "another format has no files yet" $
-      classify "codex" "s1" "s1.jsonl" @?= Nothing
+    testCase "a format that akyuu does not know has no files" $
+      classify "nope" "s1" "s1.jsonl" @?= Nothing,
+    testCase "a Codex file is named rollout-, a time and the session id" $ do
+      classify "codex" codexId ("rollout-2026-11-01T21-14-40-" <> T.unpack codexId <> ".jsonl") @?= Just Live
+      classify "codex" codexId ("rollout-2026-11-01T21-14-40-" <> T.unpack codexId <> ".jsonl.zst") @?= Just (Archived 1)
+      classify "codex" codexId ("rollout-2026-11-01T21-14-40-" <> T.unpack codexId <> ".2.jsonl.zst") @?= Just (Archived 2),
+    testCase "a Codex file of another session, or with a part of the id, does not match" $ do
+      classify "codex" codexId "rollout-2026-11-01T21-14-40-01a198f6-e81f-70e1-a1bc-000000000000.jsonl" @?= Nothing
+      -- The last group of the id is not the whole id.
+      classify "codex" "ad78fe0c9eaf" ("rollout-2026-11-01T21-14-40-" <> T.unpack codexId <> ".jsonl") @?= Nothing
+      classify "codex" codexId "rollout-2026-11-01T21-14-40-xx.jsonl" @?= Nothing,
+    testCase "an omp file is a time, an underscore and the session id" $ do
+      classify "omp" ompId ("2026-11-05T22-13-52-910Z_" <> T.unpack ompId <> ".jsonl") @?= Just Live
+      classify "omp" ompId ("2026-11-05T22-13-52-910Z_" <> T.unpack ompId <> ".jsonl.zst") @?= Just (Archived 1),
+    testCase "an omp session with a name is found by its name" $
+      classify "omp" "AssessTopicsEval" "AssessTopicsEval.jsonl" @?= Just Live,
+    testCase "an omp file of another session, or with a part of the id, does not match" $ do
+      classify "omp" ompId "2026-11-05T22-13-52-910Z_01a1adc6-8c8e-7721-925d-000000000000.jsonl" @?= Nothing
+      classify "omp" "925d-c6b31dde4473" ("2026-11-05T22-13-52-910Z_" <> T.unpack ompId <> ".jsonl") @?= Nothing
   ]
+
+codexId, ompId :: Text
+codexId = "01a198f6-e81f-70e1-a1bc-ad78fe0c9eaf"
+ompId = "01a1adc6-8c8e-7721-925d-c6b31dde4473"
 
 -- | Write a file below a root, with its folders.
 putFile :: FilePath -> FilePath -> ByteString -> IO ()
@@ -237,11 +260,113 @@ recordCases =
           r = one $ parseRecords "claude-code" (line "user" "2026-11-01T19:00:01Z" ("{\"role\":\"user\",\"content\":\"" <> long <> "\"}"))
       assertBool "cut" (T.length (recordText r) < 1000)
       assertBool "marked" ("…" `T.isSuffixOf` recordText r),
-    testCase "another format has no reader yet" $
-      parseRecords "codex" "{}\n" @?= [],
+    testCase "a format that akyuu does not know has no records" $
+      parseRecords "nope" "{}\n" @?= [],
     testCase "a record is shown with its time and speaker, and more lines are indented" $
       renderRecord (Record (read "2026-11-01 19:00:01 UTC") "user" "one\ntwo" Nothing)
         @?= "[2026-11-01T19:00:01Z] user: one\n  two"
+  ]
+
+-- | A line of a Codex rollout: a record with an ordinal, a type and a payload.
+codexLine :: Int -> Text -> Text -> Text -> ByteString
+codexLine ordinal typ time payload =
+  BC.pack
+    ( "{\"timestamp\":\""
+        <> T.unpack time
+        <> "\",\"ordinal\":"
+        <> show ordinal
+        <> ",\"type\":\""
+        <> T.unpack typ
+        <> "\",\"payload\":"
+        <> T.unpack payload
+        <> "}"
+    )
+
+-- | A response item of a Codex rollout.
+codexItem :: Int -> Text -> Text -> ByteString
+codexItem ordinal time = codexLine ordinal "response_item" time
+
+codexCases :: [TestTree]
+codexCases =
+  [ testCase "a user message is a user record, and its id is its ordinal" $ do
+      let r = one $ parseRecords "codex" (codexItem 7 "2026-11-01T21:14:41.538Z" "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"check it\"},{\"type\":\"input_text\",\"text\":\"then develop it\"}]}")
+      (recordRole r, recordText r, recordId r) @?= ("user", "check it\nthen develop it", Just "7")
+      recordTime r @?= read "2026-11-01 21:14:41.538 UTC",
+    testCase "an assistant message is an assistant record" $ do
+      let r = one $ parseRecords "codex" (codexItem 8 "2026-11-01T21:14:44Z" "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}")
+      (recordRole r, recordText r) @?= ("assistant", "done"),
+    testCase "a developer message is left out: it is instructions that the host adds" $
+      parseRecords "codex" (codexItem 1 "2026-11-01T21:14:41Z" "{\"type\":\"message\",\"role\":\"developer\",\"content\":[{\"type\":\"input_text\",\"text\":\"rules\"}]}") @?= [],
+    testCase "reasoning with a summary is shown as thinking, and with none is left out" $ do
+      let withSummary = one $ parseRecords "codex" (codexItem 2 "2026-11-01T21:14:42Z" "{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"weighing two options\"}],\"encrypted_content\":\"x\"}")
+      recordText withSummary @?= "[thinking] weighing two options"
+      parseRecords "codex" (codexItem 3 "2026-11-01T21:14:43Z" "{\"type\":\"reasoning\",\"summary\":[],\"encrypted_content\":\"x\"}") @?= [],
+    testCase "a function call and its output" $ do
+      let call = one $ parseRecords "codex" (codexItem 4 "2026-11-01T21:14:45Z" "{\"type\":\"function_call\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"ls\\\"}\",\"call_id\":\"c1\"}")
+          out = one $ parseRecords "codex" (codexItem 5 "2026-11-01T21:14:46Z" "{\"type\":\"function_call_output\",\"call_id\":\"c1\",\"output\":\"file.txt\"}")
+      (recordRole call, "[tool_use exec_command]" `T.isInfixOf` recordText call, "ls" `T.isInfixOf` recordText call) @?= ("assistant", True, True)
+      (recordRole out, recordText out) @?= ("tool", "[tool_result] file.txt"),
+    testCase "a custom tool call and an output made of blocks" $ do
+      let call = one $ parseRecords "codex" (codexItem 6 "2026-11-01T21:14:47Z" "{\"type\":\"custom_tool_call\",\"name\":\"apply_patch\",\"input\":\"*** Begin Patch\",\"call_id\":\"c2\"}")
+          out = one $ parseRecords "codex" (codexItem 7 "2026-11-01T21:14:48Z" "{\"type\":\"custom_tool_call_output\",\"call_id\":\"c2\",\"output\":[{\"type\":\"input_text\",\"text\":\"patched\"}]}")
+      assertBool "call" ("[tool_use apply_patch] *** Begin Patch" `T.isInfixOf` recordText call)
+      recordText out @?= "[tool_result] patched",
+    testCase "a message from one agent to another shows who wrote it and who reads it" $ do
+      let r = one $ parseRecords "codex" (codexItem 9 "2026-11-01T21:14:49Z" "{\"type\":\"agent_message\",\"author\":\"/root/a\",\"recipient\":\"/root\",\"content\":[{\"type\":\"input_text\",\"text\":\"ready\"}]}")
+      (recordRole r, recordText r) @?= ("agent", "[/root/a -> /root] ready"),
+    testCase "records that are not response items are left out" $
+      parseRecords "codex" (BC.unlines [codexLine 0 "session_meta" "2026-11-01T21:14:40Z" "{\"id\":\"x\"}", codexLine 1 "event_msg" "2026-11-01T21:14:41Z" "{\"type\":\"token_count\"}", codexLine 2 "turn_context" "2026-11-01T21:14:41Z" "{}"]) @?= [],
+    testCase "a line that is not JSON, or has no time, is left out" $
+      parseRecords "codex" (BC.unlines ["not json", "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"no time\"}]}}"]) @?= [],
+    testCase "a record without an ordinal has no id" $ do
+      let r = one $ parseRecords "codex" "{\"timestamp\":\"2026-11-01T21:14:41Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"x\"}]}}"
+      recordId r @?= Nothing,
+    testCase "a long Codex record is cut" $ do
+      let long = T.replicate 5000 "y"
+          r = one $ parseRecords "codex" (codexItem 1 "2026-11-01T21:14:41Z" ("{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"" <> long <> "\"}]}"))
+      assertBool "cut" (T.length (recordText r) < 1000)
+  ]
+
+-- | A message entry of an omp or pi session.
+ompMessage :: Text -> Text -> Text -> ByteString
+ompMessage entryId time message =
+  BC.pack
+    ( "{\"type\":\"message\",\"id\":\""
+        <> T.unpack entryId
+        <> "\",\"parentId\":null,\"timestamp\":\""
+        <> T.unpack time
+        <> "\",\"message\":"
+        <> T.unpack message
+        <> "}"
+    )
+
+ompCases :: [TestTree]
+ompCases =
+  [ testCase "a user message is a user record, and its id is the id of the entry" $ do
+      let r = one $ parseRecords "omp" (ompMessage "85f60b36" "2026-11-05T22:14:26.023Z" "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"why this design\"}]}")
+      (recordRole r, recordText r, recordId r) @?= ("user", "why this design", Just "85f60b36")
+      recordTime r @?= read "2026-11-05 22:14:26.023 UTC",
+    testCase "a user message can be a plain string" $
+      map recordText (parseRecords "omp" (ompMessage "a1" "2026-11-05T22:14:26Z" "{\"role\":\"user\",\"content\":\"plain\"}")) @?= ["plain"],
+    testCase "an assistant message shows its text, its thinking and its tool calls" $ do
+      let content = "{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"let me look\",\"thinkingSignature\":\"engi-stripped-v1:300:abc\"},{\"type\":\"text\",\"text\":\"I will read it\"},{\"type\":\"toolCall\",\"id\":\"t1\",\"name\":\"read\",\"arguments\":{\"path\":\"/a/b.hs\"},\"intent\":\"reading\"}]}"
+          r = one $ parseRecords "omp" (ompMessage "4d779922" "2026-11-05T22:14:28Z" content)
+      recordRole r @?= "assistant"
+      assertBool "thinking" ("[thinking] let me look" `T.isInfixOf` recordText r)
+      assertBool "text" ("I will read it" `T.isInfixOf` recordText r)
+      assertBool "tool" ("[tool_use read] /a/b.hs" `T.isInfixOf` recordText r)
+      assertBool "no signature" (not ("engi-stripped" `T.isInfixOf` recordText r)),
+    testCase "a tool result is a tool record" $ do
+      let r = one $ parseRecords "omp" (ompMessage "r1" "2026-11-05T22:14:29Z" "{\"role\":\"toolResult\",\"toolCallId\":\"t1\",\"toolName\":\"read\",\"isError\":false,\"content\":[{\"type\":\"text\",\"text\":\"module X\"},{\"type\":\"image\",\"data\":\"blob:sha256:abc\"}]}")
+      recordRole r @?= "tool"
+      assertBool "text" ("[tool_result] module X" `T.isInfixOf` recordText r)
+      assertBool "image" ("[image]" `T.isInfixOf` recordText r),
+    testCase "a system message is left out" $
+      parseRecords "omp" (ompMessage "s1" "2026-11-05T22:14:30Z" "{\"role\":\"system\",\"content\":[{\"type\":\"text\",\"text\":\"you are\"}]}") @?= [],
+    testCase "entries that are not messages are left out" $
+      parseRecords "omp" (BC.unlines ["{\"type\":\"session\",\"version\":3,\"id\":\"x\",\"timestamp\":\"2026-11-05T22:13:52Z\"}", "{\"type\":\"model_usage\",\"timestamp\":\"2026-11-05T22:13:53Z\"}", "{\"type\":\"custom\",\"timestamp\":\"2026-11-05T22:13:54Z\"}"]) @?= [],
+    testCase "a line that is not JSON, or has no time, is left out" $
+      parseRecords "omp" (BC.unlines ["nope", "{\"type\":\"message\",\"id\":\"a\",\"message\":{\"role\":\"user\",\"content\":\"no time\"}}"]) @?= []
   ]
 
 rec :: Text -> Text -> Record
@@ -298,6 +423,43 @@ showCases =
         case r of
           Left e -> assertFailure (T.unpack e)
           Right s -> map recordText (shownRecords s) @?= ["first answer", "second question"],
+    testCase "a Codex session is found by the id in its name and shown" $
+      withSystemTempDirectory "src-test" $ \d -> do
+        putFile d ("2026" </> "11" </> "01" </> ("rollout-2026-11-01T21-14-40-" <> T.unpack codexId <> ".jsonl")) $
+          BC.unlines
+            [ codexLine 0 "session_meta" "2026-11-01T21:14:40Z" "{\"id\":\"x\"}",
+              codexItem 1 "2026-11-01T21:14:41Z" "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"why this design\"}]}",
+              codexItem 2 "2026-11-01T21:14:42Z" "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"because it is simple\"}]}"
+            ]
+        let p = mk "codex" codexId (at "2026-11-01T21:14:42Z") Nothing Nothing Nothing
+        r <- showPointer [Root "codex" d] (Window 1 0) p
+        case r of
+          Left e -> assertFailure (T.unpack e)
+          Right s -> map recordText (shownRecords s) @?= ["because it is simple"],
+    testCase "a Codex pointer with a range of ordinals shows that range" $
+      withSystemTempDirectory "src-test" $ \d -> do
+        putFile d ("rollout-2026-11-01T21-14-40-" <> T.unpack codexId <> ".jsonl") $
+          BC.unlines [codexItem n (T.pack ("2026-11-01T21:14:4" <> show n <> "Z")) ("{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"m" <> T.pack (show n) <> "\"}]}") | n <- [1 .. 5 :: Int]]
+        let p = mk "codex" codexId (at "2026-11-01T21:14:45Z") (Just "2") (Just "4") Nothing
+        r <- showPointer [Root "codex" d] (Window 0 0) p
+        case r of
+          Left e -> assertFailure (T.unpack e)
+          Right s -> map recordText (shownRecords s) @?= ["m2", "m3", "m4"],
+    testCase "an omp session is found by the id in its name and shown" $
+      withSystemTempDirectory "src-test" $ \d -> do
+        putFile d ("-devel-akyuu" </> ("2026-11-05T22-13-52-910Z_" <> T.unpack ompId <> ".jsonl")) $
+          BC.unlines
+            [ "{\"type\":\"session\",\"version\":3,\"id\":\"" <> BC.pack (T.unpack ompId) <> "\",\"timestamp\":\"2026-11-05T22:13:52.910Z\"}",
+              ompMessage "a1" "2026-11-05T22:14:26Z" "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"why this design\"}]}",
+              ompMessage "a2" "2026-11-05T22:14:28Z" "{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"because it is simple\"}]}"
+            ]
+        let p = mk "omp" ompId (at "2026-11-05T22:14:28Z") Nothing Nothing Nothing
+        r <- showPointer [Root "omp" d] (Window 1 0) p
+        case r of
+          Left e -> assertFailure (T.unpack e)
+          Right s -> map recordText (shownRecords s) @?= ["because it is simple"],
+    testCase "every known format can be named in a pointer" $
+      mapM_ (\f -> assertBool (T.unpack f) (isRight (mkPointer f "s1" (at "2026-11-01T19:00:58") Nothing Nothing Nothing))) ["claude-code", "codex", "omp"],
     testCase "a session that is not under any root is not available" $
       withSystemTempDirectory "src-test" $ \d -> do
         r <- showPointer [Root "claude-code" d] (Window 2 1) (pointerAtTime (at "2026-11-01T19:00:04Z"))

@@ -61,6 +61,9 @@ parseCases =
       testCase "source add without a time means now" $ do
         c <- parsed ["source", "add", "--session", "s1"]
         c @?= SourceAdd (SourceArgs "claude-code" "s1" Nothing Nothing Nothing Nothing Nothing),
+      testCase "source add takes the other formats" $ do
+        c <- parsed ["source", "add", "--format", "codex", "--session", "s1"]
+        c @?= SourceAdd (SourceArgs "codex" "s1" Nothing Nothing Nothing Nothing Nothing),
       testCase "source add needs a session" $ rejected ["source", "add"],
       testCase "source add refuses a time that is not a time" $ rejected ["source", "add", "--session", "s1", "--at", "yesterday"],
       testCase "source show takes an id, and shows 6 records before and 2 after" $ do
@@ -145,6 +148,13 @@ runCases =
           r <- runCommand env (SourceAdd (pointerArgs "../etc"))
           case r of
             Left (BadInput msg) -> assertBool "says session" ("session" `T.isInfixOf` msg)
+            Left e -> assertFailure ("wrong error: " <> show e)
+            Right _ -> assertFailure "expected an error",
+      testCase "source add refuses a format that is not known, and names the formats" $
+        withOpsEnv $ \_ env -> do
+          r <- runCommand env (SourceAdd (SourceArgs "nope" "s1" (Just t0) Nothing Nothing Nothing Nothing))
+          case r of
+            Left (BadInput msg) -> assertBool "names the formats" (all (`T.isInfixOf` msg) ["claude-code", "codex", "omp"])
             Left e -> assertFailure ("wrong error: " <> show e)
             Right _ -> assertFailure "expected an error",
       testCase "source show of a pointer prints the records around its time" $

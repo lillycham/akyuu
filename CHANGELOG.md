@@ -43,8 +43,9 @@
   makes one, `source show` prints the records of the session around its time,
   and `source verify` says where the session is. Transcripts are found under
   the new `[source] roots` of the config file, as the agent's own files or as
-  an archive (`<session>.jsonl.zst`, read with `zstd`). Only the Claude Code
-  format is read so far. With `[source] mcp = true`, `akyuu mcp` offers the
+  an archive (`<session>.jsonl.zst`, read with `zstd`). The formats are
+  `claude-code`, `codex` (the rollouts of the Codex CLI) and `omp` (oh-my-pi,
+  and pi, which has the same shape). With `[source] mcp = true`, `akyuu mcp` offers the
   tool `source_show` (the arguments are `id`, `before` and `after`) in every
   tool set. It is off by default, because it hands the text of one agent's
   sessions to another.

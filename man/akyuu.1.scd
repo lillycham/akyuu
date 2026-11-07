@@ -152,9 +152,14 @@ that is not on this machine is not an error of the store: the commands say
 that it is not available.
 
 *source add* [*--format* _format_] *--session* _id_ [*--at* _time_] [*--from* _id_] [*--to* _id_] [*--hint* _path_] [*--agent* _text_]
-	Make a pointer and print its id. The format is *claude-code* (the only one
-	so far). The session is the id that the transcript file is named for. The
-	time is like *2026-11-01T19:00:58Z*, and is now if it is left out. *--from*
+	Make a pointer and print its id. The format is *claude-code* (the default),
+	*codex* (the rollouts of the Codex CLI) or *omp* (oh-my-pi, and pi, which has
+	the same shape). The session is the id that the transcript file is named for:
+	for Claude Code the whole name, for Codex and omp the id at the end of it
+	(a Codex file is named rollout, a time and the id, with hyphens; an omp file
+	a time, an underscore and the id), and for an omp session that has a name,
+	the name.
+	The time is like *2026-11-01T19:00:58Z*, and is now if it is left out. *--from*
 	and *--to* are the ids of the first and the last record, if something
 	knows them. *--hint* is a path below a root, for a person to read; it never
 	holds a home directory and is not used to find the file. The agent is

@@ -1,8 +1,8 @@
 # Provenance: where a memory came from
 
 Status: the pointer, `source add`, `source show`, `source verify` and the MCP
-tool `source_show` are built, for Claude Code transcripts. A check of the hash
-of a span, and the Codex and omp formats, are not built yet.
+tool `source_show` are built, for Claude Code, Codex and omp (and pi)
+transcripts. A check of the hash of a span is not built yet.
 
 An agent writes a note after a session. A month later the note is all that is
 left of the session, and you cannot tell whether it is right. A pointer fixes
@@ -25,7 +25,7 @@ at: 2026-11-01T19:00:58Z
 
 | Field | Meaning |
 |---|---|
-| `format` | The transcript format. Only `claude-code` so far. |
+| `format` | The transcript format: `claude-code`, `codex` or `omp`. |
 | `session` | The session: the id that its file is named for. |
 | `at` | The time the memory is about, to the second. |
 | `from`, `to` | Optional. The ids of the first and the last record, if something knows them. With both, `source show` prints that range. |
@@ -79,20 +79,36 @@ that holds transcripts, with the format of the transcripts in it:
 [source]
 roots = [
   { format = "claude-code", path = "~/.claude/projects" },
-  { format = "claude-code", path = "~/archive/sessions/claude" },
+  { format = "codex", path = "~/.codex/sessions" },
+  { format = "omp", path = "~/.omp/agent/sessions" },
+  { format = "omp", path = "~/archive/sessions/omp" },
 ]
 ```
 
 There is no default, because akyuu does not guess where you keep them. `akyuu
 config` shows the roots in effect.
 
-A session is found by its file name below a root, at any depth:
+The formats:
 
-- `<session>.jsonl` is the agent's own file.
-- `<session>.jsonl.zst` is an archived copy, and `<session>.N.jsonl.zst` is
-  the Nth version of a session that grew after it was archived. This is the
-  layout that the archive tool [engi](https://github.com/lillycham/engi) writes,
-  but any folder of such files works.
+| Format | Agent | A file is named | The `session` is | The records |
+|---|---|---|---|---|
+| `claude-code` | Claude Code | `<session>.jsonl` | the whole name | user and assistant turns, with tool calls and results |
+| `codex` | Codex CLI | `rollout-<time>-<session>.jsonl` | the id at the end | messages, reasoning that has a summary, tool calls and outputs, messages between agents. A record's id is its ordinal. |
+| `omp` | oh-my-pi, and pi | `<time>_<session>.jsonl` | the id at the end, or the name of a session that has one | user, assistant and tool-result messages. A record's id is the id of its entry. |
+
+For `codex` and `omp` the id at the end must be the whole id (36 characters for
+the ones that these agents write): the last group of an id does not find the
+file. A Codex developer message is the instructions that the host adds, and it
+is not shown.
+
+A session is found by its file name below a root, at any depth. The name
+without its ending is the _stem_, and the endings are:
+
+- `.jsonl` is the agent's own file.
+- `.jsonl.zst` is an archived copy, and `.N.jsonl.zst` is the Nth version of a
+  session that grew after it was archived. This is the layout that the archive
+  tool [engi](https://github.com/lillycham/engi) writes, but any folder of such
+  files works.
 
 The agent's own files are preferred. Of two own copies, the larger one wins,
 because an agent that copies a session leaves a shorter one behind. Of the
@@ -134,7 +150,5 @@ that says so.
 - A check that the bytes of a span are the ones that the pointer saw (a hash).
   It needs the same rule for removing images and signatures that the archive
   tool uses, so that a live file and its archived copy give the same hash.
-- The Codex and omp formats. They have the same shape: a name that finds the
-  file, and a reader for the records.
 - Capture: a hook that gives an agent the id of its session, so that it can
   make the pointer itself.

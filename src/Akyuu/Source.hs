@@ -23,8 +23,9 @@
 -- This module reads, and never writes, a transcript. It does not parse a
 -- format that it does not know: each format has a function that finds its
 -- files by name ('classify') and one that reads their records
--- ('parseRecords'). Claude Code is the first. Codex and omp have the same
--- shape and are not here yet.
+-- ('parseRecords'). The formats are @claude-code@, @codex@ (the rollouts of
+-- the Codex CLI) and @omp@ (the sessions of oh-my-pi, and of pi, which has the
+-- same shape).
 module Akyuu.Source
   ( -- * The pointer
     sourceKind,
@@ -54,8 +55,10 @@ module Akyuu.Source
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Exception (IOException, try)
-import Data.Aeson (Value (Array, Object, String), decodeStrict)
+import Control.Monad (guard)
+import Data.Aeson (Value (Array, Number, Object, String), decodeStrict)
 import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString (ByteString)
@@ -64,7 +67,7 @@ import Data.ByteString.Char8 qualified as BC
 import Data.Char (isAlphaNum, isDigit)
 import Data.Foldable (toList)
 import Data.List (sortOn)
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.Ord (Down (Down))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -84,7 +87,7 @@ sourceKind = "source"
 
 -- | The transcript formats that a pointer can name.
 knownFormats :: [Text]
-knownFormats = ["claude-code"]
+knownFormats = ["claude-code", "codex", "omp"]
 
 data Pointer = Pointer
   { -- | The transcript format. It is not the author of the memory.
@@ -194,23 +197,44 @@ data Located = Located
   }
   deriving (Eq, Show)
 
--- | Is a file name a copy of this session, and which kind? A live Claude Code
--- file is @<session>.jsonl@. An archive (made by engi) has @<session>.jsonl.zst@
--- and, for a session that grew, @<session>.N.jsonl.zst@. Nothing else matches.
+-- | Is a file name a copy of this session, and which kind? The agent's own
+-- file is @<stem>.jsonl@. An archive (made by engi) has @<stem>.jsonl.zst@
+-- and, for a session that grew, @<stem>.N.jsonl.zst@. Nothing else matches.
+-- Whether a stem belongs to the session depends on the format ('stemMatches').
 classify :: Text -> Text -> FilePath -> Maybe Where
-classify "claude-code" session name
-  | name' == session <> ".jsonl" = Just Live
-  | name' == session <> ".jsonl.zst" = Just (Archived 1)
-  | Just rest <- T.stripPrefix (session <> ".") name',
-    Just num <- T.stripSuffix ".jsonl.zst" rest,
-    not (T.null num),
-    T.all isDigit num,
-    T.length num <= 6 =
-      Just (Archived (read (T.unpack num)))
+classify format session name = do
+  (stem, w) <- splitName (T.pack name)
+  if stemMatches format session stem then Just w else Nothing
+
+-- | Take a file name apart: the stem, and whether it is the agent's own file
+-- or an archived version. A name with another ending is not a transcript.
+splitName :: Text -> Maybe (Text, Where)
+splitName name
+  | Just stem <- T.stripSuffix ".jsonl" name = Just (stem, Live)
+  | Just rest <- T.stripSuffix ".jsonl.zst" name = Just (archived rest)
   | otherwise = Nothing
   where
-    name' = T.pack name
-classify _ _ _ = Nothing
+    archived rest =
+      let (dotted, num) = T.breakOnEnd "." rest
+          stem = T.dropEnd 1 dotted
+       in if not (T.null stem) && not (T.null num) && T.all isDigit num && T.length num <= 6
+            then (stem, Archived (read (T.unpack num)))
+            else (rest, Archived 1)
+
+-- | Does the stem of a file name belong to a session? Claude Code names the
+-- file for the session. A Codex file is @rollout-<time>-<session>@ and an omp
+-- or pi file is @<time>_<session>@, so the session is the end of the stem
+-- after a separator. That match needs a whole id (at least 32 characters): the
+-- last group of an id is not the id. An omp session that has a name, not an
+-- id, is found by its name.
+stemMatches :: Text -> Text -> Text -> Bool
+stemMatches "claude-code" session stem = stem == session
+stemMatches "codex" session stem = stem == session || endsWithId "-" session stem
+stemMatches "omp" session stem = stem == session || endsWithId "_" session stem
+stemMatches _ _ _ = False
+
+endsWithId :: Text -> Text -> Text -> Bool
+endsWithId sep session stem = T.length session >= 32 && (sep <> session) `T.isSuffixOf` stem
 
 -- | The files of a session below the roots of its format, best first: the
 -- agent's own files before archived ones, the larger of two live copies first
@@ -277,14 +301,92 @@ maxRecordChars = 800
 -- not known has no records.
 parseRecords :: Text -> ByteString -> [Record]
 parseRecords "claude-code" = mapMaybe claudeRecord . BC.lines
+parseRecords "codex" = mapMaybe codexRecord . BC.lines
+parseRecords "omp" = mapMaybe ompRecord . BC.lines
 parseRecords _ = const []
+
+-- | The time of a record: the @timestamp@ field, like @2026-11-01T19:00:58.250Z@.
+timeOf :: KM.KeyMap Value -> Maybe UTCTime
+timeOf o = do
+  String stamp <- KM.lookup "timestamp" o
+  parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (T.unpack stamp)
+
+-- | A text field of an object.
+textField :: Text -> KM.KeyMap Value -> Maybe Text
+textField k o = case KM.lookup (fromText k) o of
+  Just (String t) -> Just t
+  _ -> Nothing
+
+-- | A Codex rollout. The conversation is the records of type @response_item@:
+-- messages (not the developer's, which are the instructions that the host
+-- adds), reasoning that has a summary, tool calls and their outputs, and
+-- messages between agents. The id of a record is its @ordinal@.
+codexRecord :: ByteString -> Maybe Record
+codexRecord l = do
+  Object o <- decodeStrict l
+  String "response_item" <- KM.lookup "type" o
+  time <- timeOf o
+  Object p <- KM.lookup "payload" o
+  kind <- textField "type" p
+  (role, text) <- codexItem kind p
+  guard (not (T.null (T.strip text)))
+  pure (Record time role (cut text) (ordinal o))
+  where
+    ordinal o = case KM.lookup "ordinal" o of
+      Just (Number n) -> Just (T.pack (show (truncate n :: Int)))
+      _ -> Nothing
+
+-- | The speaker and the text of the payload of a Codex response item.
+codexItem :: Text -> KM.KeyMap Value -> Maybe (Text, Text)
+codexItem "message" p = do
+  role <- textField "role" p
+  guard (role `elem` ["user", "assistant"])
+  pure (role, blocksText (KM.lookup "content" p))
+codexItem "reasoning" p = do
+  let summaries = [t | Array ss <- maybeToList (KM.lookup "summary" p), Object s <- toList ss, Just t <- [textField "text" s]]
+  guard (not (null summaries))
+  pure ("assistant", "[thinking] " <> T.intercalate "\n" summaries)
+codexItem "function_call" p = pure ("assistant", "[tool_use " <> fromMaybe "?" (textField "name" p) <> "] " <> fromMaybe "" (textField "arguments" p))
+codexItem "custom_tool_call" p = pure ("assistant", "[tool_use " <> fromMaybe "?" (textField "name" p) <> "] " <> fromMaybe "" (textField "input" p))
+codexItem "function_call_output" p = pure ("tool", "[tool_result] " <> blocksText (KM.lookup "output" p))
+codexItem "custom_tool_call_output" p = pure ("tool", "[tool_result] " <> blocksText (KM.lookup "output" p))
+codexItem "agent_message" p =
+  pure
+    ( "agent",
+      "[" <> fromMaybe "?" (textField "author" p) <> " -> " <> fromMaybe "?" (textField "recipient" p) <> "] " <> blocksText (KM.lookup "content" p)
+    )
+codexItem _ _ = Nothing
+
+-- | The text of a value that is a string or a list of blocks.
+blocksText :: Maybe Value -> Text
+blocksText Nothing = ""
+blocksText (Just v) = T.intercalate "\n" (filter (not . T.null) (map blockText (contentBlocks v)))
+
+-- | An omp or pi session. The conversation is the entries of type @message@,
+-- with the role @user@, @assistant@ or @toolResult@ (a @system@ message is the
+-- prompt of the host, and is left out). The id of a record is the id of its
+-- entry.
+ompRecord :: ByteString -> Maybe Record
+ompRecord l = do
+  Object o <- decodeStrict l
+  String "message" <- KM.lookup "type" o
+  time <- timeOf o
+  Object m <- KM.lookup "message" o
+  role <- textField "role" m
+  speaker <- case role of
+    "user" -> Just "user"
+    "assistant" -> Just "assistant"
+    "toolResult" -> Just "tool"
+    _ -> Nothing
+  let body = blocksText (KM.lookup "content" m)
+  guard (not (T.null (T.strip body)))
+  pure (Record time speaker (cut (if speaker == "tool" then "[tool_result] " <> body else body)) (textField "id" o))
 
 claudeRecord :: ByteString -> Maybe Record
 claudeRecord l = do
   Object o <- decodeStrict l
   String typ <- KM.lookup "type" o
-  String stamp <- KM.lookup "timestamp" o
-  time <- parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" (T.unpack stamp)
+  time <- timeOf o
   Object msg <- KM.lookup "message" o
   content <- KM.lookup "content" msg
   let blocks = contentBlocks content
@@ -323,13 +425,16 @@ stringField _ _ = Nothing
 blockText :: Value -> Text
 blockText b = case typeOf b of
   Just "text" -> fromMaybe "" (stringField "text" b)
+  Just "input_text" -> fromMaybe "" (stringField "text" b)
+  Just "output_text" -> fromMaybe "" (stringField "text" b)
   Just "thinking" -> maybe "" ("[thinking] " <>) (stringField "thinking" b)
   Just "tool_use" -> "[tool_use " <> fromMaybe "?" (stringField "name" b) <> "] " <> inputText b
+  Just "toolCall" -> "[tool_use " <> fromMaybe "?" (stringField "name" b) <> "] " <> inputText b
   Just "tool_result" -> "[tool_result] " <> resultText b
   Just "image" -> "[image]"
   _ -> ""
   where
-    inputText (Object o) = maybe "" compact (KM.lookup "input" o)
+    inputText (Object o) = maybe "" compact (KM.lookup "input" o <|> KM.lookup "arguments" o)
     inputText _ = ""
     resultText (Object o) = case KM.lookup "content" o of
       Just (String t) -> t

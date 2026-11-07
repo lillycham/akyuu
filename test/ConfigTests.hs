@@ -133,6 +133,10 @@ resolveCases =
         c <- ok (resolve [] (Just ("/c.toml", fc)) Nothing)
         cfgSourceMcp c @?= Sourced False (FromFile "/c.toml")
         cfgSourceRoots c @?= Sourced [] Default,
+      testCase "roots of every known format are accepted" $ do
+        fc <- parsed "[source]\nroots = [{ format = \"claude-code\", path = \"/a\" }, { format = \"codex\", path = \"/b\" }, { format = \"omp\", path = \"/c\" }]\n"
+        c <- ok (resolve [] (Just ("/c.toml", fc)) Nothing)
+        map (\(Root f _) -> f) (sValue (cfgSourceRoots c)) @?= ["claude-code", "codex", "omp"],
       testCase "a root with a format that akyuu does not know is refused" $
         case parseConfigText "[source]\nroots = [{ format = \"nope\", path = \"/x\" }]\n" of
           Left es -> assertBool "names the setting" (any ("source.roots" `T.isInfixOf`) es)
