@@ -178,6 +178,16 @@ Linux archive measurements exceeded their deadline. See the
 [reproduction instructions](../../bench/README.md). HTTPS authentication,
 packet-loss recovery and coordinated live cutover remain open.
 
+On 2026-11-07, archive preparation moved outside the mutation lock. GC checks
+its expected checkpoint again before publication and eviction. A barrier
+experiment permitted an ordinary writer at 100 and 5,000 base entries while
+archive progress was paused. The larger write still took about 3.4 seconds.
+Performance acceptance remains open. See the
+[follow-up report](../../bench/results/2026-11-07.md).
+The branch was rebased onto main `ae13433`. All 1,549 tests and every native
+aarch64-darwin Nix check passed after the rebase. Archive crash tests use
+fresh executable workers.
+
 ## Experimental repository
 
 This API uses a separate, empty directory. It refuses a legacy store or an

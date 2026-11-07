@@ -16,6 +16,9 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
   A two-machine SSH experiment passed. Synthetic measurements found long
   mutation-lock windows and slow archive copies. See the
   [benchmark report](bench/results/2026-11-03.md).
+  Archive preparation now runs outside the writer lock. A bounded experiment
+  confirms that writers can finish during preparation. Larger writes remain
+  slow; see the [follow-up report](bench/results/2026-11-07.md).
 
 - **Extend the topic evaluation.** The Sonnet and Haiku runs are in
   [docs/plans/mcp-eval-results.md](docs/plans/mcp-eval-results.md).
