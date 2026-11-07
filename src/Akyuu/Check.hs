@@ -34,7 +34,7 @@ module Akyuu.Check
   )
 where
 
-import Akyuu.Episode (previous)
+import Akyuu.Episode (previousChecked)
 import Akyuu.GC (Roots (rootRefs), allRoots, retains)
 import Akyuu.Graph (Dir (In, Out), Edge (Edge), EdgeType (About, DerivedFrom, Follows, Refines, Supersedes), Graph)
 import Akyuu.Graph qualified as Graph
@@ -356,7 +356,9 @@ longLogs o g logs =
 
 -- | The logs among the values of the refs, each with its episodes, newest
 -- first. The chain goes from an episode to the one before it
--- ('Akyuu.Episode.previous').
+-- ('Akyuu.Episode.previousChecked'): a memory with one @derived_from@ edge to
+-- an episode that has a @follows@ edge is a fact with evidence, and its chain
+-- ends at once.
 --
 -- A value is a log if it has a @follows@ edge, and no episode follows it. A
 -- log written before the @follows@ edge is a chain of three or more memories
@@ -379,7 +381,8 @@ logChains g refs =
     go seen x
       | x `Set.member` seen = []
       | Supersedes `elem` map fst (outs x g) = []
-      | otherwise = x : maybe [] (go (Set.insert x seen)) (previous [Edge k t | (k, t) <- outs x g])
+      | otherwise = x : maybe [] (go (Set.insert x seen)) (previousChecked (edgesOf x) edgesOf)
+    edgesOf x = [Edge k t | (k, t) <- outs x g]
 
 -- Helpers --------------------------------------------------------------
 

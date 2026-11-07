@@ -22,6 +22,7 @@ module Akyuu.Episode
   ( append,
     appendWith,
     previous,
+    previousChecked,
     Walk (..),
     WalkEnd (..),
     walk,
@@ -83,6 +84,25 @@ previous es = case [target e | e <- es, kind e == Follows] of
     [p] -> Just p
     _ -> Nothing
 
+-- | 'previous', except that the @derived_from@ fallback stops at a memory that
+-- has a @follows@ edge.
+--
+-- The fallback reads old logs, which were written before the @follows@ edge.
+-- An old episode cannot come after an episode that has one, so a memory with
+-- one @derived_from@ edge to such an episode is a fact with one piece of
+-- evidence, such as a project. It is not part of that log, and a reader must
+-- not walk into the log from it.
+--
+-- The function takes the edges of the memory and the edges of the target of its
+-- fallback link. It is pure.
+previousChecked :: [Edge] -> (Id -> [Edge]) -> Maybe Id
+previousChecked es edgesOf = case previous es of
+  Just p
+    | not (hasFollows es) && hasFollows (edgesOf p) -> Nothing
+  r -> r
+  where
+    hasFollows = any ((== Follows) . kind)
+
 -- | The episodes of a log, newest first.
 data Walk = Walk
   { -- | The episodes that were read, with their ids.
@@ -113,6 +133,16 @@ walk st limit = go [] limit
           r <- Store.getVerified st i
           case r of
             Left e -> pure (Walk (reverse acc) (Interrupted i e))
-            Right m -> case previous (Set.toAscList (memEdges m)) of
-              Nothing -> pure (Walk (reverse ((i, m) : acc)) Complete)
-              Just next -> go ((i, m) : acc) (k - 1) next
+            Right m -> do
+              let es = Set.toAscList (memEdges m)
+              -- An unreadable target is left to the next step, which reports it.
+              target' <- case previous es of
+                Just p -> do
+                  t <- Store.getVerified st p
+                  pure $ case t of
+                    Right tm -> previousChecked es (const (Set.toAscList (memEdges tm)))
+                    Left _ -> Just p
+                Nothing -> pure Nothing
+              case target' of
+                Nothing -> pure (Walk (reverse ((i, m) : acc)) Complete)
+                Just next -> go ((i, m) : acc) (k - 1) next

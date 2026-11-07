@@ -88,6 +88,17 @@ episodeTests =
             w <- right =<< readLog env n 10
             map fst (walkEntries w) @?= [c, b, a]
             walkEnd w @?= Complete,
+        testCase "a memory with one derived_from edge to a follows log is not an episode of that log" $
+          withOpsEnv $ \_ env -> do
+            log' <- right (mkName "agent/episodes")
+            proj <- right (mkName "agent/project")
+            _ <- right =<< appendEpisode env log' (note "a")
+            b <- right =<< appendEpisode env log' (note "b")
+            p <- right =<< addMemory env (newMem "project" "claude" (Set.singleton (Edge DerivedFrom b)) "a project")
+            _ <- right =<< setRefTo env proj MustBeAbsent p
+            w <- right =<< readLog env proj 10
+            map fst (walkEntries w) @?= [p]
+            walkEnd w @?= Complete,
         testCase "a log that GC knows is kept whole, a loose memory is not" $
           withOpsEnv $ \_ env -> do
             n <- right (mkName "agent/episodes")

@@ -242,8 +242,17 @@ longLogCases =
       testCase "a chain of follows edges is a log" $ do
         let g = build [(a, []), (b, [(Follows, a)]), (c, [(Follows, b), (DerivedFrom, e)]), (e, [])]
             fs = check defaultCheckOptions {longLog = 2} (inputs g Map.empty (held [c, e]) Set.empty)
+        [(findingKind x, findingIds x) | x <- fs] @?= [(LongLog, [c])],
+      testCase "a project with one derived_from edge to a follows log is not that log" $ do
+        -- p has one piece of evidence: episode c of the log c-b-a. It is a
+        -- fact, and the log does not become its history.
+        let g = build [(a, []), (b, [(Follows, a)]), (c, [(Follows, b)]), (p, [(DerivedFrom, c)])]
+            fs = check defaultCheckOptions {longLog = 1} (inputs g Map.empty (held [p, c]) Set.empty)
+        -- c is covered by p as evidence, so a and b are the two that count.
         [(findingKind x, findingIds x) | x <- fs] @?= [(LongLog, [c])]
     ]
+  where
+    p = nid 20
 
 episodeCases :: TestTree
 episodeCases =
