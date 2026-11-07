@@ -2,7 +2,8 @@
 
 module ConfigTests (configTests) where
 
-import Akyuu.Config (Config (cfgAgent, cfgEmbed, cfgFile, cfgNotes, cfgParallel, cfgPolicyRef, cfgRelated, cfgRoot, cfgTiersRef), ConfigError (ConfigInvalid, UnknownProfile), EmbedSettings (esArgs, esCommand, esCommandEnv, esKey, esMin, esProfile, esQueryPrefix, esSource, esTimeout), FileConfig (fcProfiles), Profile (prArgs, prKey), Source (Default, FromEnv, FromFile), Sourced (Sourced), expandHome, parseConfigText, parseLegacy, resolve)
+import Akyuu.Config (Config (cfgAgent, cfgEmbed, cfgFile, cfgNotes, cfgParallel, cfgPolicyRef, cfgRelated, cfgRoot, cfgSourceMcp, cfgSourceRoots, cfgTiersRef), ConfigError (ConfigInvalid, UnknownProfile), EmbedSettings (esArgs, esCommand, esCommandEnv, esKey, esMin, esProfile, esQueryPrefix, esSource, esTimeout), FileConfig (fcProfiles), Profile (prArgs, prKey), Source (Default, FromEnv, FromFile), Sourced (Sourced, sValue), expandHome, parseConfigText, parseLegacy, resolve)
+import Akyuu.Source (Root (Root))
 import Data.Either (isLeft)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -114,6 +115,32 @@ resolveCases =
         c <- ok (resolve [("AKYUU_TOPIC_RELATED", "maybe")] Nothing Nothing)
         cfgRelated c @?= Sourced True Default
         assertBool "note" (any ("AKYUU_TOPIC_RELATED" `T.isInfixOf`) (cfgNotes c)),
+      testCase "no source roots by default, and the MCP tool for sources is off" $ do
+        c <- ok (resolve [] Nothing Nothing)
+        cfgSourceRoots c @?= Sourced [] Default
+        cfgSourceMcp c @?= Sourced False Default,
+      testCase "the [source] table sets the roots and the MCP flag, and ~ expands" $ do
+        fc <- parsed "[source]\nmcp = true\nroots = [{ format = \"claude-code\", path = \"~/.claude/projects\" }, { format = \"claude-code\", path = \"/arc/claude\" }]\n"
+        c <- ok (resolve [("HOME", "/home/me")] (Just ("/c.toml", fc)) Nothing)
+        cfgSourceMcp c @?= Sourced True (FromFile "/c.toml")
+        cfgSourceRoots c @?= Sourced [Root "claude-code" "/home/me/.claude/projects", Root "claude-code" "/arc/claude"] (FromFile "/c.toml"),
+      testCase "[[source.roots]] tables work too" $ do
+        fc <- parsed "[[source.roots]]\nformat = \"claude-code\"\npath = \"/a\"\n\n[[source.roots]]\nformat = \"claude-code\"\npath = \"/b\"\n"
+        c <- ok (resolve [] (Just ("/c.toml", fc)) Nothing)
+        map (\(Root _ p) -> p) (sValue (cfgSourceRoots c)) @?= ["/a", "/b"],
+      testCase "a [source] table with only the flag has no roots" $ do
+        fc <- parsed "[source]\nmcp = false\n"
+        c <- ok (resolve [] (Just ("/c.toml", fc)) Nothing)
+        cfgSourceMcp c @?= Sourced False (FromFile "/c.toml")
+        cfgSourceRoots c @?= Sourced [] Default,
+      testCase "a root with a format that akyuu does not know is refused" $
+        case parseConfigText "[source]\nroots = [{ format = \"nope\", path = \"/x\" }]\n" of
+          Left es -> assertBool "names the setting" (any ("source.roots" `T.isInfixOf`) es)
+          Right _ -> assertFailure "expected an error",
+      testCase "a root with an empty path is refused" $
+        case parseConfigText "[source]\nroots = [{ format = \"claude-code\", path = \"  \" }]\n" of
+          Left es -> assertBool "names the setting" (any ("source.roots" `T.isInfixOf`) es)
+          Right _ -> assertFailure "expected an error",
       testCase "the profile of the file is used, with its defaults filled in" $ do
         c <- ok =<< withFull []
         e <- maybe (assertFailure "no profile") pure (cfgEmbed c)

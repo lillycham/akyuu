@@ -107,8 +107,12 @@
       });
 
       checks = forAllSystems (pkgs: {
-        # The unit tests, in the Nix sandbox.
-        tests = withTests pkgs;
+        # The unit tests, in the Nix sandbox. The tests of provenance read an
+        # archived transcript with zstd, so zstd is a tool of the test run.
+        # Without it those tests print "skipped" and pass.
+        tests = pkgs.haskell.lib.overrideCabal (withTests pkgs) (drv: {
+          testToolDepends = (drv.testToolDepends or [ ]) ++ [ pkgs.zstd ];
+        });
         # The backup script on a small store: the copy, a restore, a second
         # snapshot that links to the first, and the keep limit.
         backup = pkgs.runCommand "akyuu-backup-check"
@@ -202,11 +206,14 @@
       devShells = forAllSystems (pkgs: {
         default = pkgs.haskellPackages.shellFor {
           packages = _: [ (withTests pkgs) ];
-          nativeBuildInputs = with pkgs.haskellPackages; [
-            cabal-install
-            haskell-language-server
-            ormolu
-          ];
+          nativeBuildInputs =
+            (with pkgs.haskellPackages; [
+              cabal-install
+              haskell-language-server
+              ormolu
+            ])
+            # The tests of provenance read an archived transcript with zstd.
+            ++ [ pkgs.zstd ];
         };
       });
     };

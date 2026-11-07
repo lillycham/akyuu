@@ -11,6 +11,10 @@
 -- > tiers-ref = "policy/tiers"
 -- > agent = "me"
 -- >
+-- > [source]
+-- > mcp = false
+-- > roots = [{ format = "claude-code", path = "~/.claude/projects" }]
+-- >
 -- > [embed]
 -- > profile = "nomic"
 -- >
@@ -59,6 +63,7 @@ module Akyuu.Config
   )
 where
 
+import Akyuu.Source (Root (Root), knownFormats)
 import Akyuu.Tier (defaultPolicyRef, defaultTiersRef, policyRefVar, tiersRefVar)
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, try)
@@ -146,6 +151,13 @@ data Config = Config
     -- | Namespaces whose topics are parallel instances of one kind
     -- ('Akyuu.Related.cfgParallel'), without a trailing slash.
     cfgParallel :: Sourced [Text],
+    -- | The folders that hold agent transcripts, for provenance
+    -- ("Akyuu.Source"). Empty by default: akyuu does not guess where a
+    -- person keeps them.
+    cfgSourceRoots :: Sourced [Root],
+    -- | Whether the MCP server offers @source_show@. Off by default, because
+    -- it hands text from the transcripts of one agent to another.
+    cfgSourceMcp :: Sourced Bool,
     -- | 'Nothing' when search by meaning is off.
     cfgEmbed :: Maybe EmbedSettings,
     -- | Things to tell the person: unknown keys, values that were left out,
@@ -186,6 +198,8 @@ data FileConfig = FileConfig
     fcAgent :: Maybe Text,
     fcRelated :: Maybe Bool,
     fcParallel :: Maybe [Text],
+    fcSourceRoots :: Maybe [(Text, Text)],
+    fcSourceMcp :: Maybe Bool,
     fcProfile :: Maybe Text,
     fcProfiles :: Map Text Profile
   }
@@ -210,6 +224,12 @@ data TopicTable = TopicTable (Maybe Bool) (Maybe [Text])
 -- | The @[embed]@ table.
 data EmbedTable = EmbedTable (Maybe Text) (Map Text Profile)
 
+-- | The @[source]@ table: the flag for the MCP tool, and the roots.
+data SourceTable = SourceTable (Maybe Bool) (Maybe [RootEntry])
+
+-- | One item of @source.roots@: a format and a path, as written.
+data RootEntry = RootEntry Text Text
+
 -- | A value of @args@: a string, a number or a boolean, as text.
 newtype Arg = Arg Text
 
@@ -221,10 +241,29 @@ instance FromValue FileConfig where
     agent <- optKey "agent"
     TopicTable related parallel <- fromMaybe (TopicTable Nothing Nothing) <$> optKey "topic"
     EmbedTable profile profiles <- fromMaybe (EmbedTable Nothing Map.empty) <$> optKey "embed"
-    pure (FileConfig root policy tiers agent related parallel profile profiles)
+    SourceTable sourceMcp sourceRoots <- fromMaybe (SourceTable Nothing Nothing) <$> optKey "source"
+    pure
+      ( FileConfig
+          root
+          policy
+          tiers
+          agent
+          related
+          parallel
+          (map (\(RootEntry f p) -> (f, p)) <$> sourceRoots)
+          sourceMcp
+          profile
+          profiles
+      )
 
 instance FromValue TopicTable where
   fromValue = parseTableFromValue (TopicTable <$> optKey "related" <*> optKey "parallel")
+
+instance FromValue SourceTable where
+  fromValue = parseTableFromValue (SourceTable <$> optKey "mcp" <*> optKey "roots")
+
+instance FromValue RootEntry where
+  fromValue = parseTableFromValue (RootEntry <$> reqKey "format" <*> reqKey "path")
 
 instance FromValue EmbedTable where
   fromValue = parseTableFromValue (EmbedTable <$> optKey "profile" <*> (fromMaybe Map.empty <$> optKey "profiles"))
@@ -256,10 +295,15 @@ instance FromValue Arg where
 parseConfigText :: Text -> Either [Text] (FileConfig, [Text])
 parseConfigText t = case decode t of
   Failure es -> Left (map T.pack es)
-  Success ws fc -> case concatMap check (Map.toList (fcProfiles fc)) of
+  Success ws fc -> case concatMap check (Map.toList (fcProfiles fc)) <> concatMap checkRoot (zip [1 :: Int ..] (fromMaybe [] (fcSourceRoots fc))) of
     [] -> Right (fc, map T.pack ws)
     es -> Left es
   where
+    checkRoot (i, (format, path)) =
+      [ "source.roots[" <> T.pack (show i) <> "].format must be one of: " <> T.intercalate ", " knownFormats
+      | format `notElem` knownFormats
+      ]
+        <> ["source.roots[" <> T.pack (show i) <> "].path must not be empty" | T.null (T.strip path)]
     check (n, p) =
       [ "embed.profiles." <> n <> ".min must be from -1 to 1"
       | Just m <- [prMin p],
@@ -382,6 +426,8 @@ resolve env file legacy = do
         cfgAgent = textSetting "AKYUU_AGENT" fcAgent "agent",
         cfgRelated = relatedSetting,
         cfgParallel = parallelSetting,
+        cfgSourceRoots = sourceRootsSetting,
+        cfgSourceMcp = sourceMcpSetting,
         cfgEmbed = embed,
         cfgNotes = numberNotes <> relatedNotes
       }
@@ -418,6 +464,17 @@ resolve env file legacy = do
         ((\v -> Sourced (namespaces (T.splitOn "," (T.pack v))) (FromEnv "AKYUU_TOPIC_PARALLEL")) <$> nonEmpty "AKYUU_TOPIC_PARALLEL")
           <|> (file >>= \(p, fc) -> (\v -> Sourced (namespaces v) (FromFile p)) <$> fcParallel fc)
     namespaces = filter (not . T.null) . map (T.dropWhileEnd (== '/') . T.strip)
+
+    -- The settings of provenance. Both come from the file only: the roots are
+    -- a list, and a flag that opens transcripts to other agents belongs in a
+    -- file that a person can read, not in an environment.
+    sourceRootsSetting =
+      fromMaybe (Sourced [] Default) $
+        file >>= \(p, fc) ->
+          (\rs -> Sourced [Root f (expandHome home (T.unpack (T.strip path))) | (f, path) <- rs] (FromFile p)) <$> fcSourceRoots fc
+    sourceMcpSetting =
+      fromMaybe (Sourced False Default) $
+        file >>= \(p, fc) -> (\b -> Sourced b (FromFile p)) <$> fcSourceMcp fc
 
     -- The variables of the older way: the environment, with embed.env under
     -- it. A variable of the environment wins.

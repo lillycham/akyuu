@@ -86,6 +86,7 @@ library
                    , Akyuu.Render
                    , Akyuu.MCP
                    , Akyuu.Seed
+                   , Akyuu.Source
                    , Akyuu.Web.Model
                    , Akyuu.Web.Read
                    , Akyuu.Web.Page
@@ -129,6 +130,8 @@ test-suite akyuu-test
                     , RefsTests
                     , StoreTests
                     , SeedTests
+                    , SourceCliTests
+                    , SourceTests
                     , SupersedeTests
                     , WebTests
                     , Support
@@ -143,6 +146,8 @@ test-suite akyuu-test
                     , optparse-applicative
                     , aeson
                     , http-types
+                    , process
+                    , temporary
                     , wai
                     , sqlite-simple
                     , tasty

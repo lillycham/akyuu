@@ -37,8 +37,22 @@
 - An evaluation harness for the CLI and MCP, with isolated fixture stores
   and model-free checks of the agent scenarios.
 
+- Provenance: a memory can point at the part of an agent session that it came
+  from (docs/provenance.md). A pointer is a memory of kind `source` with a
+  few `key: value` lines, so the store format does not change. `source add`
+  makes one, `source show` prints the records of the session around its time,
+  and `source verify` says where the session is. Transcripts are found under
+  the new `[source] roots` of the config file, as the agent's own files or as
+  an archive (`<session>.jsonl.zst`, read with `zstd`). Only the Claude Code
+  format is read so far. `[source] mcp` is reserved for an MCP tool, which does
+  not exist yet.
+
 ### Fixed
 
+- A memory with one `derived-from` edge to an episode that has a `follows`
+  edge is no longer read as an episode of an old log. Before, a project that
+  derived from one note showed the whole log of that note as its own history,
+  and `check` reported it as a long log.
 - Parallel namespaces require a link or a mention for related topics.
   A high cosine score cannot bypass this requirement.
 - Related-topic statistics compute each vector's norm once and do not retain

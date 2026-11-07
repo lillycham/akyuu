@@ -140,6 +140,43 @@ episodes with one *derived-from* edge; it is still read.)
 	Print the sources of a summary, newest first, whole: the exact words that it
 	stands for.
 
+## Sources
+
+A _pointer_ says which agent session a memory came from, and when. It is a
+memory of kind *source* whose body is a few *key: value* lines (*format*,
+*session*, *at*, and optionally *from*, *to* and *hint*), so the store does not
+change. A note or a fact links to it with a *derived-from* edge. The
+transcripts are not in the store. They are files that an agent keeps, or an
+archive of them, found under the *source.roots* of the config file. A session
+that is not on this machine is not an error of the store: the commands say
+that it is not available.
+
+*source add* [*--format* _format_] *--session* _id_ [*--at* _time_] [*--from* _id_] [*--to* _id_] [*--hint* _path_] [*--agent* _text_]
+	Make a pointer and print its id. The format is *claude-code* (the only one
+	so far). The session is the id that the transcript file is named for. The
+	time is like *2026-11-01T19:00:58Z*, and is now if it is left out. *--from*
+	and *--to* are the ids of the first and the last record, if something
+	knows them. *--hint* is a path below a root, for a person to read; it never
+	holds a home directory and is not used to find the file. The agent is
+	*--agent*, then *$AKYUU_AGENT*, then *agent* in the config file. Link a
+	memory to the pointer with *--derived-from* when you *add* it.
+
+*source show* _id_ [*--before* _n_] [*--after* _n_]
+	Print the records of the session around the time of the pointer: _n_ (6)
+	before it and _n_ (2) after it, or the whole range if the pointer has both
+	*--from* and *--to*. _id_ is a pointer, or a memory with a *derived-from*
+	link to one. Each record has its time, its speaker and its text; long
+	tool output is cut. The session is looked for under the roots: the
+	agent's own files first, then an archive, and of an archive the newest
+	version. A file that is compressed with zstd is read with the *zstd*
+	command, which must be on the PATH. If the session is not found, the
+	output says so and the exit status is 1.
+
+*source verify* _id_
+	Say where the session of the pointer is (the file and whether it is the
+	agent's own or an archive), or that it is not available. Exit status 1 if
+	it is not.
+
 ## Context
 
 The _manifest_ is the memory of the ref *policy/tiers* (or *--manifest*, or
@@ -294,6 +331,10 @@ agent = "me"
 related = true
 parallel = ["notes/recipes"]
 
+[source]
+mcp = false
+roots = [{ format = "claude-code", path = "~/.claude/projects" }]
+
 [embed]
 profile = "nomic"
 
@@ -321,6 +362,15 @@ that are linked or mentioned. *topic.parallel* is a list of namespaces whose
 topics are parallel instances of one kind (for example *notes/recipes*):
 such topics look alike because they share a form, so two of them are related
 only if they are linked or mentioned. The default is no namespace.
+
+*source.roots* is a list of folders that hold agent transcripts, each with the
+_format_ of the transcripts in it and a _path_ (*~/* at the start is the home
+directory). A root is searched below its folders; it can be the agent's own
+folder or an archive of it. There is no default: akyuu does not guess where a
+person keeps them. *source.mcp* (false by default) is for offering *source
+show* to agents over MCP. That tool is not there yet, so for now the setting
+changes nothing. It is off by default because the tool would hand the text of
+one agent's sessions to another.
 
 An embedding profile turns search by meaning on. Its *command*, run by *sh -c*,
 reads a text on its standard input and prints a vector as JSON. *key* names

@@ -51,7 +51,7 @@ where
 import Akyuu.Cache (Correction (AddedByMeaning, MeaningUnavailable, PrefixOf, SpelledAs), SyncReport (added, removed), snippetClose, snippetOpen)
 import Akyuu.Check (Finding (findingIds, findingKind, findingRelated, findingSeverity, findingWhy), kindName, severityName)
 import Akyuu.Compare (Comparison (cmpOnlyA, cmpOnlyB, cmpShared), canDropA, canDropB)
-import Akyuu.Config (Config (cfgAgent, cfgEmbed, cfgFile, cfgNotes, cfgParallel, cfgPolicyRef, cfgRelated, cfgRoot, cfgTiersRef), EmbedSettings (esArgs, esCommand, esDocumentPrefix, esKey, esMaxChars, esMin, esProfile, esQueryPrefix, esSource, esTimeout), Source (Default), Sourced (sSource, sValue), sourceText)
+import Akyuu.Config (Config (cfgAgent, cfgEmbed, cfgFile, cfgNotes, cfgParallel, cfgPolicyRef, cfgRelated, cfgRoot, cfgSourceMcp, cfgSourceRoots, cfgTiersRef), EmbedSettings (esArgs, esCommand, esDocumentPrefix, esKey, esMaxChars, esMin, esProfile, esQueryPrefix, esSource, esTimeout), Source (Default), Sourced (sSource, sValue), sourceText)
 import Akyuu.Episode (Walk (Walk), WalkEnd (Complete, Interrupted, Limited))
 import Akyuu.Error (describe, describeParse)
 import Akyuu.Error qualified as Error
@@ -66,6 +66,7 @@ import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour 
 import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Akyuu.Review (Review (reviewAgent, reviewAt, reviewNote))
 import Akyuu.SearchEval (Case (caseCategory, caseGuess, caseQuery), passes)
+import Akyuu.Source (Root (rootFormat, rootPath))
 import Data.Aeson (Value, object, (.=))
 import Data.List (sort)
 import Data.Map.Strict (Map)
@@ -297,8 +298,14 @@ configLines c =
          sourced "tiers-ref" (cfgTiersRef c),
          sourced "agent" (cfgAgent c),
          setting "topic.related" (if sValue (cfgRelated c) then "true" else "false", sSource (cfgRelated c)),
-         setting "topic.parallel" (if null (sValue (cfgParallel c)) then "(none)" else T.intercalate ", " (sValue (cfgParallel c)), sSource (cfgParallel c))
+         setting "topic.parallel" (if null (sValue (cfgParallel c)) then "(none)" else T.intercalate ", " (sValue (cfgParallel c)), sSource (cfgParallel c)),
+         setting "source.mcp" (if sValue (cfgSourceMcp c) then "true" else "false", sSource (cfgSourceMcp c))
        ]
+    <> case sValue (cfgSourceRoots c) of
+      [] -> ["source.roots = (none)  (" <> sourceText (sSource (cfgSourceRoots c)) <> ")"]
+      roots ->
+        ("source.roots  (" <> sourceText (sSource (cfgSourceRoots c)) <> ")")
+          : ["  " <> rootFormat r <> " " <> T.pack (rootPath r) | r <- roots]
     <> case cfgEmbed c of
       Nothing -> ["embed: off (no profile)"]
       Just e ->

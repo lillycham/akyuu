@@ -11,6 +11,7 @@ module Akyuu.CLI
     Cli (..),
     Command (..),
     MemoryArgs (..),
+    SourceArgs (..),
     BodySource (..),
     GetTarget (..),
     Check (..),
@@ -44,13 +45,14 @@ import Akyuu.Id qualified as Id
 import Akyuu.Levels (LogView (Plain, Resolution, Todo), defaultKeep, defaultSize)
 import Akyuu.MCP qualified as MCP
 import Akyuu.Memory (renderMemory)
-import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLevels, readLog, readLogSince, readRef, refLinksOf, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, statusOf, summariseLog, supersedeMemory, unfoldMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), SearchMode (Fused, MeaningOnly, TextOnly), addMemory, addUnderRef, amendMemory, appendEpisode, checkField, checkStore, compareMemories, contextFor, dryRunGC, embedMissing, evalSearch, getMemory, initStore, listPinned, listRefValues, listReviewed, neighboursOf, noteEpisode, parseDuration, parseIdSpec, pinMemory, pruneEmbeddings, readLevels, readLog, readLogSince, readRef, refLinksOf, reindexCache, resolveId, resolvePolicyRef, resolveRoot, resolveTiersRef, reviewPair, runGC, searchMemoriesMode, setRefTo, sourcePointers, statusOf, summariseLog, supersedeMemory, unfoldMemory, unpinMemory, unreviewPair, verifyOk, verifyStore, withEnv)
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Related qualified as Related
 import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, episodeLines, evalLines, findingJSON, findingLines, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refLinkLines, refListLines, reviewLines, runLines, searchLinesWith, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines, viewLines)
 import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
+import Akyuu.Source qualified as Source
 import Akyuu.Store qualified as Store
 import Akyuu.Tier (Place (Place))
 import Akyuu.Web.Page qualified as Page
@@ -70,7 +72,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
-import Data.Time (NominalDiffTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, defaultTimeLocale, getCurrentTime, parseTimeM)
 import Data.Version (showVersion)
 import Options.Applicative (Alternative (many, some, (<|>)), CompletionResult (execCompletion), Parser, ParserInfo, ParserResult (CompletionInvoked, Failure, Success), ReadM, argument, auto, command, defaultPrefs, eitherReader, execParserPure, flag', footer, fullDesc, help, helper, hsubparser, info, infoOption, long, metavar, option, optional, progDesc, readerError, renderFailure, short, showDefault, showDefaultWith, strArgument, strOption, switch, value, (<**>))
 import Paths_akyuu qualified as Pkg
@@ -213,7 +215,29 @@ data Command i
   | -- | Show the settings in effect, and where each came from. It needs no
     -- store, so it runs before one is opened.
     ShowConfig
+  | -- | Make a pointer to part of an agent session ("Akyuu.Source").
+    SourceAdd SourceArgs
+  | -- | Show the records of the session that a memory came from: the memory,
+    -- and how many records to show before the time and after it.
+    SourceShow i Int Int
+  | -- | Say where the session of a memory's pointer is, or that it is not
+    -- on this machine.
+    SourceVerify i
   deriving (Eq, Show, Functor, Foldable, Traversable)
+
+-- | The options of @source add@: the transcript format, the session, the time
+-- ('Nothing' means now), the first and last record ids, a hint, and the agent
+-- that writes the memory ('Nothing' means the configured agent).
+data SourceArgs = SourceArgs
+  { saFormat :: Text,
+    saSession :: Text,
+    saAt :: Maybe UTCTime,
+    saFrom :: Maybe Text,
+    saTo :: Maybe Text,
+    saHint :: Maybe Text,
+    saAgent :: Maybe Text
+  }
+  deriving (Eq, Show)
 
 -- Parsing --------------------------------------------------------------
 
@@ -291,6 +315,7 @@ commandParser =
       <> cmd "log" logP "Print the episodes of a log, newest first."
       <> cmd "summarise" summariseP "Record a summary of the oldest stretch of a log that has none."
       <> cmd "unfold" unfoldP "Print the sources of a summary, newest first, whole."
+      <> cmd "source" sourceP "Pointers to the agent sessions that memories came from: make one, show the session around it, check that it can be read."
       <> cmd "context" contextP "Print the memories of a tier (the profile, the policy and so on) in one call, for the start of a session."
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
       <> cmd "init" (pure Init) "Start a store: make the root, and write a short policy for agents and a manifest of the tiers. Existing refs are kept."
@@ -335,6 +360,29 @@ commandParser =
         <*> optional (strOption (long "append" <> metavar "TEXT" <> help "Text to add after the body."))
     amendArgs n e a from to app =
       Amend n e a (maybe [] (\f -> [Amend.Replace f (maybe "" id to)]) from <> maybe [] (pure . Amend.Append) app)
+    sourceP =
+      hsubparser $
+        cmd "add" sourceAddP "Make a pointer to part of an agent session, and print its id. Link a memory to it with --derived-from."
+          <> cmd "show" sourceShowP "Show the records of the session that a memory (a pointer, or a memory that derives from one) came from."
+          <> cmd "verify" (SourceVerify <$> argument idReader (metavar "ID")) "Say where the session of a pointer is on this machine, or that it is not available."
+    sourceAddP =
+      fmap SourceAdd $
+        SourceArgs
+          <$> strOption (long "format" <> metavar "FORMAT" <> value "claude-code" <> showDefault <> help "The transcript format of the session.")
+          <*> strOption (long "session" <> metavar "ID" <> help "The session: the id that its file is named for.")
+          <*> optional (option timeReader (long "at" <> metavar "TIME" <> help "The time the memory is about, like 2026-11-01T19:00:58Z. The default is now."))
+          <*> optional (strOption (long "from" <> metavar "ID" <> help "The id of the first record, if you know it."))
+          <*> optional (strOption (long "to" <> metavar "ID" <> help "The id of the last record, if you know it."))
+          <*> optional (strOption (long "hint" <> metavar "PATH" <> help "A path below the root, for a person to read. It is not used to find the file."))
+          <*> optional (option (via (checkField "agent")) (long "agent" <> metavar "TEXT" <> help "The agent that writes the memory. The default is $AKYUU_AGENT, then agent."))
+    sourceShowP =
+      SourceShow
+        <$> argument idReader (metavar "ID")
+        <*> option auto (long "before" <> metavar "N" <> value 6 <> showDefault <> help "How many records to show before the time.")
+        <*> option auto (long "after" <> metavar "N" <> value 2 <> showDefault <> help "How many records to show after the time.")
+    timeReader =
+      eitherReader $ \s ->
+        maybe (Left "expected a time like 2026-11-01T19:00:58Z") Right (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" s)
     refP =
       hsubparser $
         cmd "get" refGetP "Print the id that a ref points to."
@@ -563,6 +611,42 @@ withNewline bs
   | BS.null bs || BS.last bs == 10 = bs
   | otherwise = bs <> BS.singleton 10
 
+-- | A line for a pointer: its id, the format and the session, and the time.
+sourceHeader :: (Id, Source.Pointer) -> Text
+sourceHeader (pid, p) =
+  "source "
+    <> T.take 19 (Id.render pid)
+    <> ": "
+    <> Source.pointerFormat p
+    <> " session "
+    <> Source.pointerSession p
+    <> ", around "
+    <> T.pack (show (Source.pointerAt p))
+
+-- | Where a file is, for a person.
+locatedText :: Source.Located -> Text
+locatedText l = case Source.locatedWhere l of
+  Source.Live -> "live file " <> T.pack (Source.locatedPath l)
+  Source.Archived v -> "archive, version " <> T.pack (show v) <> ": " <> T.pack (Source.locatedPath l)
+
+-- | What @source show@ prints for one pointer: the header, where the records
+-- were read, and the records; or why the session is not available.
+sourceShowLines :: ((Id, Source.Pointer), Either Text Source.Shown) -> [Text]
+sourceShowLines (ip, r) =
+  sourceHeader ip : case r of
+    Left why -> ["  " <> why]
+    Right s -> ("  read from " <> locatedText (Source.shownLocated s)) : "" : concatMap (\rec -> [Source.renderRecord rec, ""]) (Source.shownRecords s)
+
+-- | What @source verify@ prints for one pointer: where its session is, or that
+-- it is not available.
+sourceVerifyLine :: [Source.Root] -> ((Id, Source.Pointer), [Source.Located]) -> Text
+sourceVerifyLine roots (ip@(_, p), found) = case found of
+  (best : rest) -> sourceHeader ip <> ": " <> locatedText best <> (if null rest then "" else " (and " <> T.pack (show (length rest)) <> " more)")
+  []
+    | not (any ((== Source.pointerFormat p) . Source.rootFormat) roots) ->
+        sourceHeader ip <> ": not available: no root is set for the format " <> Source.pointerFormat p <> ". Add one to [source] in the config file."
+    | otherwise -> sourceHeader ip <> ": not available on this machine"
+
 -- | Run one command against an open store. 'Mcp' takes over stdin and
 -- stdout until stdin ends, and then prints nothing more.
 runCommand :: Env -> Command Id -> IO (Either AkyuuError Output)
@@ -613,6 +697,25 @@ runCommand env c = runExceptT $ case c of
     i <- ExceptT (summariseLog env n level ids NewMemory {newKind = kind, newAgent = agent, newEdges = Set.empty, newBody = b, newAboutRefs = Set.empty})
     pure (ok [Id.render i])
   Unfold i -> ok . concatMap (episodeLines True) <$> ExceptT (unfoldMemory env i)
+  SourceAdd a -> do
+    cfg <- config
+    now <- liftIO getCurrentTime
+    p <- either (throwE . BadInput) pure (Source.mkPointer (saFormat a) (saSession a) (fromMaybe now (saAt a)) (saFrom a) (saTo a) (saHint a))
+    let who = fromMaybe (Config.sValue (Config.cfgAgent cfg)) (saAgent a)
+    i <- ExceptT (addMemory env NewMemory {newKind = Source.sourceKind, newAgent = who, newEdges = Set.empty, newBody = Source.renderPointer p, newAboutRefs = Set.empty})
+    pure (ok [Id.render i])
+  SourceShow i before after -> do
+    cfg <- config
+    ps <- ExceptT (sourcePointers env i)
+    let roots = Config.sValue (Config.cfgSourceRoots cfg)
+    shown <- liftIO (mapM (\(pid, p) -> (,) (pid, p) <$> Source.showPointer roots (Source.Window before after) p) ps)
+    pure ((ok (concatMap sourceShowLines shown)) {outOk = all (either (const False) (const True) . snd) shown})
+  SourceVerify i -> do
+    cfg <- config
+    ps <- ExceptT (sourcePointers env i)
+    let roots = Config.sValue (Config.cfgSourceRoots cfg)
+    found <- liftIO (mapM (\(pid, p) -> (,) (pid, p) <$> Source.locate roots p) ps)
+    pure ((ok (map (sourceVerifyLine roots) found)) {outOk = all (not . null . snd) found})
   Context tier extra given cwd budget page -> do
     manifest <- liftIO (resolveTiersRef given)
     place <- liftIO (placeFor cwd)

@@ -93,6 +93,7 @@ start of each session, and adds a status line
 | Test akyuu with an agent that has no memory | [eval/README.md](eval/README.md) |
 | Search by meaning, models, evaluation | [docs/embeddings.md](docs/embeddings.md) |
 | Logs and forgetting | [docs/episodes.md](docs/episodes.md) |
+| Where a memory came from: pointers to agent sessions | [docs/provenance.md](docs/provenance.md) |
 | Finding duplicates, forks, stale links | [docs/check.md](docs/check.md), [docs/judgement.md](docs/judgement.md) |
 | Tiers, places, notes, hooks for agents | [docs/hooks.md](docs/hooks.md) |
 | The web view | [docs/wiki-view.md](docs/wiki-view.md), [docs/webui-tabs.md](docs/webui-tabs.md) |

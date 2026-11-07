@@ -24,6 +24,7 @@ module Akyuu.Ops
     addMemory,
     addUnderRef,
     getMemory,
+    sourcePointers,
     missing,
     supersedeMemory,
     amendMemory,
@@ -131,6 +132,7 @@ import Akyuu.Related qualified as Related
 import Akyuu.Review (Review (Review))
 import Akyuu.Review qualified as Review
 import Akyuu.SearchEval qualified as SearchEval
+import Akyuu.Source (Pointer, parsePointer, sourceKind)
 import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), openStore)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (ReviseError (ReviseFailed, ReviseRefused), SupersedeError (SupersedeRef), supersede, supersedeBy, supersedeFrom)
@@ -316,6 +318,25 @@ getMemory env i = runExceptT $ do
     Left (NotFound _) -> missing env i
     Left e -> throwE (StoreFailed e)
     Right m -> pure m
+
+-- | The pointers to agent sessions ("Akyuu.Source") that a memory has. If the
+-- memory is a pointer, it is the one. Otherwise they are the memories of kind
+-- @source@ that it derives from. A @derived-from@ target that is not there, or
+-- is not a pointer, is not one of them. It is an error if there are none, or
+-- if a pointer has a body that cannot be read.
+sourcePointers :: Env -> Id -> IO (Either AkyuuError [(Id, Pointer)])
+sourcePointers env i = runExceptT $ do
+  m <- ExceptT (getMemory env i)
+  candidates <-
+    if memKind m == sourceKind
+      then pure [(i, m)]
+      else do
+        let targets = [t | Edge DerivedFrom t <- Set.toAscList (memEdges m)]
+        found <- liftIO (mapM (\t -> fmap ((,) t) <$> getMemory env t) targets)
+        pure [(t, x) | Right (t, x) <- found, memKind x == sourceKind]
+  case candidates of
+    [] -> throwE (BadInput "this memory is not a pointer to a session, and has no derived-from link to one (see akyuu source add)")
+    _ -> either (throwE . BadInput) pure (traverse (\(t, x) -> (,) t <$> parsePointer (memBody x)) candidates)
 
 -- | Replace the memory of a ref with a new memory, and return its 'Id'.
 --
