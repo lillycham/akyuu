@@ -32,6 +32,7 @@ import RelatedTests (relatedTests)
 import ReviewTests (reviewTests)
 import SeedTests (seedTests)
 import SourceCliTests (sourceCliTests)
+import SourceHashTests (sourceHashTests)
 import SourceMcpTests (sourceMcpTests)
 import SourceTests (sourceTests)
 import StoreTests (storeTests)
@@ -53,7 +54,7 @@ main = do
   -- real embedding command would change the results and start a model.
   mapM_ unsetEnv ["AKYUU_EMBED_COMMAND", "AKYUU_EMBED_MODEL", "AKYUU_EMBED_MIN", "AKYUU_EMBED_TIMEOUT", "AKYUU_EMBED_MAX_CHARS", "AKYUU_EMBED_PROFILE", "AKYUU_EMBED_QUERY_PREFIX", "AKYUU_EMBED_DOCUMENT_PREFIX", "AKYUU_POLICY_REF", "AKYUU_TIERS_REF", "AKYUU_AGENT", "AKYUU_TOPIC_RELATED", "AKYUU_TOPIC_PARALLEL"]
   setEnv "AKYUU_CONFIG" "/nonexistent/akyuu-embed.env"
-  defaultMain $ testGroup "akyuu" [idTests, configTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, amendTests, compareTests, reviewTests, tierTests, topicTests, relatedTests, recallTests, embedTests, episodeTests, levelsTests, opsTests, topicOpsTests, cliTests, mcpTests, webTests, seedTests, sourceTests, sourceCliTests, sourceMcpTests]
+  defaultMain $ testGroup "akyuu" [idTests, configTests, graphTests, memoryTests, fsTests, storeTests, refsTests, cacheTests, supersedeTests, gcTests, queryTests, checkTests, amendTests, compareTests, reviewTests, tierTests, topicTests, relatedTests, recallTests, embedTests, episodeTests, levelsTests, opsTests, topicOpsTests, cliTests, mcpTests, webTests, seedTests, sourceTests, sourceCliTests, sourceMcpTests, sourceHashTests]
 
 idTests :: TestTree
 idTests =

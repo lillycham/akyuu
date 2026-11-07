@@ -19,10 +19,10 @@ mkDerivation {
   ];
   executableHaskellDepends = [ base ];
   testHaskellDepends = [
-    aeson base base16-bytestring bytestring containers directory
-    filelock filepath http-types optparse-applicative process
-    sqlite-simple tasty tasty-hunit tasty-quickcheck temporary text
-    time wai
+    aeson base base16-bytestring bytestring containers
+    cryptohash-sha256 directory filelock filepath http-types
+    optparse-applicative process sqlite-simple tasty tasty-hunit
+    tasty-quickcheck temporary text time wai
   ];
   homepage = "https://github.com/lillycham/akyuu";
   description = "A content-addressed memory store for AI agents";

@@ -48,7 +48,10 @@
   and pi, which has the same shape). With `[source] mcp = true`, `akyuu mcp` offers the
   tool `source_show` (the arguments are `id`, `before` and `after`) in every
   tool set. It is off by default, because it hands the text of one agent's
-  sessions to another.
+  sessions to another. `source add --hash` stores the SHA-256 of the records
+  from `--from` to `--to` after the strip rule of the archive tool engi, and
+  `source verify` says `hash intact` or `hash CHANGED`. akyuu runs `engi
+  strip` for the rule, so `engi` must be on the PATH for that.
 
 ### Fixed
 

@@ -131,6 +131,7 @@ test-suite akyuu-test
                     , StoreTests
                     , SeedTests
                     , SourceCliTests
+                    , SourceHashTests
                     , SourceMcpTests
                     , SourceTests
                     , SupersedeTests
@@ -141,6 +142,7 @@ test-suite akyuu-test
                     , base16-bytestring
                     , bytestring
                     , containers
+                    , cryptohash-sha256
                     , directory
                     , filelock
                     , filepath

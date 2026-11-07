@@ -49,7 +49,7 @@ import Akyuu.Ops (Env (envStore), IdSpec, NewMemory (NewMemory, newAboutRefs, ne
 import Akyuu.Query (SearchOptions (SearchOptions, searchFollow, searchHops, searchLimit), defaultSearchOptions)
 import Akyuu.Refs (Expected (MustBe, MustBeAbsent, Unchecked), Name, Ref (current), mkName, nameText)
 import Akyuu.Related qualified as Related
-import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, episodeLines, evalLines, findingJSON, findingLines, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refLinkLines, refListLines, reviewLines, runLines, searchLinesWith, sourceShowLines, sourceVerifyLine, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines, viewLines)
+import Akyuu.Render (compareJSON, compareLines, configLines, edgeName, embedLines, episodeLines, evalLines, findingJSON, findingLines, hashVerdictOk, hashVerdictText, heldBy, idLine, logLines, neighbourLines, pinLines, pinListLines, planLines, refLines, refLinkLines, refListLines, reviewLines, runLines, searchLinesWith, sourceShowLines, sourceVerifyLine, statusLines, syncLines, tierLinesWithin, tierPage, unpinLines, verifyLines, viewLines)
 import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Source qualified as Source
@@ -226,8 +226,9 @@ data Command i
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
 -- | The options of @source add@: the transcript format, the session, the time
--- ('Nothing' means now), the first and last record ids, a hint, and the agent
--- that writes the memory ('Nothing' means the configured agent).
+-- ('Nothing' means now), the first and last record ids, a hint, the agent
+-- that writes the memory ('Nothing' means the configured agent), and whether
+-- to store the hash of the span of records (@--hash@).
 data SourceArgs = SourceArgs
   { saFormat :: Text,
     saSession :: Text,
@@ -235,7 +236,8 @@ data SourceArgs = SourceArgs
     saFrom :: Maybe Text,
     saTo :: Maybe Text,
     saHint :: Maybe Text,
-    saAgent :: Maybe Text
+    saAgent :: Maybe Text,
+    saHash :: Bool
   }
   deriving (Eq, Show)
 
@@ -375,6 +377,7 @@ commandParser =
           <*> optional (strOption (long "to" <> metavar "ID" <> help "The id of the last record, if you know it."))
           <*> optional (strOption (long "hint" <> metavar "PATH" <> help "A path below the root, for a person to read. It is not used to find the file."))
           <*> optional (option (via (checkField "agent")) (long "agent" <> metavar "TEXT" <> help "The agent that writes the memory. The default is $AKYUU_AGENT, then agent."))
+          <*> switch (long "hash" <> help "Store the hash of the records from --from to --to, so that source verify can tell if they changed. It needs both ids, the session on this machine, and engi on the PATH.")
     sourceShowP =
       SourceShow
         <$> argument idReader (metavar "ID")
@@ -664,7 +667,15 @@ runCommand env c = runExceptT $ case c of
   SourceAdd a -> do
     cfg <- config
     now <- liftIO getCurrentTime
-    p <- either (throwE . BadInput) pure (Source.mkPointer (saFormat a) (saSession a) (fromMaybe now (saAt a)) (saFrom a) (saTo a) (saHint a))
+    p0 <- either (throwE . BadInput) pure (Source.mkPointer (saFormat a) (saSession a) (fromMaybe now (saAt a)) (saFrom a) (saTo a) (saHint a))
+    -- With --hash, the hash of the span comes from the file of the session as
+    -- it is now, with the strip rule applied by engi.
+    p <-
+      if saHash a
+        then do
+          h <- ExceptT (first BadInput <$> Source.hashPointer Source.engiStrip (Config.sValue (Config.cfgSourceRoots cfg)) p0)
+          either (throwE . BadInput) pure (Source.withSha256 h p0)
+        else pure p0
     let who = fromMaybe (Config.sValue (Config.cfgAgent cfg)) (saAgent a)
     i <- ExceptT (addMemory env NewMemory {newKind = Source.sourceKind, newAgent = who, newEdges = Set.empty, newBody = Source.renderPointer p, newAboutRefs = Set.empty})
     pure (ok [Id.render i])
@@ -679,7 +690,21 @@ runCommand env c = runExceptT $ case c of
     ps <- ExceptT (sourcePointers env i)
     let roots = Config.sValue (Config.cfgSourceRoots cfg)
     found <- liftIO (mapM (\(pid, p) -> (,) (pid, p) <$> Source.locate roots p) ps)
-    pure ((ok (map (sourceVerifyLine roots) found)) {outOk = all (not . null . snd) found})
+    -- A pointer that holds a hash, and whose session is here, is checked too:
+    -- the span of records is read again and compared with the hash.
+    checks <-
+      liftIO $
+        mapM
+          ( \((_, p), located) -> case Source.pointerSha256 p of
+              Just _ | not (null located) -> Just <$> Source.checkHash Source.engiStrip roots p
+              _ -> pure Nothing
+          )
+          found
+    pure
+      ( (ok (zipWith (\f verdict -> sourceVerifyLine roots f <> maybe "" hashVerdictText verdict) found checks))
+          { outOk = and (zipWith (\(_, located) verdict -> not (null located) && maybe True hashVerdictOk verdict) found checks)
+          }
+      )
   Context tier extra given cwd budget page -> do
     manifest <- liftIO (resolveTiersRef given)
     place <- liftIO (placeFor cwd)

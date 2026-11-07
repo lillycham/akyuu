@@ -16,12 +16,12 @@ import Data.Either (isLeft)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding (decodeUtf8)
+import Data.Text.Encoding (decodeUtf8, encodeUtf8)
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import OpsTests (withOpsEnv)
 import Options.Applicative (ParserResult (Failure, Success))
 import Support (nid, right)
-import System.Directory (createDirectoryIfMissing)
+import System.Directory (createDirectoryIfMissing, findExecutable)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -54,16 +54,19 @@ parseCases =
     "parse"
     [ testCase "source add takes a session and a time, and the format is claude-code" $ do
         c <- parsed ["source", "add", "--session", "s1", "--at", "2026-11-01T19:00:58Z"]
-        c @?= SourceAdd (SourceArgs "claude-code" "s1" (Just t0) Nothing Nothing Nothing Nothing),
+        c @?= SourceAdd (SourceArgs "claude-code" "s1" (Just t0) Nothing Nothing Nothing Nothing False),
       testCase "source add with every option" $ do
         c <- parsed ["source", "add", "--format", "claude-code", "--session", "s1", "--at", "2026-11-01T19:00:58Z", "--from", "u1", "--to", "u2", "--hint", "p/s1.jsonl", "--agent", "codex"]
-        c @?= SourceAdd (SourceArgs "claude-code" "s1" (Just t0) (Just "u1") (Just "u2") (Just "p/s1.jsonl") (Just "codex")),
+        c @?= SourceAdd (SourceArgs "claude-code" "s1" (Just t0) (Just "u1") (Just "u2") (Just "p/s1.jsonl") (Just "codex") False),
       testCase "source add without a time means now" $ do
         c <- parsed ["source", "add", "--session", "s1"]
-        c @?= SourceAdd (SourceArgs "claude-code" "s1" Nothing Nothing Nothing Nothing Nothing),
+        c @?= SourceAdd (SourceArgs "claude-code" "s1" Nothing Nothing Nothing Nothing Nothing False),
       testCase "source add takes the other formats" $ do
         c <- parsed ["source", "add", "--format", "codex", "--session", "s1"]
-        c @?= SourceAdd (SourceArgs "codex" "s1" Nothing Nothing Nothing Nothing Nothing),
+        c @?= SourceAdd (SourceArgs "codex" "s1" Nothing Nothing Nothing Nothing Nothing False),
+      testCase "source add --hash asks for the hash of the span" $ do
+        c <- parsed ["source", "add", "--session", "s1", "--from", "u1", "--to", "u2", "--hash"]
+        c @?= SourceAdd (SourceArgs "claude-code" "s1" Nothing (Just "u1") (Just "u2") Nothing Nothing True),
       testCase "source add needs a session" $ rejected ["source", "add"],
       testCase "source add refuses a time that is not a time" $ rejected ["source", "add", "--session", "s1", "--at", "yesterday"],
       testCase "source show takes an id, and shows 6 records before and 2 after" $ do
@@ -108,8 +111,12 @@ transcript =
 text :: Output -> Text
 text = decodeUtf8 . outBytes
 
+-- | The transcript with one word of its first record changed.
+changedTranscript :: B.ByteString
+changedTranscript = encodeUtf8 (T.replace "pick zstd" "pick gzip" (decodeUtf8 transcript))
+
 pointerArgs :: Text -> SourceArgs
-pointerArgs session = SourceArgs "claude-code" session (Just t0) Nothing Nothing Nothing Nothing
+pointerArgs session = SourceArgs "claude-code" session (Just t0) Nothing Nothing Nothing Nothing False
 
 -- | Run source add and read the id that it prints.
 addPointer :: Env -> SourceArgs -> IO Id
@@ -134,12 +141,12 @@ runCases =
           fmap (\p -> (pointerSession p, pointerAt p)) (parsePointer (memBody m)) @?= Right ("s1", t0),
       testCase "source add uses the agent that is given" $
         withOpsEnv $ \_ env -> do
-          m <- right =<< getMemory env =<< addPointer env (SourceArgs "claude-code" "s1" (Just t0) Nothing Nothing Nothing (Just "codex"))
+          m <- right =<< getMemory env =<< addPointer env (SourceArgs "claude-code" "s1" (Just t0) Nothing Nothing Nothing (Just "codex") False)
           memAgent m @?= "codex",
       testCase "source add without a time uses now" $
         withOpsEnv $ \_ env -> do
           before <- getCurrentTime
-          m <- right =<< getMemory env =<< addPointer env (SourceArgs "claude-code" "s1" Nothing Nothing Nothing Nothing Nothing)
+          m <- right =<< getMemory env =<< addPointer env (SourceArgs "claude-code" "s1" Nothing Nothing Nothing Nothing Nothing False)
           case parsePointer (memBody m) of
             Left e -> assertFailure (T.unpack e)
             Right p -> assertBool "within a minute of now" (abs (diffUTCTime (pointerAt p) before) < 60),
@@ -152,7 +159,7 @@ runCases =
             Right _ -> assertFailure "expected an error",
       testCase "source add refuses a format that is not known, and names the formats" $
         withOpsEnv $ \_ env -> do
-          r <- runCommand env (SourceAdd (SourceArgs "nope" "s1" (Just t0) Nothing Nothing Nothing Nothing))
+          r <- runCommand env (SourceAdd (SourceArgs "nope" "s1" (Just t0) Nothing Nothing Nothing Nothing False))
           case r of
             Left (BadInput msg) -> assertBool "names the formats" (all (`T.isInfixOf` msg) ["claude-code", "codex", "omp"])
             Left e -> assertFailure ("wrong error: " <> show e)
@@ -207,6 +214,39 @@ runCases =
             o <- right =<< runCommand env (SourceVerify pid)
             assertBool ("verify said: " <> T.unpack (text o)) (outOk o)
             assertBool "live" ("live" `T.isInfixOf` text o),
+      testCase "source add --hash needs both ids" $
+        withOpsEnv $ \_ env -> do
+          r <- runCommand env (SourceAdd (SourceArgs "claude-code" "s1" (Just t0) (Just "u1") Nothing Nothing Nothing True))
+          case r of
+            Left (BadInput msg) -> assertBool "says what is missing" ("from and to" `T.isInfixOf` msg)
+            Left e -> assertFailure ("wrong error: " <> show e)
+            Right _ -> assertFailure "expected an error",
+      testCase "source add --hash for a session that is not here is an error that says so" $
+        withSystemTempDirectory "src-root" $ \root ->
+          withRoot root $ withOpsEnv $ \_ env -> do
+            r <- runCommand env (SourceAdd (SourceArgs "claude-code" "gone" (Just t0) (Just "u1") (Just "u2") Nothing Nothing True))
+            case r of
+              Left (BadInput msg) -> assertBool "not available" ("not available" `T.isInfixOf` msg)
+              Left e -> assertFailure ("wrong error: " <> show e)
+              Right _ -> assertFailure "expected an error",
+      testCase "with the real engi, source add --hash and source verify tell a span that changed" $ do
+        me <- findExecutable "engi"
+        case me of
+          Nothing -> putStrLn "skipped: engi is not on the PATH"
+          Just _ -> withSystemTempDirectory "src-root" $ \root -> do
+            B.writeFile (root </> "s1.jsonl") transcript
+            withRoot root $ withOpsEnv $ \_ env -> do
+              pid <- addPointer env (SourceArgs "claude-code" "s1" (Just t0) (Just "u1") (Just "u2") Nothing Nothing True)
+              m <- right =<< getMemory env pid
+              assertBool "the body has a hash" ("sha256: " `T.isInfixOf` memBody m)
+              intact <- right =<< runCommand env (SourceVerify pid)
+              outOk intact @?= True
+              assertBool "says intact" ("hash intact" `T.isInfixOf` text intact)
+              -- The first record of the span is changed.
+              B.writeFile (root </> "s1.jsonl") changedTranscript
+              changed <- right =<< runCommand env (SourceVerify pid)
+              outOk changed @?= False
+              assertBool "says changed" ("CHANGED" `T.isInfixOf` text changed),
       testCase "source verify of a session that is not here does not succeed" $
         withSystemTempDirectory "src-root" $ \root ->
           withRoot root $ withOpsEnv $ \_ env -> do

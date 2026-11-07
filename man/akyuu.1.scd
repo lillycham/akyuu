@@ -151,7 +151,7 @@ archive of them, found under the *source.roots* of the config file. A session
 that is not on this machine is not an error of the store: the commands say
 that it is not available.
 
-*source add* [*--format* _format_] *--session* _id_ [*--at* _time_] [*--from* _id_] [*--to* _id_] [*--hint* _path_] [*--agent* _text_]
+*source add* [*--format* _format_] *--session* _id_ [*--at* _time_] [*--from* _id_] [*--to* _id_] [*--hint* _path_] [*--agent* _text_] [*--hash*]
 	Make a pointer and print its id. The format is *claude-code* (the default),
 	*codex* (the rollouts of the Codex CLI) or *omp* (oh-my-pi, and pi, which has
 	the same shape). The session is the id that the transcript file is named for:
@@ -165,6 +165,12 @@ that it is not available.
 	holds a home directory and is not used to find the file. The agent is
 	*--agent*, then *$AKYUU_AGENT*, then *agent* in the config file. Link a
 	memory to the pointer with *--derived-from* when you *add* it.
+	With *--hash* the pointer also holds the SHA-256 of the records from *--from*
+	to *--to* (all the lines between them), as they are in the file now, with the
+	strip rule of the archive tool engi applied: the data of images and opaque
+	signatures are replaced by a placeholder that holds their hash. It needs both
+	ids, the session on this machine, and the *engi* command on the PATH, which
+	applies the rule so that akyuu does not have a second copy of it.
 
 *source show* _id_ [*--before* _n_] [*--after* _n_]
 	Print the records of the session around the time of the pointer: _n_ (6)
@@ -179,8 +185,12 @@ that it is not available.
 
 *source verify* _id_
 	Say where the session of the pointer is (the file and whether it is the
-	agent's own or an archive), or that it is not available. Exit status 1 if
-	it is not.
+	agent's own or an archive), or that it is not available. If the pointer
+	holds a hash, the records are read again and compared with it: the line
+	ends with *hash intact*, *hash CHANGED* (the records are not the ones that
+	the pointer saw), or *hash not checked* and why (for example, *engi* is not
+	on the PATH). Exit status 1 if the session is not available, if the hash
+	is changed, or if it could not be checked.
 
 ## Context
 

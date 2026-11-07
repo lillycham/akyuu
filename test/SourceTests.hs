@@ -82,7 +82,7 @@ pointerCases =
     testCase "a trailing line feed is accepted" $
       parsePointer (renderPointer ptr <> "\n") @?= Right ptr,
     testCase "a field that a later version adds is ignored" $
-      parsePointer (renderPointer ptr <> "\nsha256: abc") @?= Right ptr,
+      parsePointer (renderPointer ptr <> "\nfuture: abc") @?= Right ptr,
     testCase "a missing field is an error" $ do
       assertBool "no session" (isLeft (parsePointer "format: claude-code\nat: 2026-11-01T19:00:58Z"))
       assertBool "no format" (isLeft (parsePointer "session: s1\nat: 2026-11-01T19:00:58Z"))

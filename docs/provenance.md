@@ -2,7 +2,8 @@
 
 Status: the pointer, `source add`, `source show`, `source verify` and the MCP
 tool `source_show` are built, for Claude Code, Codex and omp (and pi)
-transcripts. A check of the hash of a span is not built yet.
+transcripts. So is a check that the records did not change (`--hash`). A hook
+that gives an agent the id of its session is not built yet.
 
 An agent writes a note after a session. A month later the note is all that is
 left of the session, and you cannot tell whether it is right. A pointer fixes
@@ -30,6 +31,7 @@ at: 2026-11-01T19:00:58Z
 | `at` | The time the memory is about, to the second. |
 | `from`, `to` | Optional. The ids of the first and the last record, if something knows them. With both, `source show` prints that range. |
 | `hint` | Optional. A path below a root, for a person to read. It is never used to find the file, and it must not hold a home directory. |
+| `sha256` | Optional. The hash of the records from `from` to `to`, after the strip rule (see "Did the records change?"). |
 
 A memory is linked to its pointer with a `derived-from` edge. The store format
 does not change, so older akyuu reads a store that has pointers; it sees
@@ -145,10 +147,41 @@ With the flag on, every tool set (`ordinary`, `maintenance` and `topic`) offers
 it. A session that is not on the machine, or a missing root, is a tool error
 that says so.
 
+## Did the records change?
+
+A pointer with `from` and `to` can also hold a hash of that span:
+
+```
+$ akyuu source add --session 0775d85c-… --from <id> --to <id> --hash
+```
+
+The hash is the SHA-256 of the raw lines of the file from the record `from` to
+the record `to` (with every line between them, also those that are not
+conversation), each ending in a line feed, after the strip rule: the data of
+images and opaque signatures are replaced by a placeholder that holds their
+length and their hash, and nothing else is changed. `source verify` reads the
+span again and says:
+
+- `hash intact`: the records are the ones that the pointer saw.
+- `hash CHANGED`: they are not. An agent edited its file, or the file is another
+  one.
+- `hash not checked`, and why: the check could not be made.
+
+Only an intact hash is a success; the exit status is 1 otherwise.
+
+Why the strip rule: an archive made by [engi](https://github.com/lillycham/engi)
+does not keep the data of images, so a hash of the raw bytes would not match
+the archived copy. A hash of the stripped form is the same for the agent's own
+file and for the archived copy. A changed image is still found, because the
+placeholder holds the hash of the data that it replaced.
+
+akyuu does not implement the rule a second time. It runs `engi strip`, so the
+`engi` command must be on the `PATH` for `--hash` and for the check, and there
+is one definition of the rule. The strip rule is written in `docs/strip-rule.md`
+of that project. If a later version of the rule changes the placeholder, a hash
+made under the old one shows as `CHANGED`.
+
 ## Not built yet
 
-- A check that the bytes of a span are the ones that the pointer saw (a hash).
-  It needs the same rule for removing images and signatures that the archive
-  tool uses, so that a live file and its archived copy give the same hash.
 - Capture: a hook that gives an agent the id of its session, so that it can
   make the pointer itself.

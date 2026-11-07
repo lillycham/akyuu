@@ -52,32 +52,45 @@ module Akyuu.Source
     renderRecord,
     Shown (..),
     showPointer,
+
+    -- * The hash of a span
+    withSha256,
+    Stripper,
+    engiStrip,
+    spanBytes,
+    hashSpan,
+    hashPointer,
+    Verdict (..),
+    checkHash,
   )
 where
 
 import Control.Applicative ((<|>))
+import Control.Concurrent (forkIO)
 import Control.Exception (IOException, try)
 import Control.Monad (guard)
+import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson (Value (Array, Number, Object, String), decodeStrict)
 import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as B
+import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Char8 qualified as BC
 import Data.Char (isAlphaNum, isDigit)
 import Data.Foldable (toList)
-import Data.List (sortOn)
+import Data.List (elemIndex, sortOn)
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.Ord (Down (Down))
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding (decodeUtf8Lenient)
+import Data.Text.Encoding (decodeUtf8, decodeUtf8Lenient)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, parseTimeM)
 import System.Directory (doesDirectoryExist, getFileSize, listDirectory, pathIsSymbolicLink)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath (isAbsolute, splitDirectories, takeFileName, (</>))
 import System.IO (hClose)
-import System.Process (CreateProcess (std_err, std_out), StdStream (CreatePipe), createProcess, proc, waitForProcess)
+import System.Process (CreateProcess (std_err, std_in, std_out), StdStream (CreatePipe), createProcess, proc, waitForProcess)
 
 -- The pointer --------------------------------------------------------------
 
@@ -102,7 +115,12 @@ data Pointer = Pointer
     pointerTo :: Maybe Text,
     -- | A path below a root, for a person to read. It is never used to find
     -- a file, and never holds a home directory.
-    pointerHint :: Maybe Text
+    pointerHint :: Maybe Text,
+    -- | The SHA-256 of the span from 'pointerFrom' to 'pointerTo' as the
+    -- archive tool stores it: the raw lines, with the strip rule of engi
+    -- applied ('hashSpan'), in lower case hex. With it, @source verify@ can
+    -- tell a span that was not changed from one that was ('checkHash').
+    pointerSha256 :: Maybe Text
   }
   deriving (Eq, Show)
 
@@ -116,7 +134,7 @@ mkPointer format session time from to hint = do
   mapM_ (idField "from") from
   mapM_ (idField "to") to
   mapM_ hintField hint
-  pure (Pointer format session time from to hint)
+  pure (Pointer format session time from to hint Nothing)
   where
     check ok msg = if ok then Right () else Left msg
     idField name v =
@@ -134,6 +152,12 @@ mkPointer format session time from to hint = do
         )
         "hint must be a relative path that stays below its root"
 
+-- | Add the hash of the span to a pointer. It is 64 digits of lower case hex.
+withSha256 :: Text -> Pointer -> Either Text Pointer
+withSha256 h p
+  | T.length h == 64 && T.all (`elem` ("0123456789abcdef" :: String)) h = Right p {pointerSha256 = Just h}
+  | otherwise = Left "sha256 must be 64 digits of lower case hex"
+
 timeFormat :: String
 timeFormat = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -146,7 +170,8 @@ renderPointer p =
       ["at: " <> T.pack (formatTime defaultTimeLocale timeFormat (pointerAt p))],
       maybe [] (\v -> ["from: " <> v]) (pointerFrom p),
       maybe [] (\v -> ["to: " <> v]) (pointerTo p),
-      maybe [] (\v -> ["hint: " <> v]) (pointerHint p)
+      maybe [] (\v -> ["hint: " <> v]) (pointerHint p),
+      maybe [] (\v -> ["sha256: " <> v]) (pointerSha256 p)
     ]
 
 -- | Read the body of a pointer. A field that this version does not know is
@@ -167,7 +192,8 @@ parsePointer body = do
   from <- get "from"
   to <- get "to"
   hint <- get "hint"
-  mkPointer format session time from to hint
+  digest <- get "sha256"
+  mkPointer format session time from to hint >>= maybe Right withSha256 digest
   where
     split l = case T.breakOn ": " l of
       (k, rest)
@@ -498,24 +524,29 @@ data Shown = Shown
 -- records around @at@ if they are not. A session that is not found is
 -- "not available", which is not a fault.
 showPointer :: [Root] -> Window -> Pointer -> IO (Either Text Shown)
-showPointer roots window p
+showPointer roots window p = do
+  found <- locate roots p
+  case found of
+    [] -> pure (Left (notFound roots p))
+    (best : _) -> do
+      bytes <- loadBytes best
+      pure $ do
+        b <- bytes
+        let rs = parseRecords (pointerFormat p) b
+            chosen = case (pointerFrom p, pointerTo p) of
+              (Just f, Just t) | Just range <- selectRange f t rs -> range
+              _ -> selectWindow window (pointerAt p) rs
+        if null rs
+          then Left ("the file " <> T.pack (locatedPath best) <> " has no conversation in it")
+          else Right (Shown best chosen)
+
+-- | Why the session of a pointer was not found, for a person. It says whether
+-- the config has a root for the format at all.
+notFound :: [Root] -> Pointer -> Text
+notFound roots p
   | not (any ((== pointerFormat p) . rootFormat) roots) =
-      pure (Left ("the session " <> pointerSession p <> " is not available: no root is set for the format " <> pointerFormat p <> ". Add one to [source] in the config file."))
-  | otherwise = do
-      found <- locate roots p
-      case found of
-        [] -> pure (Left ("the session " <> pointerSession p <> " is not available on this machine: it is not under any root for " <> pointerFormat p))
-        (best : _) -> do
-          bytes <- loadBytes best
-          pure $ do
-            b <- bytes
-            let rs = parseRecords (pointerFormat p) b
-                chosen = case (pointerFrom p, pointerTo p) of
-                  (Just f, Just t) | Just range <- selectRange f t rs -> range
-                  _ -> selectWindow window (pointerAt p) rs
-            if null rs
-              then Left ("the file " <> T.pack (locatedPath best) <> " has no conversation in it")
-              else Right (Shown best chosen)
+      "the session " <> pointerSession p <> " is not available: no root is set for the format " <> pointerFormat p <> ". Add one to [source] in the config file."
+  | otherwise = "the session " <> pointerSession p <> " is not available on this machine: it is not under any root for " <> pointerFormat p
 
 -- | The bytes of a file. An archived file is decompressed with @zstd -d -c@,
 -- so akyuu does not link a zstd library. If @zstd@ is not on the PATH, or the
@@ -539,3 +570,118 @@ loadBytes (Located path (Archived _) _) = do
       hClose err
       code <- waitForProcess ph
       pure (code, bytes, msg)
+
+-- Hash of a span ---------------------------------------------------------------
+
+-- | A function that applies the strip rule to bytes: the data of an image, and
+-- opaque signatures, become a placeholder that holds their length and hash. The
+-- rule is written down and implemented by the archive tool engi. akyuu does not
+-- implement it a second time: it asks @engi strip@ ('engiStrip'), so that a live
+-- file and its archived copy give the same hash from one definition. A test can
+-- pass another function.
+type Stripper = ByteString -> IO (Either Text ByteString)
+
+-- | The strip rule, by running @engi strip@. If @engi@ is not on the PATH, the
+-- answer says so.
+engiStrip :: Stripper
+engiStrip bytes = do
+  r <- try run :: IO (Either IOException (ExitCode, ByteString, ByteString))
+  pure $ case r of
+    Left _ -> Left "engi is not on the PATH, and it is needed to apply the strip rule"
+    Right (ExitSuccess, out, _) -> Right out
+    Right (_, _, err) -> Left ("engi strip failed: " <> T.strip (decodeUtf8Lenient err))
+  where
+    run = do
+      (Just hin, Just out, Just err, ph) <-
+        createProcess (proc "engi" ["strip"]) {std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe}
+      -- The input goes in from another thread: a span can be longer than a pipe
+      -- holds, and the output must be read at the same time.
+      _ <- forkIO (ignoring (B.hPut hin bytes) >> ignoring (hClose hin))
+      o <- B.hGetContents out
+      e <- B.hGetContents err
+      code <- waitForProcess ph
+      pure (code, o, e)
+    ignoring act = () <$ (try act :: IO (Either IOException ()))
+
+-- | The id of the record on a line: the @uuid@ of Claude Code, the @ordinal@ of
+-- Codex, the @id@ of an omp entry. It is the id that 'recordId' gives, for any
+-- line, not only for conversation.
+lineId :: Text -> ByteString -> Maybe Text
+lineId format l = do
+  Object o <- decodeStrict l
+  case format of
+    "codex" -> case KM.lookup "ordinal" o of
+      Just (Number n) -> Just (T.pack (show (truncate n :: Int)))
+      _ -> Nothing
+    "omp" -> textField "id" o
+    _ -> textField "uuid" o
+
+-- | The raw lines of a file from the record with one id to the record with
+-- another, both included, with every line between them (also those that are
+-- not conversation), each ending in a line feed. Nothing if an id is not in
+-- the file, or the second comes first.
+spanBytes :: Text -> ByteString -> Text -> Text -> Maybe ByteString
+spanBytes format raw from to = do
+  let ls = BC.lines raw
+      ids = map (lineId format) ls
+  i <- elemIndex (Just from) ids
+  j <- elemIndex (Just to) (drop i ids)
+  pure (BC.unlines (take (j + 1) (drop i ls)))
+
+-- | The hash of a span of a file: the SHA-256, in lower case hex, of the span
+-- after the strip rule. The same hash for a live file and for its archived
+-- copy, because both are stripped first. The error says what failed.
+hashSpan :: Stripper -> Text -> ByteString -> Text -> Text -> IO (Either Text Text)
+hashSpan strip format raw from to = case spanBytes format raw from to of
+  Nothing -> pure (Left ("the records " <> from <> " to " <> to <> " are not in the file, or are in the wrong order"))
+  Just s -> fmap (decodeUtf8 . Base16.encode . SHA256.hash) <$> strip s
+
+-- | The hash of the span of a pointer, worked out from the file of its session
+-- now. The pointer needs both @from@ and @to@.
+hashPointer :: Stripper -> [Root] -> Pointer -> IO (Either Text Text)
+hashPointer strip roots p = case (pointerFrom p, pointerTo p) of
+  (Just from, Just to) -> do
+    found <- locate roots p
+    case found of
+      [] -> pure (Left (notFound roots p))
+      (best : _) -> do
+        bytes <- loadBytes best
+        either (pure . Left) (\b -> hashSpan strip (pointerFormat p) b from to) bytes
+  _ -> pure (Left "a hash needs both from and to: the ids of the first and the last record")
+
+-- | What a check of a hash found.
+data Verdict
+  = -- | The span has the hash that the pointer holds.
+    Intact
+  | -- | The span has another hash.
+    Changed
+  | -- | The check could not be made (the strip rule could not be applied). The
+    -- text says why.
+    CannotCheck Text
+  deriving (Eq, Show)
+
+-- | Compare the span of a pointer, as it is in the file now, with the hash that
+-- the pointer holds. A @Left@ is a problem before the comparison: the pointer
+-- has no hash or no range, the session is not available, or the ids are not in
+-- the file. The file that was read comes with the verdict.
+checkHash :: Stripper -> [Root] -> Pointer -> IO (Either Text (Located, Verdict))
+checkHash strip roots p = case (pointerSha256 p, pointerFrom p, pointerTo p) of
+  (Nothing, _, _) -> pure (Left "the pointer has no hash")
+  (Just expected, Just from, Just to) -> do
+    found <- locate roots p
+    case found of
+      [] -> pure (Left (notFound roots p))
+      (best : _) -> do
+        bytes <- loadBytes best
+        case bytes of
+          Left e -> pure (Left e)
+          Right b -> case spanBytes (pointerFormat p) b from to of
+            Nothing -> pure (Left ("the records " <> from <> " to " <> to <> " are not in the file, or are in the wrong order"))
+            Just s -> do
+              stripped <- strip s
+              pure . Right . (,) best $ case stripped of
+                Left why -> CannotCheck why
+                Right out
+                  | decodeUtf8 (Base16.encode (SHA256.hash out)) == expected -> Intact
+                  | otherwise -> Changed
+  (Just _, _, _) -> pure (Left "a hash needs both from and to: the ids of the first and the last record")

@@ -45,6 +45,8 @@ module Akyuu.Render
     verifyLines,
     sourceShowLines,
     sourceVerifyLine,
+    hashVerdictText,
+    hashVerdictOk,
     edgeName,
     dirName,
   )
@@ -331,6 +333,19 @@ configLines c =
     setting name (v, src) = name <> " = " <> v <> "  (" <> sourceText src <> ")"
     pair (k, v) = k <> " = " <> v
     quoted t = "\"" <> t <> "\""
+
+-- | What a check of the hash of a pointer adds to the line of @source verify@.
+hashVerdictText :: Either Text (Source.Located, Source.Verdict) -> Text
+hashVerdictText (Right (_, Source.Intact)) = "; hash intact: the records are the ones that the pointer saw"
+hashVerdictText (Right (_, Source.Changed)) = "; hash CHANGED: the records are not the ones that the pointer saw"
+hashVerdictText (Right (_, Source.CannotCheck why)) = "; hash not checked: " <> why
+hashVerdictText (Left why) = "; hash not checked: " <> why
+
+-- | Is the hash check a success? Only an intact span is. A span that could not
+-- be checked is not a verified one.
+hashVerdictOk :: Either Text (Source.Located, Source.Verdict) -> Bool
+hashVerdictOk (Right (_, Source.Intact)) = True
+hashVerdictOk _ = False
 
 -- | A line for a pointer: its id, the format and the session, and the time.
 sourceHeader :: (Id, Source.Pointer) -> Text
