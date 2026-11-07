@@ -19,6 +19,9 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
   Archive preparation now runs outside the writer lock. A bounded experiment
   confirms that writers can finish during preparation. Larger writes remain
   slow; see the [follow-up report](bench/results/2026-11-07.md).
+  Reuse of verified payloads and less work on unchanged sync reduce observed
+  write and sync costs. Independent writers can still return busy at 5,000
+  entries. See the [before/after measurements](bench/results/2026-11-07-performance.md).
 
 - **Extend the topic evaluation.** The Sonnet and Haiku runs are in
   [docs/plans/mcp-eval-results.md](docs/plans/mcp-eval-results.md).

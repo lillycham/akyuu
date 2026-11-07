@@ -239,8 +239,24 @@ not inspect directory listings. Replica search indexes only causal topic
 heads from one captured checkpoint. Legacy search still uses the legacy store.
 
 The prototype validates full event and payload inventories on each load and
-commit. This favours a simple correctness boundary. Incremental validation,
-archive fallback, checkpoint retention and performance limits remain open.
+commit. This favours a simple correctness boundary. Incremental validation
+and performance acceptance remain open.
+
+Within one operation, transactions, GC plans and incoming archive preparation
+reuse the verified payload map. Transactions save only new dependencies and
+required restorations. Accepted dependencies became durable before their
+previous `CURRENT` publication. Unaccepted preparations still pass through
+the durable save path on retry. Later operations validate disk bytes again.
+
+Unchanged sync validates the fetched bundle once. It does not read that same
+Git commit again as a previous tip. A verified incoming inventory that is
+already accepted locally needs no import. Later writers cannot invalidate
+that subset check because accepted inventories only grow.
+Matched before/after measurements at 5,000 entries show a median direct
+commit of 1.72 → 1.09 seconds and unchanged sync of 9.51 → 7.44 seconds.
+One independent writer still returned busy. All 1,550 tests and every native
+aarch64-darwin Nix check passed. See the
+[performance report](../../bench/results/2026-11-07-performance.md).
 
 The filesystem helper uses `fsync`. It does not issue macOS `F_FULLFSYNC`.
 The durability claim does not cover drive caches that survive an `fsync`.
