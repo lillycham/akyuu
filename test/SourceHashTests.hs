@@ -14,6 +14,7 @@ import Akyuu.Source
     mkPointer,
     parsePointer,
     renderPointer,
+    sessionHook,
     spanBytes,
     withSha256,
   )
@@ -38,7 +39,8 @@ sourceHashTests :: TestTree
 sourceHashTests =
   testGroup
     "source hash"
-    [ testGroup "pointer" pointerCases,
+    [ testGroup "session hook" hookCases,
+      testGroup "pointer" pointerCases,
       testGroup "span" spanCases,
       testGroup "hash" hashCases,
       testGroup "check" checkCases,
@@ -84,6 +86,35 @@ dropDigits b = pure (Right (BC.filter (not . isDigit) b))
 
 failing :: Stripper
 failing _ = pure (Left "no stripper here")
+
+-- | What an agent's start hook gets on its standard input, as Claude Code
+-- sends it: the id of the session, and more.
+hookInput :: ByteString
+hookInput = "{\"session_id\":\"0775d85c-5836-4715-a3a7-f306d261bf49\",\"transcript_path\":\"/x/y.jsonl\",\"cwd\":\"/x\",\"hook_event_name\":\"SessionStart\",\"source\":\"startup\"}"
+
+hookCases :: [TestTree]
+hookCases =
+  [ testCase "the id of the session, the format and the command to run are in the text" $
+      case sessionHook "claude-code" hookInput of
+        Nothing -> assertFailure "expected a text"
+        Just t -> do
+          assertBool "id" ("0775d85c-5836-4715-a3a7-f306d261bf49" `T.isInfixOf` t)
+          assertBool "format" ("claude-code" `T.isInfixOf` t)
+          assertBool "command" ("akyuu source add --format claude-code --session 0775d85c-5836-4715-a3a7-f306d261bf49" `T.isInfixOf` t)
+          assertBool "derived_from" ("derived_from" `T.isInfixOf` t),
+    testCase "the text for another format names that format" $
+      case sessionHook "codex" hookInput of
+        Nothing -> assertFailure "expected a text"
+        Just t -> assertBool "format" ("--format codex" `T.isInfixOf` t),
+    testCase "no session id, an id with a path in it, a format that is not known and JSON that is not JSON give nothing" $ do
+      sessionHook "claude-code" "{\"cwd\":\"/x\"}" @?= Nothing
+      sessionHook "claude-code" "{\"session_id\":\"../etc\"}" @?= Nothing
+      sessionHook "claude-code" "{\"session_id\":\"\"}" @?= Nothing
+      sessionHook "claude-code" "{\"session_id\":42}" @?= Nothing
+      sessionHook "nope" hookInput @?= Nothing
+      sessionHook "claude-code" "not json" @?= Nothing
+      sessionHook "claude-code" "" @?= Nothing
+  ]
 
 pointerCases :: [TestTree]
 pointerCases =

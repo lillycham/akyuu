@@ -36,6 +36,19 @@ passage) or `supersede` (the whole text). If the id is stale, read the ref
 again and redo the change on the new text. Use `add` with a new `ref` only
 when no ref covers the topic.
 
+## Say where it came from
+
+If the start of the session says which session this is ("This is a claude-code
+session, id …"), you can record where a memory came from, so that a later
+session can check it against what was said. Run the command that the text
+gives, `akyuu source add --format claude-code --session <id>`. It prints the id
+of a pointer. Pass that id in `derived_from` to `note`, `add` or `supersede`.
+
+Do this for a decision or a fact that a later session may need to check, not
+for every note. The pointer holds the time at which you make it, so make it
+when you write the memory. A later session reads the records around that time
+with `akyuu source show <id of the memory>`.
+
 ## How to write a memory
 
 - One topic for each memory, and one ref for each topic. Plain, short

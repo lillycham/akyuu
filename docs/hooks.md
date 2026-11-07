@@ -84,6 +84,15 @@ model reads it with `get`.
 too. The hook saves a tool call, but the output is long: use it in place of the
 call of `context`, not in addition to it.
 
+A fourth hook can tell the agent which session it is in, so that it can make a
+pointer to the session when it writes a memory ([provenance.md](provenance.md)).
+Claude Code gives a hook the id of the session in the JSON on its standard
+input, and `akyuu source hook` prints it as text:
+
+```json
+        { "type": "command", "command": "akyuu source hook 2>/dev/null || true" }
+```
+
 A hook at the end of a session could call `akyuu note`, but a hook has no
 knowledge of what happened. Do not write a note from a script that has only the
 transcript: let the agent write notes during the work.

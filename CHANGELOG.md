@@ -52,6 +52,10 @@
   from `--from` to `--to` after the strip rule of the archive tool engi, and
   `source verify` says `hash intact` or `hash CHANGED`. akyuu runs `engi
   strip` for the rule, so `engi` must be on the PATH for that.
+  `source hook` reads the JSON that a start hook of Claude Code gets on its
+  standard input and prints the id of the session, with the command that makes
+  a pointer to it. The Claude Code plugin has this hook, and its `memory` skill
+  says when to use it.
 
 ### Fixed
 

@@ -223,6 +223,10 @@ data Command i
   | -- | Say where the session of a memory's pointer is, or that it is not
     -- on this machine.
     SourceVerify i
+  | -- | For a start hook: read the JSON that the agent gives it on standard
+    -- input, and print the id of the session, for the context. The parameter
+    -- is the transcript format of the agent.
+    SourceHook Text
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
 -- | The options of @source add@: the transcript format, the session, the time
@@ -367,6 +371,10 @@ commandParser =
         cmd "add" sourceAddP "Make a pointer to part of an agent session, and print its id. Link a memory to it with --derived-from."
           <> cmd "show" sourceShowP "Show the records of the session that a memory (a pointer, or a memory that derives from one) came from."
           <> cmd "verify" (SourceVerify <$> argument idReader (metavar "ID")) "Say where the session of a pointer is on this machine, or that it is not available."
+          <> cmd "hook" sourceHookP "For a start hook of an agent: read the JSON that it gives on standard input, and print the id of the session, so that the agent can make pointers to it. Prints nothing if there is no session id."
+    sourceHookP =
+      SourceHook
+        <$> strOption (long "format" <> metavar "FORMAT" <> value "claude-code" <> showDefault <> help "The transcript format of the agent that runs the hook.")
     sourceAddP =
       fmap SourceAdd $
         SourceArgs
@@ -685,6 +693,9 @@ runCommand env c = runExceptT $ case c of
     let roots = Config.sValue (Config.cfgSourceRoots cfg)
     shown <- liftIO (mapM (\(pid, p) -> (,) (pid, p) <$> Source.showPointer roots (Source.Window before after) p) ps)
     pure ((ok (concatMap sourceShowLines shown)) {outOk = all (either (const False) (const True) . snd) shown})
+  SourceHook format -> do
+    payload <- liftIO BS.getContents
+    pure (ok (maybe [] T.lines (Source.sessionHook format payload)))
   SourceVerify i -> do
     cfg <- config
     ps <- ExceptT (sourcePointers env i)

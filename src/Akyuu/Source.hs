@@ -62,6 +62,9 @@ module Akyuu.Source
     hashPointer,
     Verdict (..),
     checkHash,
+
+    -- * Capture
+    sessionHook,
   )
 where
 
@@ -86,6 +89,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8, decodeUtf8Lenient)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, parseTimeM)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import System.Directory (doesDirectoryExist, getFileSize, listDirectory, pathIsSymbolicLink)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath (isAbsolute, splitDirectories, takeFileName, (</>))
@@ -685,3 +689,23 @@ checkHash strip roots p = case (pointerSha256 p, pointerFrom p, pointerTo p) of
                   | decodeUtf8 (Base16.encode (SHA256.hash out)) == expected -> Intact
                   | otherwise -> Changed
   (Just _, _, _) -> pure (Left "a hash needs both from and to: the ids of the first and the last record")
+
+-- Capture ------------------------------------------------------------------------
+
+-- | The text that tells an agent which session it is in, from the JSON that
+-- the start hook of the agent gets on its standard input. Claude Code sends
+-- @session_id@ there, and the id is the name of the transcript file. The
+-- agent can then make a pointer to its own session when it writes a memory.
+-- Nothing if the payload is not JSON, has no usable @session_id@, or the format
+-- is not known: a hook that has nothing to say prints nothing.
+sessionHook :: Text -> ByteString -> Maybe Text
+sessionHook format payload = do
+  Object o <- decodeStrict payload
+  sid <- textField "session_id" o
+  _ <- either (const Nothing) Just (mkPointer format sid (posixSecondsToUTCTime 0) Nothing Nothing Nothing)
+  pure . T.unlines $
+    [ "This is a " <> format <> " session, id " <> sid <> ".",
+      "When you write a memory that comes from this conversation, make a pointer to it and link the memory to the pointer, so that a later session can read what was said:",
+      "  akyuu source add --format " <> format <> " --session " <> sid,
+      "It prints the id of the pointer. Give that id as derived_from when you write the memory. The pointer holds the time (now), so make it when you write the memory."
+    ]

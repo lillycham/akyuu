@@ -2,7 +2,7 @@
 
 module SourceCliTests (sourceCliTests) where
 
-import Akyuu.CLI (Cli (cliCommand), Command (SourceAdd, SourceShow, SourceVerify), Output (outBytes, outOk), SourceArgs (SourceArgs), parseCli, runCommand)
+import Akyuu.CLI (Cli (cliCommand), Command (SourceAdd, SourceHook, SourceShow, SourceVerify), Output (outBytes, outOk), SourceArgs (SourceArgs), parseCli, runCommand)
 import Akyuu.Error (AkyuuError (BadInput))
 import Akyuu.Graph (Edge (Edge), EdgeType (DerivedFrom))
 import Akyuu.Id (Id)
@@ -78,6 +78,11 @@ parseCases =
       testCase "source verify takes an id" $ do
         c <- parsed ["source", "verify", idStr (nid 1)]
         c @?= SourceVerify (Full (nid 1)),
+      testCase "source hook takes the format, and the default is claude-code" $ do
+        a <- parsed ["source", "hook"]
+        a @?= SourceHook "claude-code"
+        b <- parsed ["source", "hook", "--format", "codex"]
+        b @?= SourceHook "codex",
       testCase "source needs a subcommand" $ rejected ["source"]
     ]
 

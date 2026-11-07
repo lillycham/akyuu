@@ -192,6 +192,14 @@ that it is not available.
 	on the PATH). Exit status 1 if the session is not available, if the hash
 	is changed, or if it could not be checked.
 
+*source hook* [*--format* _format_]
+	For the start hook of an agent. Read the JSON that the agent gives the hook
+	on its standard input, and print the id of the session with the command to
+	make a pointer to it, so that the agent can record where a memory came from.
+	Claude Code sends *session_id* in that JSON; the format is *claude-code*
+	(the default), *codex* or *omp*. It prints nothing, and exits 0, if the
+	input has no usable session id.
+
 ## Context
 
 The _manifest_ is the memory of the ref *policy/tiers* (or *--manifest*, or

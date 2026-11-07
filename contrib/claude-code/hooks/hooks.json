@@ -6,7 +6,8 @@
         "hooks": [
           { "type": "command", "command": "akyuu context --page 1" },
           { "type": "command", "command": "akyuu context --page 2" },
-          { "type": "command", "command": "akyuu context --page 3" }
+          { "type": "command", "command": "akyuu context --page 3" },
+          { "type": "command", "command": "akyuu source hook 2>/dev/null || true" }
         ]
       }
     ]

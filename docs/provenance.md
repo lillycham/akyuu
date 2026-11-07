@@ -2,8 +2,9 @@
 
 Status: the pointer, `source add`, `source show`, `source verify` and the MCP
 tool `source_show` are built, for Claude Code, Codex and omp (and pi)
-transcripts. So is a check that the records did not change (`--hash`). A hook
-that gives an agent the id of its session is not built yet.
+transcripts. So is a check that the records did not change (`--hash`), and a
+start hook for Claude Code that tells the agent the id of its session
+(`source hook`).
 
 An agent writes a note after a session. A month later the note is all that is
 left of the session, and you cannot tell whether it is right. A pointer fixes
@@ -181,7 +182,35 @@ is one definition of the rule. The strip rule is written in `docs/strip-rule.md`
 of that project. If a later version of the rule changes the placeholder, a hash
 made under the old one shows as `CHANGED`.
 
+## Letting an agent make its own pointers
+
+An agent does not know the id of its session. A start hook can tell it:
+`akyuu source hook` reads the JSON that Claude Code gives a hook on its standard
+input, which has `session_id` in it, and prints
+
+```
+This is a claude-code session, id 0775d85c-….
+When you write a memory that comes from this conversation, make a pointer to it …
+  akyuu source add --format claude-code --session 0775d85c-…
+It prints the id of the pointer. Give that id as derived_from when you write the memory. …
+```
+
+The Claude Code plugin in `contrib/claude-code` has this hook, and its `memory`
+skill says when to use it. To add the hook yourself, see
+[hooks.md](hooks.md). The hook prints nothing if the input has no usable
+session id, and with `2>/dev/null || true` it also stays quiet on an akyuu that
+is too old to have the command.
+
+The agent then runs `akyuu source add --session <id>` when it writes a memory
+that a later session may need to check, and passes the id that the command
+prints as `derived_from`. The `note` tool takes `derived_from` in the `ordinary`
+and `maintenance` tool sets. The `topic` tool set has no `derived_from`, so the
+agent links the pointer with `akyuu add --derived-from` instead.
+
+The hook is for Claude Code. The payloads of other agents differ, and the id in
+the name of a Codex rollout can differ from the `session_id` in its metadata,
+so a hook for Codex or omp needs its own check before it is added.
+
 ## Not built yet
 
-- Capture: a hook that gives an agent the id of its session, so that it can
-  make the pointer itself.
+- A hook for Codex and omp (see above).

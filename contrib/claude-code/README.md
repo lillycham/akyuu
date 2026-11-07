@@ -8,6 +8,10 @@ A Claude Code plugin that connects each session to an akyuu store. It holds:
   the project are in the session before the first prompt. The same hooks run
   again after `/compact` and `/clear`, so the memories come back after a
   compaction. See [docs/hooks.md](../../docs/hooks.md) for why there are pages.
+  A fourth hook, `akyuu source hook`, tells the agent the id of its session, so
+  that it can make a pointer to the session when it writes a memory (see
+  [docs/provenance.md](../../docs/provenance.md)). It prints nothing, and does
+  not fail, on an akyuu that is too old to have it.
 - **A skill, `memory`.** How to read and write memories with the tools. A
   policy in the store wins over it.
 - **A status line.** The counts of the store, and how many writes this session
