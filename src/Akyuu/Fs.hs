@@ -8,6 +8,7 @@ module Akyuu.Fs
     tryWith,
     ignoreIO,
     ifMissing,
+    hGetBounded,
   )
 where
 
@@ -18,10 +19,29 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import System.Directory (removeFile, renameFile)
 import System.FilePath (takeDirectory)
-import System.IO (hClose, openBinaryTempFile)
+import System.IO (Handle, hClose, openBinaryTempFile)
 import System.IO.Error (isDoesNotExistError)
 import System.Posix.IO (OpenMode (ReadOnly), closeFd, defaultFileFlags, handleToFd, openFd)
 import System.Posix.Unistd (fileSynchronise)
+
+-- | Read at most the given byte count from the current position. The size hint
+-- only controls the first allocation: it may be stale or smaller than the file.
+-- A full first read continues in bounded chunks until EOF or the byte cap.
+-- Callers that need to detect oversized input should request one extra byte.
+hGetBounded :: Int -> Integer -> Handle -> IO ByteString
+hGetBounded cap sizeHint handle
+  | cap < 0 = ioError (userError "A read bound must be nonnegative.")
+  | cap == 0 = pure BS.empty
+  | otherwise = go cap firstRead []
+  where
+    firstRead = fromIntegral (min (fromIntegral cap) (max 0 sizeHint + 1))
+    go remaining request chunks = do
+      bytes <- BS.hGet handle request
+      let rest = remaining - BS.length bytes
+          next = bytes : chunks
+      if BS.length bytes < request || rest == 0
+        then pure (BS.concat (reverse next))
+        else go rest (min rest 65536) next
 
 -- | Run an action that can throw an exception of type @x@. The exception
 -- becomes a 'Left' that holds the result of the function. Other exceptions,

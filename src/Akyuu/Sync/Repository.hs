@@ -35,7 +35,7 @@ module Akyuu.Sync.Repository
   )
 where
 
-import Akyuu.Fs (AtomicStep (Renamed), atomicWriteWith, ifMissing, syncDir, tryWith)
+import Akyuu.Fs (AtomicStep (Renamed), atomicWriteWith, hGetBounded, ifMissing, syncDir, tryWith)
 import Akyuu.GC (retains)
 import Akyuu.Graph (Edge (kind, target), EdgeType (Follows))
 import Akyuu.Id (Id)
@@ -65,7 +65,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import System.Directory (canonicalizePath, createDirectory, doesDirectoryExist, listDirectory, removeFile)
 import System.FilePath (takeDirectory, (</>))
-import System.IO (IOMode (ReadMode), withBinaryFile)
+import System.IO (IOMode (ReadMode), hFileSize, withBinaryFile)
 import System.IO.Error (isAlreadyExistsError)
 
 data Repository = Repository FilePath StoreId deriving (Eq, Show)
@@ -564,7 +564,9 @@ readChecked limit path digest = do
 
 -- Read at most one extra byte to detect oversized input without allocating it all.
 boundedRead :: Int -> FilePath -> IO ByteString
-boundedRead limit path = withBinaryFile path ReadMode (\handle -> BS.hGet handle (limit + 1))
+boundedRead limit path = withBinaryFile path ReadMode $ \handle -> do
+  size <- hFileSize handle
+  hGetBounded (limit + 1) size handle
 
 ensureDirectory :: FaultHook -> FilePath -> IO ()
 ensureDirectory hook path = do
