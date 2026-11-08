@@ -128,3 +128,8 @@ Fewer busy errors can require more validation work and greater latency.
 
 See the [validation reuse comparison](results/2026-11-08-validation-reuse.md)
 for lower direct and contended latency with full disk integrity checks.
+
+The [latency profile](results/2026-11-08-latency-profile.md) identifies oversized
+read-buffer allocation and concurrent GC pressure. It includes phase traces,
+runtime controls and a size-aware read experiment. Production source is unchanged
+by that profiling experiment.

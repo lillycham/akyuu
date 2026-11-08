@@ -1,0 +1,107 @@
+diff --git a/src/Akyuu/Sync/Repository.hs b/src/Akyuu/Sync/Repository.hs
+index 29953ba..3b1aee5 100644
+--- a/src/Akyuu/Sync/Repository.hs
++++ b/src/Akyuu/Sync/Repository.hs
+@@ -50,6 +50,10 @@ import Akyuu.Sync.State (State, StateError (StaleDependency), Version)
+ import Akyuu.Sync.State qualified as State
+ import Akyuu.Sync.Types (Action (AppendLog), EventId (EventId), Resource, StoreId (StoreId), parseIdentifier, renderIdentifier)
+ import Control.Exception (IOException)
++import Control.Concurrent (myThreadId)
++import GHC.Clock (getMonotonicTimeNSec)
++import GHC.Stats (getRTSStats, gc_elapsed_ns, allocated_bytes)
++import System.IO (stderr)
+ import Control.Monad (join, unless, when)
+ import Control.Monad.IO.Class (liftIO)
+ import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE)
+@@ -218,15 +222,15 @@ loadSnapshotReusing repo@(Repository root store) cached = fmap join $ tryWith Re
+   bytes <- readChecked maxCheckpointBytes (checkpointPath repo (CheckpointId digest)) digest
+   checkpoint <- either (throwE . InvalidCheckpoint) pure (parseCheckpoint bytes)
+   unless (checkpointStore checkpoint == store) (throwE IdentityMismatch)
+-  eventBytes <- traverse (\key@(EventId hash) -> (key,) <$> readChecked maxEventBytes (eventPath repo key) hash) (Set.toAscList (checkpointEvents checkpoint))
++  eventBytes <- profile "events.read-hash" $ traverse (\key@(EventId hash) -> (key,) <$> readChecked maxEventBytes (eventPath repo key) hash) (Set.toAscList (checkpointEvents checkpoint))
+   let previousState = case cached of
+         Just (old, _) | Map.keysSet (State.events (snapshotState old)) `Set.isSubsetOf` checkpointEvents checkpoint -> snapshotState old
+         _ -> State.empty store
+       newBytes = filter (\(key, _) -> Map.notMember key (State.events previousState)) eventBytes
+-  state <- either (throwE . InvalidState) pure (State.extendBytes previousState newBytes)
+-  memories <- loadMemoriesReusing repo (maybe Map.empty snd cached) (checkpointObjects checkpoint)
+-  validatePayloads state memories
+-  unless (Set.null (evictedObjects checkpoint `Set.intersection` retained 1 checkpoint state memories)) (throwE InvalidResidency)
++  state <- profile "events.decode-graph" $ either (throwE . InvalidState) pure (State.extendBytes previousState newBytes)
++  memories <- profile "memories.read-hash-parse" $ loadMemoriesReusing repo (maybe Map.empty snd cached) (checkpointObjects checkpoint)
++  profile "payload.validate" $ validatePayloads state memories
++  profile "residency.validate" $ unless (Set.null (evictedObjects checkpoint `Set.intersection` retained 1 checkpoint state memories)) (throwE InvalidResidency)
+   pure (Snapshot root checkpoint state, memories)
+
+ parsePointer :: ByteString -> Either RepositoryError Id
+@@ -266,9 +270,9 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
+   where
+     retry 0 _ = pure (Left RepositoryBusy)
+     retry remaining cached = runExceptT $ do
+-      (old, oldMemories) <- ExceptT (loadSnapshotReusing repo cached)
++      (old, oldMemories) <- profile ("preflight." <> show remaining) $ ExceptT (loadSnapshotReusing repo cached)
+       liftIO (hook (SnapshotValidated (snapshotId old)))
+-      outcome <- ExceptT $ withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
++      outcome <- profile "lock.total" $ ExceptT $ withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ profile "lock.held" $ do
+         identity <- liftIO (boundedRead 256 (root </> "IDENTITY"))
+         unless (identity == identityBytes store) (throwE IdentityMismatch)
+         pointer <- liftIO (boundedRead 128 (root </> "CURRENT"))
+@@ -278,13 +282,13 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
+           else Just <$> persist old oldMemories
+       maybe (ExceptT (retry (remaining - 1) (Just (old, oldMemories)))) pure outcome
+     persist old oldMemories = do
+-      state <- either throwE pure (advance (snapshotState old))
+-      supplied <- Map.fromList <$> traverse verifyPayload payloads
++      state <- profile "advance" $ either throwE pure (advance (snapshotState old))
++      supplied <- profile "supplied.verify" $ Map.fromList <$> traverse verifyPayload payloads
+       let previous = snapshotCheckpoint old
+           objectIds = checkpointObjects previous <> Map.keysSet supplied
+           eventIds = Map.keysSet (State.events state)
+       let memories = Map.union (Map.map snd supplied) oldMemories
+-      validatePayloads state memories
++      profile "payload.revalidate" $ validatePayloads state memories
+       base <-
+         either (throwE . InvalidCheckpoint) pure $
+           mkCheckpoint
+@@ -295,25 +299,36 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
+             (pendingObjects previous <> (objectIds `Set.difference` checkpointObjects previous))
+       let gone = evictedObjects previous `Set.difference` retained 1 base state memories
+           restored = evictedObjects previous `Set.difference` gone
+-      checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone base)
++      checkpoint <- profile "checkpoint.retention" $ either (throwE . InvalidCheckpoint) pure (withEvicted gone base)
+       -- Accepted files were verified above and became durable before their old
+       -- CURRENT publication. Only new payloads and restored copies need a save.
+       -- Prepared but unaccepted files still pass through saveImmutable and its
+       -- directory flush, including retries after a rename interrupted by death.
+       let newPayloads = Map.withoutKeys supplied (checkpointObjects previous)
+           newEvents = Map.withoutKeys (State.events state) (checkpointEvents previous)
+-      traverse_ (\(digest, (bytes, _)) -> saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes) (Map.toAscList newPayloads)
++      profile "objects.save" $ traverse_ (\(digest, (bytes, _)) -> saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes) (Map.toAscList newPayloads)
+       traverse_
+         ( \digest -> do
+             bytes <- readObjectBytes repo digest
+             saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes
+         )
+         (Set.toAscList restored)
+-      traverse_ (\(key, event) -> saveImmutable hook (EventFile key) (eventPath repo key) (renderEvent event)) (Map.toAscList newEvents)
+-      saveCheckpoint hook repo checkpoint
+-      publishCurrent hook repo checkpoint
++      profile "events.save" $ traverse_ (\(key, event) -> saveImmutable hook (EventFile key) (eventPath repo key) (renderEvent event)) (Map.toAscList newEvents)
++      profile "checkpoint.save" $ saveCheckpoint hook repo checkpoint
++      profile "current.publish" $ publishCurrent hook repo checkpoint
+       pure (Snapshot root checkpoint state)
+
++profile :: String -> ExceptT RepositoryError IO a -> ExceptT RepositoryError IO a
++profile label action = ExceptT $ do
++  thread <- myThreadId
++  before <- getRTSStats
++  start <- getMonotonicTimeNSec
++  result <- runExceptT action
++  end <- getMonotonicTimeNSec
++  after <- getRTSStats
++  BS.hPut stderr (encodeUtf8 (T.pack ("PROFILE\t" <> show thread <> "\t" <> label <> "\t" <> show start <> "\t" <> show end <> "\t" <> show (gc_elapsed_ns after - gc_elapsed_ns before) <> "\t" <> show (allocated_bytes after - allocated_bytes before) <> "\n")))
++  pure result
++
+ verifyPayload :: (Id, ByteString) -> ExceptT RepositoryError IO (Id, (ByteString, Memory))
+ verifyPayload (digest, bytes) = do
+   when (BS.length bytes > maxPayloadBytes) (throwE (OversizedData (T.unpack (Id.render digest))))
