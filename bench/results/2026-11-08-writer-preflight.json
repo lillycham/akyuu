@@ -1,0 +1,626 @@
+{
+  "created": "2026-11-08T02:32:40.989Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpu": "Apple M4",
+  "memory_gib": 16,
+  "samples": 5,
+  "driver_sha256": {
+    "before": "5392281a8e5c5e4b1fbc38e64697648d28ef8f7c61d60e282769b019f7a686d6",
+    "after": "ef17b64f1c3c94d6dd34a19b447f57bc49f320d0be536cb4101211768bbcc93d"
+  },
+  "profiles": [
+    {
+      "seed_entries": 100,
+      "before": {
+        "races": [
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 43.943,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 22.095,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 22.397,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 55.43,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 55.668,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 23.843,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 22.853,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 56.285,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 58.321,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 22.914,
+                "success": true
+              }
+            ]
+          }
+        ],
+        "inventory": {
+          "body_profile": "compressible",
+          "events": 106,
+          "fixture_checkpoint": "sha256-2f4e2d67a1e9b9b1c3cd5bf0779910fe62606111101b503250a398bb2a032eac",
+          "objects": 105,
+          "payload_bytes": 119698,
+          "seed_entries": 100
+        },
+        "direct_commit": {
+          "metrics": [
+            {
+              "first_ms": 24.938,
+              "max_ms": 24.938,
+              "median_ms": 22.24,
+              "operation": "commit_uncontended",
+              "samples_ms": [
+                24.938,
+                22.204,
+                21.653,
+                22.24,
+                22.679
+              ]
+            }
+          ],
+          "samples": 5
+        }
+      },
+      "after": {
+        "races": [
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 71.416,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 39.977,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 72.501,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 43.559,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 61.023,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 31.993,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 63.075,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 35.11,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 34.345,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 62.882,
+                "success": true
+              }
+            ]
+          }
+        ],
+        "inventory": {
+          "body_profile": "compressible",
+          "events": 106,
+          "fixture_checkpoint": "sha256-2f4e2d67a1e9b9b1c3cd5bf0779910fe62606111101b503250a398bb2a032eac",
+          "objects": 105,
+          "payload_bytes": 119698,
+          "seed_entries": 100
+        },
+        "direct_commit": {
+          "metrics": [
+            {
+              "first_ms": 22.28,
+              "max_ms": 26.006,
+              "median_ms": 21.864,
+              "operation": "commit_uncontended",
+              "samples_ms": [
+                22.28,
+                26.006,
+                21.577,
+                21.864,
+                21.581
+              ]
+            }
+          ],
+          "samples": 5
+        }
+      },
+      "stage": "complete"
+    },
+    {
+      "seed_entries": 1000,
+      "before": {
+        "races": [
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 479.135,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 242.48,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 231.792,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 468.687,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 427.186,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 209.775,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 443.606,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 218.079,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 442.383,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 214.775,
+                "success": true
+              }
+            ]
+          }
+        ],
+        "inventory": {
+          "body_profile": "compressible",
+          "events": 1040,
+          "fixture_checkpoint": "sha256-e464094eb72baf22f52f9f4d08519ed4a311b622979a3c9bf32298321d3a14bb",
+          "objects": 1039,
+          "payload_bytes": 1210927,
+          "seed_entries": 1000
+        },
+        "direct_commit": {
+          "metrics": [
+            {
+              "first_ms": 243.942,
+              "max_ms": 243.942,
+              "median_ms": 220.103,
+              "operation": "commit_uncontended",
+              "samples_ms": [
+                243.942,
+                219.276,
+                212.662,
+                223.436,
+                220.103
+              ]
+            }
+          ],
+          "samples": 5
+        }
+      },
+      "after": {
+        "races": [
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 785.487,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 534.151,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 539.997,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 771.655,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 760.543,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 522.389,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 572.502,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 803.996,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 723.281,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 496.188,
+                "success": true
+              }
+            ]
+          }
+        ],
+        "inventory": {
+          "body_profile": "compressible",
+          "events": 1040,
+          "fixture_checkpoint": "sha256-e464094eb72baf22f52f9f4d08519ed4a311b622979a3c9bf32298321d3a14bb",
+          "objects": 1039,
+          "payload_bytes": 1210927,
+          "seed_entries": 1000
+        },
+        "direct_commit": {
+          "metrics": [
+            {
+              "first_ms": 236.18,
+              "max_ms": 251.099,
+              "median_ms": 230.775,
+              "operation": "commit_uncontended",
+              "samples_ms": [
+                236.18,
+                230.775,
+                218.938,
+                223.74,
+                251.099
+              ]
+            }
+          ],
+          "samples": 5
+        }
+      },
+      "stage": "complete"
+    },
+    {
+      "seed_entries": 5000,
+      "before": {
+        "races": [
+          {
+            "attempts": [
+              {
+                "busy": true,
+                "ms": 1165.066,
+                "success": false
+              },
+              {
+                "busy": false,
+                "ms": 1158.956,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": true,
+                "ms": 1106.809,
+                "success": false
+              },
+              {
+                "busy": false,
+                "ms": 1119.549,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 1134.812,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 2351.186,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": true,
+                "ms": 1100.321,
+                "success": false
+              },
+              {
+                "busy": false,
+                "ms": 1260.437,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": true,
+                "ms": 1104.206,
+                "success": false
+              },
+              {
+                "busy": false,
+                "ms": 1135.48,
+                "success": true
+              }
+            ]
+          }
+        ],
+        "inventory": {
+          "body_profile": "compressible",
+          "events": 5190,
+          "fixture_checkpoint": "sha256-e3ef7eb51915e9dd62dc3eda8b09339259a4b68354f7c0700a149c7f8b26c3d5",
+          "objects": 5189,
+          "payload_bytes": 6059114,
+          "seed_entries": 5000
+        },
+        "direct_commit": {
+          "metrics": [
+            {
+              "first_ms": 1098.269,
+              "max_ms": 1120.518,
+              "median_ms": 1085.251,
+              "operation": "commit_uncontended",
+              "samples_ms": [
+                1098.269,
+                1085.251,
+                1074.881,
+                1077.389,
+                1120.518
+              ]
+            }
+          ],
+          "samples": 5
+        }
+      },
+      "after": {
+        "races": [
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 3223.806,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 4383.433,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 3648.981,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 4792.236,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 4623.983,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 3373.273,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 4745.035,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 3316.994,
+                "success": true
+              }
+            ]
+          },
+          {
+            "attempts": [
+              {
+                "busy": false,
+                "ms": 2939.251,
+                "success": true
+              },
+              {
+                "busy": false,
+                "ms": 4211.205,
+                "success": true
+              }
+            ]
+          }
+        ],
+        "inventory": {
+          "body_profile": "compressible",
+          "events": 5190,
+          "fixture_checkpoint": "sha256-e3ef7eb51915e9dd62dc3eda8b09339259a4b68354f7c0700a149c7f8b26c3d5",
+          "objects": 5189,
+          "payload_bytes": 6059114,
+          "seed_entries": 5000
+        },
+        "direct_commit": {
+          "metrics": [
+            {
+              "first_ms": 1074.746,
+              "max_ms": 1200.098,
+              "median_ms": 1145.232,
+              "operation": "commit_uncontended",
+              "samples_ms": [
+                1074.746,
+                1151.531,
+                1145.232,
+                1141.331,
+                1200.098
+              ]
+            }
+          ],
+          "samples": 5
+        }
+      },
+      "stage": "complete"
+    }
+  ]
+}

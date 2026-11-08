@@ -49,8 +49,9 @@ and later archive checks remain separate observations in the raw samples.
 These small samples do not establish tail latency or statistical confidence.
 
 The uncontended direct-commit timer excludes event preparation. It encloses
-the repository transaction, including lock acquisition and release. It is an
-approximation of the uncontended lock window. Two independent writes then
+the repository transaction, including validation, lock acquisition, retries
+and publication. Inventory validation now runs outside the mutation lock,
+so this timer does not measure the held lock duration. Two independent writes then
 start at a barrier. The harness checks that accepted state matches both
 outcomes, including a `RepositoryBusy` result.
 
@@ -112,3 +113,15 @@ the same 120-second deadline as the other fixture commands.
 See the [before/after measurements](results/2026-11-07-performance.md) for
 the later changes to inventory reuse and unchanged sync. The raw records
 include all fixture sizes, samples and concurrent writer outcomes.
+
+## Writer preflight comparison
+
+Compile the fixture driver from each revision, then use
+`bench/lock-contention.cjs BEFORE_DRIVER AFTER_DRIVER OUTPUT_JSON`.
+Optional sizes follow the output path; the defaults are 100, 1000 and 5000.
+The harness uses fresh fixtures, five direct samples and five paired trials.
+It alternates which revision runs first in paired trials. Each pair has two
+writers in one process. It saves each result and removes its temporary stores.
+
+See the [writer preflight results](results/2026-11-08-writer-preflight.md).
+Fewer busy errors can require more validation work and greater latency.

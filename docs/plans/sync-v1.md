@@ -263,6 +263,40 @@ The durability claim does not cover drive caches that survive an `fsync`.
 
 ## Next phase
 
+### Writer preflight: next prototype iteration
+
+Transaction inventory validation now occurs before the mutation lock.
+Under the lock, the writer checks `IDENTITY` and `CURRENT` against that
+captured state. A changed checkpoint releases the lock and starts validation
+again. One transaction permits at most three validated preflight snapshots. Lock timeout
+or continuous turnover returns the existing `RepositoryBusy` error.
+
+Resource and policy dependency versions are still checked under the lock.
+Independent resource writes can retry. A competing write to the same resource
+still makes an old version stale. New immutable dependencies and `CURRENT`
+still publish in their previous durable order.
+
+This relies on the existing immutable-file contract. Supported writers never
+rewrite accepted content. GC saves archive fallback before active eviction.
+Checkpoint identity includes pending and residency metadata, so an
+acknowledgement or collection also forces revalidation. Each new operation
+validates disk bytes again; it uses no persistent validation cache.
+
+Deterministic tests cover independent and stale writers, bounded turnover,
+GC, acknowledgement and marker changes between validation and lock acquisition.
+Paired-writer measurements must report retries and completion latency as well
+as busy results. Moving validation alone can duplicate work under contention.
+The direct-commit timer includes preflight and retries; it no longer estimates
+the held lock duration.
+Five paired trials at 5,000 entries accepted 10/10 candidate writes, versus
+6/10 before. Contended latency increased, including at smaller sizes. All
+1,558 tests and native aarch64-darwin Nix checks passed. See the
+[measurement report](../../bench/results/2026-11-08-writer-preflight.md).
+This iteration remains experimental on `codex/sync-v2`; performance acceptance
+and agent consumer integration remain open.
+
+### Consumer integration and acceptance
+
 Configured context and the replica browser share summary-aware log pages.
 Each page keeps recent episodes whole and preserves exact direct and base
 source IDs. Entry limits apply after disjoint summary selection. Complete
