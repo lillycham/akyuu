@@ -2547,6 +2547,7 @@ const Akyuu = (function () {
     box.appendChild(list('Corrupt objects', v.corrupt, ids, 'None: every object hashes to its name.', true));
     box.appendChild(list('Unreadable objects', v.unreadable, (x) => [idLink(x.id), ' ' + x.why], 'None.', true));
     box.appendChild(list('Missing edge targets', v.missing, ids, 'None.', true));
+    box.appendChild(list('In the trash, waiting for the TTL (this is normal)', v.trashed, ids, 'None.', false));
     box.appendChild(list('Pruned edge targets (this is normal)', v.pruned, ids, 'None.', false));
     box.appendChild(list('Bad refs', v.badRefs, (x) => [x.name + ': ' + x.why], 'None.', true));
     box.appendChild(list('Refs to a missing object', v.refsToMissing, (x) => [x.name + ' → ', idLink(x.id)], 'None.', true));

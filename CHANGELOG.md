@@ -9,6 +9,9 @@
 
 ### Added
 
+- `verify` says "in trash" for an edge target that GC moved to the trash and
+  has not deleted yet. It was "missing" until the trash TTL had passed. The
+  JSON of the web UI has a new key `trashed`.
 - A Claude Code plugin in `contrib/claude-code`, with a marketplace at the
   root of the repository. It adds the MCP server and the `SessionStart` hooks.
   It also adds a `memory` skill, a status line and `/akyuu-note`.

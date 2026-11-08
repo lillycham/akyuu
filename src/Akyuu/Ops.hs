@@ -141,7 +141,7 @@ import Akyuu.Topic (Entry (Entry))
 import Akyuu.Topic qualified as Topic
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket, finally)
-import Control.Monad (forM, forM_, unless)
+import Control.Monad (filterM, forM, forM_, unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE, withExceptT)
 import Data.Bifunctor (bimap, first)
@@ -156,7 +156,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
 import Database.SQLite.Simple (SQLError)
-import System.Directory (doesDirectoryExist)
+import System.Directory (doesDirectoryExist, doesFileExist)
 import System.FilePath ((</>))
 
 -- The environment ------------------------------------------------------
@@ -851,9 +851,12 @@ data VerifyReport = VerifyReport
     corruptObjects :: [Id],
     -- | Objects that hash right but are not valid memories.
     unreadableObjects :: [(Id, MemoryParseError)],
-    -- | Targets of edges that are not in the store and have no tombstone.
-    -- This means damage.
+    -- | Targets of edges that are not in the store, have no tombstone, and
+    -- are not in the trash. This means damage.
     missingTargets :: [Id],
+    -- | Targets of edges that GC moved to the trash and has not deleted yet.
+    -- This is normal: it lasts until the trash TTL has passed.
+    trashedTargets :: [Id],
     -- | Targets of edges that GC deleted. This is normal: a newer memory
     -- keeps its edge to an old one after GC.
     prunedTargets :: [Id],
@@ -893,6 +896,9 @@ verifyStore env = runExceptT $ do
     (e : _) -> throwE (StoreFailed e)
     [] -> pure ()
   tombs <- traverse (\i -> (,) i <$> gc (GC.lookupTombstone s i)) (Set.toAscList (Graph.dangling g `Set.difference` Set.fromList ids))
+  -- GC moves an object to the trash first, and writes its tombstone when it
+  -- deletes the file. In between, the object has neither file nor tombstone.
+  inTrash <- liftIO (Set.fromList <$> filterM (doesFileExist . Store.trashPath s) [i | (i, Nothing) <- tombs])
   names <- refs (Refs.listRefs (envRefs env))
   refResults <- liftIO (traverse (\n -> (,) n <$> Refs.getRef (envRefs env) n) names)
   let badR = [(n, e) | (n, Left e) <- refResults]
@@ -909,7 +915,8 @@ verifyStore env = runExceptT $ do
       { checkedObjects = length ids,
         corruptObjects = sort corrupt,
         unreadableObjects = sortOn fst unreadable,
-        missingTargets = [i | (i, Nothing) <- tombs],
+        missingTargets = [i | (i, Nothing) <- tombs, i `Set.notMember` inTrash],
+        trashedTargets = [i | (i, Nothing) <- tombs, i `Set.member` inTrash],
         prunedTargets = [i | (i, Just _) <- tombs],
         badRefs = sortOn (Refs.nameText . fst) badR,
         refsToMissing = sortOn (Refs.nameText . fst) toMissing

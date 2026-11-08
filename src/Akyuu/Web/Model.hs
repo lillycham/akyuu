@@ -56,7 +56,7 @@ import Akyuu.Graph qualified as Graph
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader)
-import Akyuu.Ops (VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
+import Akyuu.Ops (VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, trashedTargets, unreadableObjects), verifyOk)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), RefLink (linkDir, linkId, linkRef), SearchResult (context, corrections, matches))
 import Akyuu.Refs (Name, Ref (current, history), RefError, nameText)
 import Data.Aeson (KeyValue ((.=)), Value (String), object)
@@ -520,6 +520,7 @@ verifyJSON r cached stored =
       "corrupt" .= idsJSON (corruptObjects r),
       "unreadable" .= [object ["id" .= idJSON i, "why" .= describeParse e] | (i, e) <- unreadableObjects r],
       "missing" .= idsJSON (missingTargets r),
+      "trashed" .= idsJSON (trashedTargets r),
       "pruned" .= idsJSON (prunedTargets r),
       "badRefs" .= [object ["name" .= nameText n, "why" .= describe (RefFailed e)] | (n, e) <- badRefs r],
       "refsToMissing" .= [object ["name" .= nameText n, "id" .= idJSON i] | (n, i) <- refsToMissing r],

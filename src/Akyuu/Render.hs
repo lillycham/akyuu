@@ -65,7 +65,7 @@ import Akyuu.Id (Id, render)
 import Akyuu.Levels (Item (Brief, Summary), LogView (Plain, Resolution, Todo), Run (runFrom, runLevel, runMemories, runTo))
 import Akyuu.Levels qualified as Levels
 import Akyuu.Memory (Memory (memAgent, memBody, memCreated, memKind), edgeToHeader, renderMemory)
-import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, NoManifest, Present), ContextReport (ContextReport), EmbedReport (already, embedChanged, embedFailed, embedded), EmbedStatus (ebChanged, ebKey, ebProfile, ebVectors), EvalRow (evalCase, evalFound), SearchMode (Fused, MeaningOnly, TextOnly), StatusReport (stConfig, stEmbed, stGit, stManifest, stMemories, stPins, stPolicy, stRefs, stRoot), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, unreadableObjects), verifyOk)
+import Akyuu.Ops (CompareReport (CompareReport), CompareSide (CompareSide), ContextEntry (Absent, NoManifest, Present), ContextReport (ContextReport), EmbedReport (already, embedChanged, embedFailed, embedded), EmbedStatus (ebChanged, ebKey, ebProfile, ebVectors), EvalRow (evalCase, evalFound), SearchMode (Fused, MeaningOnly, TextOnly), StatusReport (stConfig, stEmbed, stGit, stManifest, stMemories, stPins, stPolicy, stRefs, stRoot), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, refsToMissing, trashedTargets, unreadableObjects), verifyOk)
 import Akyuu.Query (Match (matchId, matchSnippet, matchSupersededBy), Neighbour (neighbourDir, neighbourId, neighbourKind), RefLink (linkDir, linkId, linkRef), SearchResult (context, corrections, matches))
 import Akyuu.Refs (Name, Ref (current, history), nameText)
 import Akyuu.Review (Review (reviewAgent, reviewAt, reviewNote))
@@ -201,6 +201,7 @@ verifyLines r =
     <> ["missing " <> render i | i <- missingTargets r]
     <> ["bad ref " <> nameText n <> ": " <> describe (Error.RefFailed e) | (n, e) <- badRefs r]
     <> ["ref " <> nameText n <> " points to missing " <> render i | (n, i) <- refsToMissing r]
+    <> ["in trash " <> count (length (trashedTargets r)) "target" <> " (GC moved them, it deletes them after the trash TTL, this is normal)" | not (null (trashedTargets r))]
     <> ["pruned " <> count (length (prunedTargets r)) "target" <> " (GC deleted them, this is normal)" | not (null (prunedTargets r))]
     <> [summary]
   where

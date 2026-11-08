@@ -12,7 +12,7 @@ import Akyuu.Id (Id, render)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAboutRefs, memBody, memCreated, memEdges, memKind), parseMemory, renderMemory)
 import Akyuu.Mutation (withMutation)
-import Akyuu.Ops (Env (envCache, envStore), IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets), addMemory, addUnderRef, amendMemory, buildMemory, checkField, dryRunGC, getMemory, listRefNames, listRefValues, neighboursOf, parseDuration, parseIdSpec, readRef, refLinksOf, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, verifyOk, verifyStore, withEnv)
+import Akyuu.Ops (Env (envCache, envStore), IdSpec (Full, Prefix), NewMemory (NewMemory, newAboutRefs, newAgent, newBody, newEdges, newKind), VerifyReport (badRefs, checkedObjects, corruptObjects, missingTargets, prunedTargets, trashedTargets), addMemory, addUnderRef, amendMemory, buildMemory, checkField, dryRunGC, getMemory, listRefNames, listRefValues, neighboursOf, parseDuration, parseIdSpec, readRef, refLinksOf, reindexCache, resolveId, resolveRoot, runGC, searchMemories, setRefTo, supersedeMemory, verifyOk, verifyStore, withEnv)
 import Akyuu.Ops qualified as Ops
 import Akyuu.Query (Match (matchId), Neighbour (Neighbour), RefLink (RefLink), SearchResult (context, matches), defaultSearchOptions)
 import Akyuu.Query qualified as Query
@@ -402,6 +402,15 @@ verifyCases =
           r <- right =<< verifyStore env
           missingTargets r @?= [nid 7]
           prunedTargets r @?= [nid 8],
+      testCase "an object in the trash is not missing" $
+        withOpsEnv $ \dir env -> do
+          createDirectoryIfMissing True (dir </> "trash")
+          BS.writeFile (dir </> "trash" </> (T.unpack (render (nid 7)) <> ".md")) "kind: fact\n\nold"
+          _ <- right =<< addMemory env (note "a" [Edge About (nid 7), Edge Supersedes (nid 9)])
+          r <- right =<< verifyStore env
+          trashedTargets r @?= [nid 7]
+          missingTargets r @?= [nid 9]
+          verifyOk r @?= False,
       testCase "finds a corrupt ref" $
         withOpsEnv $ \dir env -> do
           n <- right (mkName "bad")
