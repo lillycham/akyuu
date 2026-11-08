@@ -22,6 +22,11 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
   Reuse of verified payloads and less work on unchanged sync reduce observed
   write and sync costs. Independent writers can still return busy at 5,000
   entries. See the [before/after measurements](bench/results/2026-11-07-performance.md).
+  The next prototype validates inventory before the writer lock, with bounded
+  checkpoint retries. Paired trials accepted more writes at 5,000 entries,
+  but contended latency increased. Reduce repeated validation and retry cost
+  before performance acceptance. See the
+  [writer preflight results](bench/results/2026-11-08-writer-preflight.md).
 
 - **Extend the topic evaluation.** The Sonnet and Haiku runs are in
   [docs/plans/mcp-eval-results.md](docs/plans/mcp-eval-results.md).
