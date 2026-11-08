@@ -293,6 +293,13 @@ decoding. Local writes and merges reuse events from private validated state.
 They still validate the complete combined graph. Incoming local events still
 receive canonical construction, including values changed through record updates.
 
+Bounded reads now use the open file's size to choose the first allocation.
+The size is only a hint. If the file grows, reads continue in bounded chunks
+until EOF or the byte cap. Reads still permit one extra byte to detect oversized
+input. This avoids a 16 MiB temporary allocation for each small memory file.
+The [size-aware read results](../../bench/results/2026-11-08-sized-reads.md)
+record the production-code comparison after the allocation profile.
+
 Deterministic tests cover independent and stale writers, bounded turnover,
 GC, acknowledgement and marker changes between validation and lock acquisition.
 Paired-writer measurements must report retries and completion latency as well

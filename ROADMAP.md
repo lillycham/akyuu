@@ -31,6 +31,9 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
   still reads and hashes the full inventory. See the
   [validation reuse results](bench/results/2026-11-08-validation-reuse.md).
   Contended latency remains too large for performance acceptance.
+  Size-aware bounded reads now reduce allocation churn and concurrent latency.
+  See the [production read comparison](bench/results/2026-11-08-sized-reads.md).
+  Whole-inventory reads and decoding remain performance targets.
 
 - **Extend the topic evaluation.** The Sonnet and Haiku runs are in
   [docs/plans/mcp-eval-results.md](docs/plans/mcp-eval-results.md).

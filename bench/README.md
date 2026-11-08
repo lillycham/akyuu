@@ -133,3 +133,6 @@ The [latency profile](results/2026-11-08-latency-profile.md) identifies oversize
 read-buffer allocation and concurrent GC pressure. It includes phase traces,
 runtime controls and a size-aware read experiment. Production source is unchanged
 by that profiling experiment.
+
+The [production bounded-read comparison](results/2026-11-08-sized-reads.md)
+records the tested size-aware implementation and its latency results.

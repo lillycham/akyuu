@@ -1,5 +1,8 @@
 # Sync v2 latency profile
 
+Follow-up: the [production fix](2026-11-08-sized-reads.md) implements the bounded
+reader with boundary tests. The observations below describe the earlier experiment.
+
 ## Finding
 
 Oversized temporary read buffers cause most of the concurrent latency increase.

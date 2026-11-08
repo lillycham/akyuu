@@ -9,8 +9,11 @@ import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory, memoryId, mkMemory, renderMemory)
 import Akyuu.Refs (Name, mkName)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointEvents, checkpointObjects, evictedObjects, pendingEvents, pendingObjects)
+import Akyuu.Sync.Checkpoint qualified as Checkpoint
 import Akyuu.Sync.Event (Event, eventId, mkEvent, renderEvent)
+import Akyuu.Sync.Event qualified as Event
 import Akyuu.Sync.Repository (Boundary (DirectoryCreated, SnapshotValidated, WriteBoundary), Repository, RepositoryError (CorruptData, IdentityMismatch, InvalidPointer, InvalidState, MissingCurrent, MissingPayload, MissingRetainedTarget, NotRepository, PublicationUncertain, RepositoryBusy, RepositoryIO, UnacceptedObject), Snapshot, WriteTarget (CheckpointFile, CurrentFile, EventFile, IdentityFile, MemoryFile), acknowledgePublished, archiveSnapshot, collect, commitLocal, commitLocalWith, importState, initialise, initialiseWith, loadSnapshot, openRepository, readMemory, snapshotCheckpoint, snapshotId, snapshotState)
+import Akyuu.Sync.Repository qualified as Repository
 import Akyuu.Sync.State (StateError (StaleVersion))
 import Akyuu.Sync.State qualified as State
 import Akyuu.Sync.Types (Action (RegisterReplica, SetTopic), EventId (EventId), Nonce (Nonce), ReplicaId (ReplicaId), Resource (RefResource, RegistryResource), StoreId (StoreId), mkIdentifier)
@@ -28,6 +31,7 @@ import Support (right, withTempDir)
 import System.Directory (canonicalizePath, createDirectory, doesFileExist, listDirectory, removeFile)
 import System.Exit (ExitCode (ExitFailure))
 import System.FilePath ((</>))
+import System.Posix.Files (setFileSize)
 import System.Posix.Process (ProcessStatus (Exited), exitImmediately, forkProcess, getProcessStatus)
 import System.Posix.Signals (sigKILL, signalProcess)
 import System.Timeout (timeout)
@@ -35,7 +39,26 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 repositoryTests :: TestTree
-repositoryTests = testGroup "Akyuu.Sync.Repository" [basicTests, validationTests, publicationTests, preflightTests, crashTests, initialisationCrashTests]
+repositoryTests = testGroup "Akyuu.Sync.Repository" [basicTests, validationTests, oversizedTests, publicationTests, preflightTests, crashTests, initialisationCrashTests]
+
+oversizedTests :: TestTree
+oversizedTests =
+  testGroup
+    "bounded inventory reads"
+    [ testCase directory $ withRepository $ \root repo before -> do
+        accepted <- writeFirst repo before >>= right
+        let CheckpointId checkpoint = snapshotId accepted
+            EventId registrationId = eventId registration
+            (digest, limit) = case directory of
+              "objects" -> (memoryId (memory "first"), Repository.maxPayloadBytes)
+              "events" -> (registrationId, Event.maxEventBytes)
+              _ -> (checkpoint, Checkpoint.maxCheckpointBytes)
+            path = root </> directory </> digestName digest
+        setFileSize path (fromIntegral limit + 100)
+        canonical <- canonicalizePath path
+        loadSnapshot repo >>= (@?= Left (Repository.OversizedData canonical))
+    | directory <- ["objects", "events", "checkpoints"]
+    ]
 
 must :: (Show e) => Either e a -> a
 must = either (error . show) id

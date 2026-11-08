@@ -2,13 +2,15 @@
 
 module FsTests (fsTests) where
 
-import Akyuu.Fs (AtomicStep (TemporaryWritten), atomicWrite, atomicWriteWith, ignoreIO, tryAs, tryWith)
+import Akyuu.Fs (AtomicStep (TemporaryWritten), atomicWrite, atomicWriteWith, hGetBounded, ignoreIO, tryAs, tryWith)
 import Control.Exception (ArithException (Overflow), IOException, throwIO, try)
 import Data.ByteString qualified as BS
 import Data.List (isPrefixOf)
 import Support (withTempDir)
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
+import System.IO (IOMode (ReadMode), hFileSize, withBinaryFile)
+import System.Posix.Files (setFileSize)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Test.Tasty.QuickCheck (ioProperty, testProperty, (===))
@@ -17,11 +19,55 @@ fsTests :: TestTree
 fsTests =
   testGroup
     "Akyuu.Fs"
-    [ atomicWriteTests,
+    [ boundedReadTests,
+      atomicWriteTests,
       tryAsTests,
       tryWithTests,
       ignoreIOTests
     ]
+
+boundedReadTests :: TestTree
+boundedReadTests =
+  testGroup "bounded handle reads" $
+    [ testCase label $ withTempDir $ \dir -> do
+        let path = dir </> "input"
+        BS.writeFile path bytes
+        withBinaryFile path ReadMode $ \handle -> hGetBounded cap hint handle >>= (@?= BS.take cap bytes)
+    | (label, bytes, cap, hint) <-
+        [ ("empty file", BS.empty, 9, 0),
+          ("zero bound", "abc", 0, 3),
+          ("short file", "abc", 9, 3),
+          ("exact bound", "abcdefghi", 9, 9),
+          ("oversized file returns the detection byte", "abcdefghijk", 10, 11),
+          ("negative hint is only a hint", "abcdef", 9, -1),
+          ("huge hint stays bounded", "abc", 9, 2 ^ (100 :: Int)),
+          ("growth spans several chunks", BS.replicate 200000 65, 150000, 0)
+        ]
+    ]
+      <> [ testCase "growth after size observation does not hide extra bytes" $ withTempDir $ \dir -> do
+             let path = dir </> "input"
+             BS.writeFile path "abc"
+             withBinaryFile path ReadMode $ \handle -> do
+               hint <- hFileSize handle
+               setFileSize path 16
+               hGetBounded 10 hint handle >>= (@?= ("abc" <> BS.replicate 7 0)),
+           testCase "truncation after size observation stops at EOF" $ withTempDir $ \dir -> do
+             let path = dir </> "input"
+             BS.writeFile path "abcdefghijklmnop"
+             withBinaryFile path ReadMode $ \handle -> do
+               hint <- hFileSize handle
+               setFileSize path 3
+               hGetBounded 10 hint handle >>= (@?= "abc"),
+           testCase "negative bounds fail without reading" $ withTempDir $ \dir -> do
+             let path = dir </> "input"
+             BS.writeFile path "abc"
+             withBinaryFile path ReadMode $ \handle -> do
+               result <- try (hGetBounded (-1) 3 handle) :: IO (Either IOException BS.ByteString)
+               case result of
+                 Left _ -> pure ()
+                 Right _ -> assertFailure "negative bound accepted"
+               BS.hGet handle 3 >>= (@?= "abc")
+         ]
 
 tryAsTests :: TestTree
 tryAsTests =
