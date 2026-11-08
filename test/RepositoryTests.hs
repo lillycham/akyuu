@@ -10,7 +10,7 @@ import Akyuu.Memory (Memory, memoryId, mkMemory, renderMemory)
 import Akyuu.Refs (Name, mkName)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointEvents, checkpointObjects, evictedObjects, pendingEvents, pendingObjects)
 import Akyuu.Sync.Event (Event, eventId, mkEvent, renderEvent)
-import Akyuu.Sync.Repository (Boundary (DirectoryCreated, SnapshotValidated, WriteBoundary), Repository, RepositoryError (CorruptData, IdentityMismatch, InvalidPointer, InvalidState, MissingCurrent, MissingPayload, MissingRetainedTarget, NotRepository, PublicationUncertain, RepositoryBusy, UnacceptedObject), Snapshot, WriteTarget (CheckpointFile, CurrentFile, EventFile, IdentityFile, MemoryFile), acknowledgePublished, archiveSnapshot, collect, commitLocal, commitLocalWith, importState, initialise, initialiseWith, loadSnapshot, openRepository, readMemory, snapshotCheckpoint, snapshotId, snapshotState)
+import Akyuu.Sync.Repository (Boundary (DirectoryCreated, SnapshotValidated, WriteBoundary), Repository, RepositoryError (CorruptData, IdentityMismatch, InvalidPointer, InvalidState, MissingCurrent, MissingPayload, MissingRetainedTarget, NotRepository, PublicationUncertain, RepositoryBusy, RepositoryIO, UnacceptedObject), Snapshot, WriteTarget (CheckpointFile, CurrentFile, EventFile, IdentityFile, MemoryFile), acknowledgePublished, archiveSnapshot, collect, commitLocal, commitLocalWith, importState, initialise, initialiseWith, loadSnapshot, openRepository, readMemory, snapshotCheckpoint, snapshotId, snapshotState)
 import Akyuu.Sync.State (StateError (StaleVersion))
 import Akyuu.Sync.State qualified as State
 import Akyuu.Sync.Types (Action (RegisterReplica, SetTopic), EventId (EventId), Nonce (Nonce), ReplicaId (ReplicaId), Resource (RefResource, RegistryResource), StoreId (StoreId), mkIdentifier)
@@ -237,7 +237,21 @@ publicationTests =
 preflightTests :: TestTree
 preflightTests =
   testGroup "optimistic inventory validation" $
-    [ testCase "an independent writer between validation and locking survives retry" $ withRepository $ \_ repo before -> do
+    [ testCase "retry handles a checkpoint with a smaller event inventory" $ withRepository $ \root repo before -> do
+        original <- BS.readFile (root </> "CURRENT")
+        _ <- writeFirst repo before >>= right
+        attempts <- newIORef (0 :: Int)
+        let otherName = must (mkName "me/independent")
+            proposal = event 4 [] (SetTopic otherName (memoryId (memory "independent")))
+            hook (SnapshotValidated _) = do
+              n <- atomicModifyIORef' attempts (\n -> (n + 1, n + 1))
+              when (n == 1) (BS.writeFile (root </> "CURRENT") original)
+            hook _ = pure ()
+        after <- commitLocalWith hook repo (State.version (snapshotState before) (RefResource otherName)) proposal [payload (memory "independent")] >>= right
+        readIORef attempts >>= (@?= 2)
+        Map.keysSet (State.events (snapshotState after)) @?= Set.fromList [eventId registration, eventId proposal]
+        checkpointObjects (snapshotCheckpoint after) @?= Set.singleton (memoryId (memory "independent")),
+      testCase "an independent writer between validation and locking survives retry" $ withRepository $ \_ repo before -> do
         attempts <- newIORef (0 :: Int)
         let otherName = must (mkName "me/independent")
             other = event 4 [] (SetTopic otherName (memoryId (memory "independent")))
@@ -308,6 +322,31 @@ preflightTests =
         pendingObjects (snapshotCheckpoint after) @?= Set.singleton (memoryId (memory "second"))
     ]
       <> [ testGroup
+             "retry disk integrity"
+             [ testCase (directory <> if delete then " missing" else " corrupt") $ withRepository $ \root repo before -> do
+                 first <- writeFirst repo before >>= right
+                 attempts <- newIORef (0 :: Int)
+                 let otherName = must (mkName "me/independent")
+                     other = event 4 [] (SetTopic otherName (memoryId (memory "independent")))
+                     proposal = event 5 [topicEvent] (SetTopic name (memoryId (memory "proposal")))
+                     path = root </> directory </> filename
+                     hook (SnapshotValidated _) = do
+                       n <- atomicModifyIORef' attempts (\n -> (n + 1, n + 1))
+                       when (n == 1) $ do
+                         _ <- commitLocal repo (State.version (snapshotState first) (RefResource otherName)) other [payload (memory "independent")] >>= right
+                         if delete then removeFile path else BS.writeFile path "corrupt"
+                     hook _ = pure ()
+                 result <- commitLocalWith hook repo (State.version (snapshotState first) (RefResource name)) proposal [payload (memory "proposal")]
+                 case result of
+                   Left (RepositoryIO _) | delete -> pure ()
+                   Left (CorruptData actual) | not delete -> canonicalizePath path >>= (@?= actual)
+                   _ -> assertFailure ("retry hid damaged inventory: " <> show result)
+                 readIORef attempts >>= (@?= 1)
+                 doesFileExist (root </> "objects" </> digestName (memoryId (memory "proposal"))) >>= (@?= False)
+             | (directory, filename) <- [("objects", digestName (memoryId (memory "first"))), ("events", let EventId digest = eventId topicEvent in digestName digest)],
+               delete <- [False, True]
+             ],
+           testGroup
              "publication marker rechecks"
              [ testCase marker $ withRepository $ \root repo before -> do
                  current <- BS.readFile (root </> "CURRENT")

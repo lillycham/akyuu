@@ -125,3 +125,6 @@ writers in one process. It saves each result and removes its temporary stores.
 
 See the [writer preflight results](results/2026-11-08-writer-preflight.md).
 Fewer busy errors can require more validation work and greater latency.
+
+See the [validation reuse comparison](results/2026-11-08-validation-reuse.md)
+for lower direct and contended latency with full disk integrity checks.

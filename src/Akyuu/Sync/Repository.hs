@@ -205,7 +205,12 @@ loadSnapshot repo = fmap (fmap fst) (loadSnapshotMemories repo)
 -- Keep verified payloads for the duration of one operation. This is not a
 -- cross-call cache: every new load still verifies the full on-disk inventory.
 loadSnapshotMemories :: Repository -> IO (Either RepositoryError (Snapshot, Map Id Memory))
-loadSnapshotMemories repo@(Repository root store) = fmap join $ tryWith RepositoryIO $ runExceptT $ do
+loadSnapshotMemories repo = loadSnapshotReusing repo Nothing
+
+-- Retry reuse is limited to one transaction. Every file is still read and
+-- hashed, including old entries: missing or corrupt copies must remain errors.
+loadSnapshotReusing :: Repository -> Maybe (Snapshot, Map Id Memory) -> IO (Either RepositoryError (Snapshot, Map Id Memory))
+loadSnapshotReusing repo@(Repository root store) cached = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   identity <- liftIO (boundedRead 256 (root </> "IDENTITY"))
   unless (identity == identityBytes store) (throwE IdentityMismatch)
   pointer <- liftIO (boundedRead 128 (root </> "CURRENT"))
@@ -214,8 +219,12 @@ loadSnapshotMemories repo@(Repository root store) = fmap join $ tryWith Reposito
   checkpoint <- either (throwE . InvalidCheckpoint) pure (parseCheckpoint bytes)
   unless (checkpointStore checkpoint == store) (throwE IdentityMismatch)
   eventBytes <- traverse (\key@(EventId hash) -> (key,) <$> readChecked maxEventBytes (eventPath repo key) hash) (Set.toAscList (checkpointEvents checkpoint))
-  state <- either (throwE . InvalidState) pure (State.fromBytes store eventBytes)
-  memories <- loadMemories repo (checkpointObjects checkpoint)
+  let previousState = case cached of
+        Just (old, _) | Map.keysSet (State.events (snapshotState old)) `Set.isSubsetOf` checkpointEvents checkpoint -> snapshotState old
+        _ -> State.empty store
+      newBytes = filter (\(key, _) -> Map.notMember key (State.events previousState)) eventBytes
+  state <- either (throwE . InvalidState) pure (State.extendBytes previousState newBytes)
+  memories <- loadMemoriesReusing repo (maybe Map.empty snd cached) (checkpointObjects checkpoint)
   validatePayloads state memories
   unless (Set.null (evictedObjects checkpoint `Set.intersection` retained 1 checkpoint state memories)) (throwE InvalidResidency)
   pure (Snapshot root checkpoint state, memories)
@@ -253,11 +262,11 @@ importStateWith hook repo incoming payloads = transact hook repo payloads (first
 -- releases the lock and retries from fresh disk state, at most three times.
 -- Resource/dependency versions are still checked by advance under the lock.
 transact :: FaultHook -> Repository -> [(Id, ByteString)] -> (State -> Either RepositoryError State) -> IO (Either RepositoryError Snapshot)
-transact hook repo@(Repository root store) payloads advance = fmap join $ tryWith RepositoryIO $ retry (3 :: Int)
+transact hook repo@(Repository root store) payloads advance = fmap join $ tryWith RepositoryIO $ retry (3 :: Int) Nothing
   where
-    retry 0 = pure (Left RepositoryBusy)
-    retry remaining = runExceptT $ do
-      (old, oldMemories) <- ExceptT (loadSnapshotMemories repo)
+    retry 0 _ = pure (Left RepositoryBusy)
+    retry remaining cached = runExceptT $ do
+      (old, oldMemories) <- ExceptT (loadSnapshotReusing repo cached)
       liftIO (hook (SnapshotValidated (snapshotId old)))
       outcome <- ExceptT $ withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
         identity <- liftIO (boundedRead 256 (root </> "IDENTITY"))
@@ -267,7 +276,7 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
         if CheckpointId digest /= snapshotId old
           then pure Nothing
           else Just <$> persist old oldMemories
-      maybe (ExceptT (retry (remaining - 1))) pure outcome
+      maybe (ExceptT (retry (remaining - 1) (Just (old, oldMemories)))) pure outcome
     persist old oldMemories = do
       state <- either throwE pure (advance (snapshotState old))
       supplied <- Map.fromList <$> traverse verifyPayload payloads
@@ -337,12 +346,14 @@ validatePayloads state memories = do
     checkMemory (digest, memory) = traverse_ (checkEdge digest) (Set.toAscList (memEdges memory))
     checkEdge source edge = when (retains (kind edge) && Map.notMember (target edge) memories) (throwE (MissingRetainedTarget source (target edge)))
 
-loadMemories :: Repository -> Set.Set Id -> ExceptT RepositoryError IO (Map Id Memory)
-loadMemories repo ids = Map.fromList <$> traverse readOne (Set.toAscList ids)
+loadMemoriesReusing :: Repository -> Map Id Memory -> Set.Set Id -> ExceptT RepositoryError IO (Map Id Memory)
+loadMemoriesReusing repo cached ids = Map.fromList <$> traverse readOne (Set.toAscList ids)
   where
     readOne digest = do
       bytes <- readObjectBytes repo digest
-      memory <- either (throwE . InvalidMemory digest) pure (parseMemory bytes)
+      memory <- case Map.lookup digest cached of
+        Just verified -> pure verified
+        Nothing -> either (throwE . InvalidMemory digest) pure (parseMemory bytes)
       pure (digest, memory)
 
 -- | Explicit reads are scoped to the captured checkpoint, never directory listings.
