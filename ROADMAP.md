@@ -27,6 +27,10 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
   but contended latency increased. Reduce repeated validation and retry cost
   before performance acceptance. See the
   [writer preflight results](bench/results/2026-11-08-writer-preflight.md).
+  Parsed-value reuse now reduces direct and contended latency while each attempt
+  still reads and hashes the full inventory. See the
+  [validation reuse results](bench/results/2026-11-08-validation-reuse.md).
+  Contended latency remains too large for performance acceptance.
 
 - **Extend the topic evaluation.** The Sonnet and Haiku runs are in
   [docs/plans/mcp-eval-results.md](docs/plans/mcp-eval-results.md).

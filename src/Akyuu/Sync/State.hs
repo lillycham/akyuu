@@ -10,6 +10,7 @@ module Akyuu.Sync.State
     empty,
     fromEvents,
     fromBytes,
+    extendBytes,
     events,
     storeId,
     merge,
@@ -23,7 +24,7 @@ where
 import Akyuu.Id (Id, IdParseError)
 import Akyuu.Id qualified as Id
 import Akyuu.Refs (nameText)
-import Akyuu.Sync.Event (Event, EventError, eventAction, eventId, eventNonce, eventParents, eventReplica, eventStore, eventTime, mkEvent, parseEvent, renderEvent)
+import Akyuu.Sync.Event (Event, EventError, eventAction, eventId, eventNonce, eventParents, eventReplica, eventStore, eventTime, mkEvent, parseEvent)
 import Akyuu.Sync.Types (Action (AppendLog, RegisterReplica, ResolveLog, ResolveTopic, SetPin, SetReview, SetTopic), EventId (EventId), ReplicaId, Resource (PinResource, RefResource, RegistryResource, ReviewResource), ReviewValue, StoreId (StoreId), renderIdentifier, resourceOf)
 import Control.Monad (foldM, unless, when)
 import Data.Aeson (encode)
@@ -90,31 +91,44 @@ storeId (State store _) = store
 fromEvents :: StoreId -> [Event] -> Either StateError State
 fromEvents store es = do
   pairs <- traverse canonical es
-  table <- foldM insert Map.empty pairs
+  assemble store Map.empty pairs
+
+canonical :: Event -> Either StateError (EventId, Event)
+canonical event = do
+  checked <- first InvalidEvent (mkEvent (eventStore event) (eventReplica event) (eventNonce event) (eventParents event) (eventAction event) (eventTime event))
+  pure (eventId checked, checked)
+
+-- The existing table is private validated state. Only incoming values need
+-- canonical construction; the combined graph still receives every check.
+assemble :: StoreId -> Map EventId Event -> [(EventId, Event)] -> Either StateError State
+assemble store old pairs = do
+  table <- foldM insert old pairs
   validate store table
   pure (State store table)
   where
-    canonical event = do
-      checked <- first InvalidEvent (mkEvent (eventStore event) (eventReplica event) (eventNonce event) (eventParents event) (eventAction event) (eventTime event))
-      pure (eventId checked, checked)
     insert table (key, event) = case Map.lookup key table of
-      Just old | renderEvent old /= renderEvent event -> Left (DifferentEventBytes key)
+      Just previous | previous /= event -> Left (DifferentEventBytes key)
       _ -> Right (Map.insert key event table)
 
 -- | Imports check each claimed ID before any event can enter validated state.
 fromBytes :: StoreId -> [(EventId, ByteString)] -> Either StateError State
-fromBytes store entries = traverse decode entries >>= fromEvents store
+fromBytes store = extendBytes (empty store)
+
+-- | Add wire events to validated state. Old events retain their validation;
+-- new bytes and the entire combined causal graph are checked before return.
+extendBytes :: State -> [(EventId, ByteString)] -> Either StateError State
+extendBytes (State store table) entries = traverse decode entries >>= assemble store table
   where
     decode (expected, bytes) = do
       event <- first InvalidEvent (parseEvent bytes)
-      let actual = eventId event
+      let actual = EventId (Id.hashBytes bytes)
       unless (expected == actual) (Left (WrongEventId expected actual))
-      pure event
+      pure (expected, event)
 
 merge :: State -> State -> Either StateError State
 merge (State a left) (State b right)
   | a /= b = Left IncompatibleStores
-  | otherwise = fromEvents a (Map.elems left <> Map.elems right)
+  | otherwise = assemble a left (Map.toAscList right)
 
 validate :: StoreId -> Map EventId Event -> Either StateError ()
 validate store table = do
@@ -225,4 +239,5 @@ applyLocal expected event state@(State store table) = do
     (SetTopic _ _, RefTypeConflict _) -> Left NeedsResolution
     (AppendLog _ _, RefTypeConflict _) -> Left NeedsResolution
     _ -> Right ()
-  fromEvents store (event : Map.elems table)
+  checked <- canonical event
+  assemble store table [checked]

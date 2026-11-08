@@ -5,8 +5,9 @@ module SyncTests (syncTests) where
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Refs (Name, mkName)
-import Akyuu.Sync.Event (Event, EventError (EventTooLarge, NonCanonicalEvent, TooManyParents), eventAction, eventId, maxEventBytes, maxEventParents, mkEvent, parseEvent, renderEvent)
+import Akyuu.Sync.Event (Event, EventError (EventTooLarge, NonCanonicalEvent, TooManyParents), eventAction, eventId, eventTime, maxEventBytes, maxEventParents, mkEvent, parseEvent, renderEvent)
 import Akyuu.Sync.State (RefKind (LogKind, TopicKind), ResourceState (LogHeads, PinState, RefTypeConflict, Registered, ReviewState, TopicHeads), State, StateError (IncompatibleStores, InvalidRefTransition, InvalidRegistration, MissingParent, NeedsResolution, ParentResourceMismatch, StaleVersion, UnknownReplica, WrongEventId, WrongParents, WrongStore), applyLocal, empty, events, fromBytes, fromEvents, interpret, merge, resourceHeads, version)
+import Akyuu.Sync.State qualified as State
 import Akyuu.Sync.Types (Action (AppendLog, ClearPin, ClearReview, RegisterReplica, ResolveLog, ResolveTopic, SetPin, SetReview, SetTopic), EventId (EventId), Identifier, Nonce (Nonce), ReplicaId (ReplicaId), Resource (PinResource, RefResource, RegistryResource, ReviewResource), ReviewValue (ReviewValue), StoreId (StoreId), mkIdentifier, parseIdentifier, renderIdentifier)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
@@ -268,7 +269,21 @@ lawTests :: TestTree
 lawTests =
   testGroup
     "merge laws"
-    [ testProperty "idempotent" $ forAll genHistory $ \history ->
+    [ testCase "local writes still validate record updates to incoming events" $ do
+        let invalid = left {eventTime = time {utctDayTime = 0.5}}
+        assertBool "invalid event accepted" (isLeft (applyLocal (version (state [root]) (RefResource name)) invalid (state [root]))),
+      testProperty "merge matches complete construction" $ forAll genHistory $ \a -> forAll genHistory $ \b ->
+        merge (state a) (state b) === fromEvents store (registration : a <> b),
+      testProperty "incremental wire validation matches complete construction" $ forAll genHistory $ \history ->
+        forAll (chooseInt (0, length history)) $ \split ->
+          let (prefix, suffix) = splitAt split history
+              bytes = [(eventId e, renderEvent e) | e <- suffix]
+           in State.extendBytes (state prefix) bytes === Right (state history),
+      testCase "incremental wire validation rejects missing parents" $
+        State.extendBytes (state []) [(eventId left, renderEvent left)] @?= Left (MissingParent (eventId left) (eventId root)),
+      testCase "incremental wire validation checks claimed IDs" $
+        State.extendBytes (state [root]) [(eventId left, renderEvent right)] @?= Left (WrongEventId (eventId left) (eventId right)),
+      testProperty "idempotent" $ forAll genHistory $ \history ->
         let a = state history in merge a a === Right a,
       testProperty "commutative for independently edited replicas" $ forAll genHistory $ \firstHistory -> forAll genHistory $ \secondHistory ->
         let a = state firstHistory

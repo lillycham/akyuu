@@ -282,6 +282,17 @@ Checkpoint identity includes pending and residency metadata, so an
 acknowledgement or collection also forces revalidation. Each new operation
 validates disk bytes again; it uses no persistent validation cache.
 
+Within one transaction, retries reuse parsed events and memories from the
+previous attempt. Every retry still reads and hashes each inventory file.
+New events receive full wire checks. The combined graph, payload links and
+residency receive full checks. A smaller event inventory forces fresh state
+construction, so a changed checkpoint cannot retain removed events.
+
+State construction no longer repeats canonical event construction after wire
+decoding. Local writes and merges reuse events from private validated state.
+They still validate the complete combined graph. Incoming local events still
+receive canonical construction, including values changed through record updates.
+
 Deterministic tests cover independent and stale writers, bounded turnover,
 GC, acknowledgement and marker changes between validation and lock acquisition.
 Paired-writer measurements must report retries and completion latency as well
