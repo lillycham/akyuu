@@ -8,9 +8,9 @@ import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory, memoryId, mkMemory, renderMemory)
 import Akyuu.Refs (Name, mkName)
-import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointEvents, checkpointObjects, pendingEvents, pendingObjects)
+import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointEvents, checkpointObjects, evictedObjects, pendingEvents, pendingObjects)
 import Akyuu.Sync.Event (Event, eventId, mkEvent, renderEvent)
-import Akyuu.Sync.Repository (Boundary (DirectoryCreated, WriteBoundary), Repository, RepositoryError (CorruptData, IdentityMismatch, InvalidState, MissingCurrent, MissingPayload, MissingRetainedTarget, NotRepository, PublicationUncertain, UnacceptedObject), Snapshot, WriteTarget (CheckpointFile, CurrentFile, EventFile, IdentityFile, MemoryFile), commitLocal, commitLocalWith, importState, initialise, initialiseWith, loadSnapshot, openRepository, readMemory, snapshotCheckpoint, snapshotId, snapshotState)
+import Akyuu.Sync.Repository (Boundary (DirectoryCreated, SnapshotValidated, WriteBoundary), Repository, RepositoryError (CorruptData, IdentityMismatch, InvalidPointer, InvalidState, MissingCurrent, MissingPayload, MissingRetainedTarget, NotRepository, PublicationUncertain, RepositoryBusy, UnacceptedObject), Snapshot, WriteTarget (CheckpointFile, CurrentFile, EventFile, IdentityFile, MemoryFile), acknowledgePublished, archiveSnapshot, collect, commitLocal, commitLocalWith, importState, initialise, initialiseWith, loadSnapshot, openRepository, readMemory, snapshotCheckpoint, snapshotId, snapshotState)
 import Akyuu.Sync.State (StateError (StaleVersion))
 import Akyuu.Sync.State qualified as State
 import Akyuu.Sync.Types (Action (RegisterReplica, SetTopic), EventId (EventId), Nonce (Nonce), ReplicaId (ReplicaId), Resource (RefResource, RegistryResource), StoreId (StoreId), mkIdentifier)
@@ -18,6 +18,7 @@ import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (void, when)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
+import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -34,7 +35,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 repositoryTests :: TestTree
-repositoryTests = testGroup "Akyuu.Sync.Repository" [basicTests, validationTests, publicationTests, crashTests, initialisationCrashTests]
+repositoryTests = testGroup "Akyuu.Sync.Repository" [basicTests, validationTests, publicationTests, preflightTests, crashTests, initialisationCrashTests]
 
 must :: (Show e) => Either e a -> a
 must = either (error . show) id
@@ -232,6 +233,92 @@ publicationTests =
           Just (Left (InvalidState StaleVersion), Right _) -> pure ()
           _ -> assertFailure ("Unexpected race outcome: " <> show results)
     ]
+
+preflightTests :: TestTree
+preflightTests =
+  testGroup "optimistic inventory validation" $
+    [ testCase "an independent writer between validation and locking survives retry" $ withRepository $ \_ repo before -> do
+        attempts <- newIORef (0 :: Int)
+        let otherName = must (mkName "me/independent")
+            other = event 4 [] (SetTopic otherName (memoryId (memory "independent")))
+            hook (SnapshotValidated _) = do
+              n <- atomicModifyIORef' attempts (\n -> (n + 1, n + 1))
+              when (n == 1) (void (commitLocal repo (State.version (snapshotState before) (RefResource otherName)) other [payload (memory "independent")] >>= right))
+            hook _ = pure ()
+        after <- commitLocalWith hook repo (State.version (snapshotState before) (RefResource name)) topicEvent [payload (memory "first")] >>= right
+        readIORef attempts >>= (@?= 2)
+        assertBool "the retry lost an independent write" (all (\key -> Map.member key (State.events (snapshotState after))) [eventId other, eventId topicEvent]),
+      testCase "a competing target write still rejects the stale version" $ withRepository $ \root repo before -> do
+        attempts <- newIORef (0 :: Int)
+        let proposal = event 4 [] (SetTopic name (memoryId (memory "rejected")))
+            hook (SnapshotValidated _) = do
+              n <- atomicModifyIORef' attempts (\n -> (n + 1, n + 1))
+              when (n == 1) (void (writeFirst repo before >>= right))
+            hook _ = pure ()
+        commitLocalWith hook repo (State.version (snapshotState before) (RefResource name)) proposal [payload (memory "rejected")] >>= (@?= Left (InvalidState StaleVersion))
+        readIORef attempts >>= (@?= 2)
+        doesFileExist (root </> "objects" </> digestName (memoryId (memory "rejected"))) >>= (@?= False),
+      testCase "continuous checkpoint changes stop after three validations" $ withRepository $ \root repo before -> do
+        attempts <- newIORef (0 :: Int)
+        let otherName = must (mkName "me/independent")
+            resource = RefResource otherName
+            hook (SnapshotValidated _) = do
+              n <- atomicModifyIORef' attempts (\n -> (n + 1, n + 1))
+              current <- loadSnapshot repo >>= right
+              let state = snapshotState current
+                  value = memory ("independent " <> T.pack (show n))
+                  next = event (20 + n) (Map.elems (State.resourceHeads state resource)) (SetTopic otherName (memoryId value))
+              void (commitLocal repo (State.version state resource) next [payload value] >>= right)
+            hook _ = pure ()
+        commitLocalWith hook repo (State.version (snapshotState before) (RefResource name)) topicEvent [payload (memory "first")] >>= (@?= Left RepositoryBusy)
+        readIORef attempts >>= (@?= 3)
+        doesFileExist (root </> "objects" </> digestName (memoryId (memory "first"))) >>= (@?= False)
+        after <- loadSnapshot repo >>= right
+        Map.size (State.events (snapshotState after)) @?= 4,
+      testCase "GC between validation and locking preserves eviction on retry" $ withRepository $ \_ repo before -> do
+        first <- writeFirst repo before >>= right
+        let secondEvent = event 3 [topicEvent] (SetTopic name (memoryId (memory "second")))
+        second <- commitLocal repo (State.version (snapshotState first) (RefResource name)) secondEvent [payload (memory "second")] >>= right
+        key <- archiveSnapshot repo second >>= right
+        published <- acknowledgePublished repo key >>= right
+        attempts <- newIORef (0 :: Int)
+        let otherName = must (mkName "me/independent")
+            proposal = event 4 [] (SetTopic otherName (memoryId (memory "third")))
+            hook (SnapshotValidated _) = do
+              n <- atomicModifyIORef' attempts (\n -> (n + 1, n + 1))
+              when (n == 1) (void (collect repo (snapshotId published) 1 >>= right))
+            hook _ = pure ()
+        after <- commitLocalWith hook repo (State.version (snapshotState published) (RefResource otherName)) proposal [payload (memory "third")] >>= right
+        readIORef attempts >>= (@?= 2)
+        evictedObjects (snapshotCheckpoint after) @?= Set.singleton (memoryId (memory "first"))
+        readMemory after (memoryId (memory "first")) >>= (@?= Right (memory "first")),
+      testCase "acknowledgement between validation and locking stays acknowledged" $ withRepository $ \_ repo before -> do
+        first <- writeFirst repo before >>= right
+        key <- archiveSnapshot repo first >>= right
+        attempts <- newIORef (0 :: Int)
+        let otherName = must (mkName "me/independent")
+            proposal = event 4 [] (SetTopic otherName (memoryId (memory "second")))
+            hook (SnapshotValidated _) = do
+              n <- atomicModifyIORef' attempts (\n -> (n + 1, n + 1))
+              when (n == 1) (void (acknowledgePublished repo key >>= right))
+            hook _ = pure ()
+        after <- commitLocalWith hook repo (State.version (snapshotState first) (RefResource otherName)) proposal [payload (memory "second")] >>= right
+        readIORef attempts >>= (@?= 2)
+        pendingEvents (snapshotCheckpoint after) @?= Set.singleton (eventId proposal)
+        pendingObjects (snapshotCheckpoint after) @?= Set.singleton (memoryId (memory "second"))
+    ]
+      <> [ testGroup
+             "publication marker rechecks"
+             [ testCase marker $ withRepository $ \root repo before -> do
+                 current <- BS.readFile (root </> "CURRENT")
+                 let hook (SnapshotValidated _) = BS.writeFile (root </> marker) "invalid\n"
+                     hook _ = pure ()
+                 commitLocalWith hook repo (State.version (snapshotState before) (RefResource name)) topicEvent [payload (memory "first")] >>= (@?= Left expected)
+                 doesFileExist (root </> "objects" </> digestName (memoryId (memory "first"))) >>= (@?= False)
+                 when (marker == "IDENTITY") (BS.readFile (root </> "CURRENT") >>= (@?= current))
+             | (marker, expected) <- [("IDENTITY", IdentityMismatch), ("CURRENT", InvalidPointer)]
+             ]
+         ]
 
 -- exitImmediately bypasses Haskell finalizers. The OS releases the mutation
 -- lock, while temporary files and durable preparations can remain on disk.

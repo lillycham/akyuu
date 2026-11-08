@@ -161,8 +161,9 @@ measure root samples wanted = do
         pure (object ["archived" .= True])
   let selected label = maybe True (== label) wanted
   results <- traverse (uncurry metric) (filter (selected . fst) [("snapshot", snapshot), ("context", context), ("search", search), ("topic_replace", write), ("archive", archive)])
-  -- Prepare the event outside the clock. With no competing writer, this call
-  -- encloses the mutation lock lifetime plus its acquire/release overhead.
+  -- Prepare the event outside the clock. The transaction includes inventory
+  -- validation outside the mutation lock, acquisition, retries and publication.
+  -- This measures operation latency, not the lock's held duration.
   commits <- forM (if selected "commit_uncontended" then [1 .. samples] else []) $ \_ -> do
     captured <- Repo.loadSnapshot repo >>= checked
     let state = Repo.snapshotState captured

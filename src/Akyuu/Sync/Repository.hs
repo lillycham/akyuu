@@ -118,6 +118,7 @@ data WriteTarget
 
 data Boundary
   = DirectoryCreated FilePath
+  | SnapshotValidated CheckpointId
   | WriteBoundary WriteTarget AtomicStep
   | MemoryEvicted Id
   | EvictionsSynced
@@ -247,44 +248,62 @@ importState = importStateWith (const (pure ()))
 importStateWith :: FaultHook -> Repository -> State -> [(Id, ByteString)] -> IO (Either RepositoryError Snapshot)
 importStateWith hook repo incoming payloads = transact hook repo payloads (first InvalidState . (`State.merge` incoming))
 
+-- | Verify immutable inventory before taking the writer lock. A matching
+-- CURRENT and identity bind that validation to publication. A changed pointer
+-- releases the lock and retries from fresh disk state, at most three times.
+-- Resource/dependency versions are still checked by advance under the lock.
 transact :: FaultHook -> Repository -> [(Id, ByteString)] -> (State -> Either RepositoryError State) -> IO (Either RepositoryError Snapshot)
-transact hook repo@(Repository root store) payloads advance = withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
-  (old, oldMemories) <- ExceptT (loadSnapshotMemories repo)
-  state <- either throwE pure (advance (snapshotState old))
-  supplied <- Map.fromList <$> traverse verifyPayload payloads
-  let previous = snapshotCheckpoint old
-      objectIds = checkpointObjects previous <> Map.keysSet supplied
-      eventIds = Map.keysSet (State.events state)
-  let memories = Map.union (Map.map snd supplied) oldMemories
-  validatePayloads state memories
-  base <-
-    either (throwE . InvalidCheckpoint) pure $
-      mkCheckpoint
-        store
-        eventIds
-        objectIds
-        (pendingEvents previous <> (eventIds `Set.difference` checkpointEvents previous))
-        (pendingObjects previous <> (objectIds `Set.difference` checkpointObjects previous))
-  let gone = evictedObjects previous `Set.difference` retained 1 base state memories
-      restored = evictedObjects previous `Set.difference` gone
-  checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone base)
-  -- Accepted files were verified above and became durable before their old
-  -- CURRENT publication. Only new payloads and restored copies need a save.
-  -- Prepared but unaccepted files still pass through saveImmutable and its
-  -- directory flush, including retries after a rename interrupted by death.
-  let newPayloads = Map.withoutKeys supplied (checkpointObjects previous)
-      newEvents = Map.withoutKeys (State.events state) (checkpointEvents previous)
-  traverse_ (\(digest, (bytes, _)) -> saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes) (Map.toAscList newPayloads)
-  traverse_
-    ( \digest -> do
-        bytes <- readObjectBytes repo digest
-        saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes
-    )
-    (Set.toAscList restored)
-  traverse_ (\(key, event) -> saveImmutable hook (EventFile key) (eventPath repo key) (renderEvent event)) (Map.toAscList newEvents)
-  saveCheckpoint hook repo checkpoint
-  publishCurrent hook repo checkpoint
-  pure (Snapshot root checkpoint state)
+transact hook repo@(Repository root store) payloads advance = fmap join $ tryWith RepositoryIO $ retry (3 :: Int)
+  where
+    retry 0 = pure (Left RepositoryBusy)
+    retry remaining = runExceptT $ do
+      (old, oldMemories) <- ExceptT (loadSnapshotMemories repo)
+      liftIO (hook (SnapshotValidated (snapshotId old)))
+      outcome <- ExceptT $ withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
+        identity <- liftIO (boundedRead 256 (root </> "IDENTITY"))
+        unless (identity == identityBytes store) (throwE IdentityMismatch)
+        pointer <- liftIO (boundedRead 128 (root </> "CURRENT"))
+        digest <- either throwE pure (parsePointer pointer)
+        if CheckpointId digest /= snapshotId old
+          then pure Nothing
+          else Just <$> persist old oldMemories
+      maybe (ExceptT (retry (remaining - 1))) pure outcome
+    persist old oldMemories = do
+      state <- either throwE pure (advance (snapshotState old))
+      supplied <- Map.fromList <$> traverse verifyPayload payloads
+      let previous = snapshotCheckpoint old
+          objectIds = checkpointObjects previous <> Map.keysSet supplied
+          eventIds = Map.keysSet (State.events state)
+      let memories = Map.union (Map.map snd supplied) oldMemories
+      validatePayloads state memories
+      base <-
+        either (throwE . InvalidCheckpoint) pure $
+          mkCheckpoint
+            store
+            eventIds
+            objectIds
+            (pendingEvents previous <> (eventIds `Set.difference` checkpointEvents previous))
+            (pendingObjects previous <> (objectIds `Set.difference` checkpointObjects previous))
+      let gone = evictedObjects previous `Set.difference` retained 1 base state memories
+          restored = evictedObjects previous `Set.difference` gone
+      checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone base)
+      -- Accepted files were verified above and became durable before their old
+      -- CURRENT publication. Only new payloads and restored copies need a save.
+      -- Prepared but unaccepted files still pass through saveImmutable and its
+      -- directory flush, including retries after a rename interrupted by death.
+      let newPayloads = Map.withoutKeys supplied (checkpointObjects previous)
+          newEvents = Map.withoutKeys (State.events state) (checkpointEvents previous)
+      traverse_ (\(digest, (bytes, _)) -> saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes) (Map.toAscList newPayloads)
+      traverse_
+        ( \digest -> do
+            bytes <- readObjectBytes repo digest
+            saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes
+        )
+        (Set.toAscList restored)
+      traverse_ (\(key, event) -> saveImmutable hook (EventFile key) (eventPath repo key) (renderEvent event)) (Map.toAscList newEvents)
+      saveCheckpoint hook repo checkpoint
+      publishCurrent hook repo checkpoint
+      pure (Snapshot root checkpoint state)
 
 verifyPayload :: (Id, ByteString) -> ExceptT RepositoryError IO (Id, (ByteString, Memory))
 verifyPayload (digest, bytes) = do
