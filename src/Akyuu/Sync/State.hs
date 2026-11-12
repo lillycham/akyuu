@@ -239,5 +239,4 @@ applyLocal expected event state@(State store table) = do
     (SetTopic _ _, RefTypeConflict _) -> Left NeedsResolution
     (AppendLog _ _, RefTypeConflict _) -> Left NeedsResolution
     _ -> Right ()
-  checked <- canonical event
-  assemble store table [checked]
+  assemble store table [(eventId event, event)]

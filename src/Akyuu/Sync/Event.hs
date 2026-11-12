@@ -15,6 +15,7 @@ module Akyuu.Sync.Event
     renderEvent,
     parseEvent,
     EventError (..),
+    describeEventError,
     maxEventBytes,
     maxEventParents,
   )
@@ -38,15 +39,29 @@ import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Time (UTCTime (utctDay, utctDayTime), defaultTimeLocale, formatTime, parseTimeM, toGregorian)
 
-data Event = Event
-  { eventStore :: StoreId,
-    eventReplica :: ReplicaId,
-    eventNonce :: Nonce,
-    eventParents :: Set EventId,
-    eventAction :: Action,
-    eventTime :: UTCTime
-  }
+-- | A validated event. The fields are positional and the getters below are
+-- plain functions: an exported record field would permit a record update,
+-- which changes a validated value without a second validation.
+data Event = Event StoreId ReplicaId Nonce (Set EventId) Action UTCTime
   deriving (Eq, Show)
+
+eventStore :: Event -> StoreId
+eventStore (Event store _ _ _ _ _) = store
+
+eventReplica :: Event -> ReplicaId
+eventReplica (Event _ replica _ _ _ _) = replica
+
+eventNonce :: Event -> Nonce
+eventNonce (Event _ _ nonce _ _ _) = nonce
+
+eventParents :: Event -> Set EventId
+eventParents (Event _ _ _ parents _ _) = parents
+
+eventAction :: Event -> Action
+eventAction (Event _ _ _ _ action _) = action
+
+eventTime :: Event -> UTCTime
+eventTime (Event _ _ _ _ _ time) = time
 
 data EventError
   = EventTooLarge
@@ -54,6 +69,13 @@ data EventError
   | BadEvent Text
   | NonCanonicalEvent
   deriving (Eq, Show)
+
+describeEventError :: EventError -> Text
+describeEventError failure = case failure of
+  EventTooLarge -> "The event exceeds " <> T.pack (show maxEventBytes) <> " bytes. Use a shorter name, label or reason."
+  TooManyParents -> "The resource has more than " <> T.pack (show maxEventParents) <> " concurrent heads. One event cannot consume them all."
+  BadEvent message -> message
+  NonCanonicalEvent -> "The event is not in its canonical form."
 
 maxEventBytes, maxEventParents :: Int
 maxEventBytes = 65536

@@ -269,10 +269,7 @@ lawTests :: TestTree
 lawTests =
   testGroup
     "merge laws"
-    [ testCase "local writes still validate record updates to incoming events" $ do
-        let invalid = left {eventTime = time {utctDayTime = 0.5}}
-        assertBool "invalid event accepted" (isLeft (applyLocal (version (state [root]) (RefResource name)) invalid (state [root]))),
-      testProperty "merge matches complete construction" $ forAll genHistory $ \a -> forAll genHistory $ \b ->
+    [ testProperty "merge matches complete construction" $ forAll genHistory $ \a -> forAll genHistory $ \b ->
         merge (state a) (state b) === fromEvents store (registration : a <> b),
       testProperty "incremental wire validation matches complete construction" $ forAll genHistory $ \history ->
         forAll (chooseInt (0, length history)) $ \split ->
