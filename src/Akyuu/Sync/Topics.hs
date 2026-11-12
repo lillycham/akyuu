@@ -43,7 +43,7 @@ import Akyuu.Ops (NewMemory (newAboutRefs, newBody, newEdges), buildMemory)
 import Akyuu.Refs (Name, nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Event (eventAction, eventReplica, eventTime, mkEvent)
-import Akyuu.Sync.Repository (Repository, RepositoryError (ArchiveNotAccepted, CollectionIncomplete, CorruptData, IdentityMismatch, InvalidCheckpoint, InvalidMemory, InvalidPointer, InvalidResidency, InvalidRetentionDepth, InvalidState, MissingCurrent, MissingLogPredecessor, MissingPayload, MissingRetainedTarget, NotRepository, OversizedData, PublicationUncertain, RepositoryBusy, RepositoryIO, StaleCheckpoint, UnacceptedObject), Snapshot, commitLocal, initialise, loadSnapshot, openRepository, readMemory, readStoreIdentity, snapshotId, snapshotState)
+import Akyuu.Sync.Repository (Repository, RepositoryError (ArchiveNotAccepted, CollectionIncomplete, CorruptData, IdentityMismatch, InvalidCheckpoint, InvalidMemory, InvalidPointer, InvalidResidency, InvalidRetentionDepth, InvalidState, MissingCheckpoint, MissingCurrent, MissingLogPredecessor, MissingPayload, MissingRetainedTarget, NotRepository, OversizedData, PublicationUncertain, RepositoryBusy, RepositoryIO, StaleCheckpoint, UnacceptedObject), Snapshot, commitLocal, initialise, loadSnapshot, openRepository, readMemory, readStoreIdentity, snapshotId, snapshotState)
 import Akyuu.Sync.Repository qualified as Repository
 import Akyuu.Sync.State (RefKind (LogKind, TopicKind), ResourceState (Absent, LogHeads, RefTypeConflict, Registered, TopicHeads), StateError (StaleVersion), Version, events, interpret, resourceHeads, storeId, version, versionText)
 import Akyuu.Sync.State qualified as State
@@ -447,6 +447,7 @@ describeError err = case err of
     IdentityMismatch -> "The repository identity does not match."
     InvalidPointer -> "CURRENT is damaged. Do not reinitialise this repository."
     MissingCurrent -> "CURRENT is missing from a repository with transaction data."
+    MissingCheckpoint checkpoint -> "CURRENT names checkpoint " <> checkpointText checkpoint <> ", but its manifest is missing."
     InvalidCheckpoint _ -> "The checkpoint manifest is invalid."
     InvalidState _ -> "The event history is invalid."
     CorruptData path -> "Stored data does not match its content ID: " <> T.pack path

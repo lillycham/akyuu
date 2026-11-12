@@ -26,6 +26,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding (encodeUtf8)
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Support (right, withTempDir)
 import System.Directory (canonicalizePath, createDirectory, doesFileExist, listDirectory, removeFile)
@@ -119,6 +120,17 @@ basicTests =
         readMemory recovered (memoryId (memory "first")) >>= (@?= Right (memory "first"))
         pendingEvents (snapshotCheckpoint recovered) @?= Set.fromList [eventId registration, eventId topicEvent]
         pendingObjects (snapshotCheckpoint recovered) @?= Set.singleton (memoryId (memory "first")),
+      testCase "superseded manifests are pruned and a raced reader recovers" $ withRepository $ \root repo before -> do
+        first <- writeFirst repo before >>= right
+        let next = event 3 [topicEvent] (SetTopic name (memoryId (memory "second")))
+        second <- commitLocal repo (State.version (snapshotState first) (RefResource name)) next [payload (memory "second")] >>= right
+        let manifest snapshot = let CheckpointId digest = snapshotId snapshot in digestName digest
+        files <- listDirectory (root </> "checkpoints")
+        Set.fromList files @?= Set.fromList [manifest first, manifest second]
+        loadSnapshot repo >>= (@?= Right second)
+        -- A pointer to a manifest that no longer exists is damage, not a race.
+        BS.writeFile (root </> "CURRENT") (encodeUtf8 (T.pack (manifest before) <> "\n"))
+        loadSnapshot repo >>= (@?= Left (Repository.MissingCheckpoint (snapshotId before))),
       testCase "old captured snapshot cannot see a later object" $ withRepository $ \_ repo before -> do
         _ <- writeFirst repo before >>= right
         readMemory before (memoryId (memory "first")) >>= (@?= Left (UnacceptedObject (memoryId (memory "first")))),
