@@ -29,8 +29,9 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
+import Data.Time (addUTCTime)
 import Support (right)
-import System.Directory (doesFileExist, listDirectory, removeFile)
+import System.Directory (doesFileExist, getModificationTime, listDirectory, removeFile, setModificationTime)
 import System.Environment (getExecutablePath)
 import System.Exit (ExitCode (ExitFailure))
 import System.FilePath ((</>))
@@ -167,6 +168,22 @@ storageTests =
         pendingObjects (snapshotCheckpoint acknowledged) @?= Set.singleton (headMemoryId newest)
         Set.size (pendingEvents (snapshotCheckpoint acknowledged)) @?= 1
         acknowledgePublished repo key >>= (@?= Right acknowledged),
+      testCase "acknowledgement removes older archive markers and keeps newer ones" $ withRepository $ \root local repo -> do
+        _ <- createTopic local topicName (newTopic "first") >>= right
+        old <- loadSnapshot repo >>= right >>= \captured -> archiveSnapshot repo captured >>= right
+        before <- readTopic local topicName >>= right
+        _ <- replaceTopic local topicName (viewVersion before) (newTopic "later") >>= right
+        new <- loadSnapshot repo >>= right >>= \captured -> archiveSnapshot repo captured >>= right
+        let directory = root </> "archive" </> "checkpoints"
+            marker (CheckpointId digest) = T.unpack (Id.render digest)
+            markers = Set.fromList <$> listDirectory directory
+        -- Do not depend on the timestamp resolution of the file system.
+        written <- getModificationTime (directory </> marker new)
+        setModificationTime (directory </> marker old) (addUTCTime (-60) written)
+        _ <- acknowledgePublished repo old >>= right
+        markers >>= (@?= Set.fromList [marker old, marker new])
+        _ <- acknowledgePublished repo new >>= right
+        markers >>= (@?= Set.singleton (marker new)),
       testCase "acknowledgement requires a complete verified archive" $ withRepository $ \root local repo -> do
         old <- versions local
         captured <- loadSnapshot repo >>= right
