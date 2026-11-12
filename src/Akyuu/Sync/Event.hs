@@ -86,7 +86,12 @@ header = "akyuu-sync-event-v1\n"
 
 -- | Validation rejects sub-second and leap-second times rather than losing data.
 mkEvent :: StoreId -> ReplicaId -> Nonce -> Set EventId -> Action -> UTCTime -> Either EventError Event
-mkEvent store replica nonce parents action time = do
+mkEvent store replica nonce parents action time = fst <$> construct store replica nonce parents action time
+
+-- The canonical bytes come back with the event. The parser compares them with
+-- its input, so a decode renders an event once.
+construct :: StoreId -> ReplicaId -> Nonce -> Set EventId -> Action -> UTCTime -> Either EventError (Event, ByteString)
+construct store replica nonce parents action time = do
   when (Set.size parents > maxEventParents) (Left TooManyParents)
   let event = Event store replica nonce parents (normaliseAction action) time
       timeText = formatTime defaultTimeLocale timeFormat time
@@ -97,8 +102,9 @@ mkEvent store replica nonce parents action time = do
     RegisterReplica _ label -> unless (validAuthor label) (Left (BadEvent "Replica label must be nonempty, trimmed, and one line."))
     SetReview _ _ (ReviewValue author _) -> unless (validAuthor author) (Left (BadEvent "Review author must be nonempty, trimmed, and one line."))
     _ -> Right ()
-  when (BS.length (renderEvent event) > maxEventBytes) (Left EventTooLarge)
-  pure event
+  let bytes = renderWith timeText event
+  when (BS.length bytes > maxEventBytes) (Left EventTooLarge)
+  pure (event, bytes)
   where
     validAuthor text = not (T.null text) && T.strip text == text && not (T.any (`elem` ['\n', '\r', '\NUL']) text)
 
@@ -106,7 +112,10 @@ eventId :: Event -> EventId
 eventId = EventId . Id.hashBytes . renderEvent
 
 renderEvent :: Event -> ByteString
-renderEvent event = header <> array fields <> "\n"
+renderEvent event = renderWith (formatTime defaultTimeLocale timeFormat (eventTime event)) event
+
+renderWith :: String -> Event -> ByteString
+renderWith timeText event = header <> array fields <> "\n"
   where
     StoreId store = eventStore event
     ReplicaId replica = eventReplica event
@@ -117,7 +126,7 @@ renderEvent event = header <> array fields <> "\n"
         string (renderIdentifier nonce),
         array [string (Id.render digest) | EventId digest <- Set.toAscList (eventParents event)],
         array (map string (actionFields (eventAction event))),
-        string (T.pack (formatTime defaultTimeLocale timeFormat (eventTime event)))
+        string (T.pack timeText)
       ]
 
 -- The wire encoding is explicit rather than dependent on an Aeson version.
@@ -125,8 +134,9 @@ array :: [ByteString] -> ByteString
 array fields = "[" <> BS.intercalate "," fields <> "]"
 
 string :: Text -> ByteString
-string text = "\"" <> encodeUtf8 (T.concatMap escape text) <> "\""
+string text = "\"" <> encodeUtf8 (if T.any special text then T.concatMap escape text else text) <> "\""
   where
+    special char = char == '"' || char == '\\' || ord char < 32
     escape '\"' = "\\\""
     escape '\\' = "\\\\"
     escape '\b' = "\\b"
@@ -155,11 +165,11 @@ parseEvent bytes = do
   when (BS.length bytes > maxEventBytes) (Left EventTooLarge)
   body <- maybe (Left (BadEvent "Unknown event protocol header.")) Right (BS.stripPrefix header bytes)
   value <- first (BadEvent . T.pack) (eitherDecodeStrict' body)
-  event <- first (BadEvent . T.pack) (parseEither parseFields value)
-  unless (renderEvent event == bytes) (Left NonCanonicalEvent)
+  (event, canonical) <- first (BadEvent . T.pack) (parseEither parseFields value)
+  unless (canonical == bytes) (Left NonCanonicalEvent)
   pure event
 
-parseFields :: Value -> Parser Event
+parseFields :: Value -> Parser (Event, ByteString)
 parseFields value = do
   fields <- parseJSON value :: Parser [Value]
   case fields of
@@ -173,7 +183,7 @@ parseFields value = do
       action <- parseJSON actionValue >>= parseAction
       timeText <- parseJSON timeValue
       time <- maybe (fail "Invalid event time.") pure (parseTimeM True defaultTimeLocale timeFormat (T.unpack timeText))
-      either (fail . show) pure (mkEvent store replica nonce parents action time)
+      either (fail . show) pure (construct store replica nonce parents action time)
     _ -> fail "An event must have exactly six fields."
 
 checked :: Either Text a -> Parser a
