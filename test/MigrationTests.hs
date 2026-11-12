@@ -6,17 +6,20 @@ import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory, memoryId)
 import Akyuu.Refs (Expected (Unchecked), Ref (Ref), mkName)
 import Akyuu.Refs qualified as Refs
+import Akyuu.Review qualified as Review
 import Akyuu.Store qualified as Store
-import Akyuu.Sync.Migration (MigrationPoint (BaselineImported, MigrationArchived, ReplicaRegistered), copyMigration, copyMigrationWith, migrationToken, planMigration)
+import Akyuu.Sync.Migration (MigrationPoint (BaselineImported, MigrationArchived, ReplicaRegistered), copyMigration, copyMigrationWith, migrationJSON, migrationToken, planMigration)
 import Akyuu.Sync.Repository (loadSnapshot, openRepository, readMemory, snapshotState)
 import Akyuu.Sync.Topics (TopicHead (headMemoryId), TopicView (viewHeads), openLocal, readTopic)
 import Control.Monad (when)
+import Data.Aeson (Value (Object), object, toJSON, (.=))
+import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Support (right, testMemory, withTempDir)
-import System.Directory (createDirectory, doesFileExist)
+import System.Directory (createDirectory, doesFileExist, removeFile)
 import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
@@ -85,6 +88,20 @@ migrationTests =
         createDirectory (root </> "reviewed")
         BS.writeFile (root </> "reviewed" </> "unknown") "invalid review"
         planMigration root kinds >>= assertLeft,
+      testCase "a review of a collected memory is reported, not imported" $ fixture $ \root store _ memory -> withTempDir $ \target -> do
+        let other = testMemory "fact" (read "2026-01-03 00:00:00 UTC") "test" Set.empty "collected later"
+        gone <- Store.add store other >>= right
+        Review.review store (memoryId memory) gone (Review.Review "test" (read "2026-01-04 00:00:00 UTC") "distinct") >>= right
+        removeFile (Store.objectPath store gone)
+        plan <- planMigration root kinds >>= right
+        let orphans = case migrationJSON plan of
+              Object fields -> case KM.lookup "snapshot" fields of
+                Just (Object snapshot) -> KM.lookup "reviews_without_memory" snapshot
+                _ -> Nothing
+              _ -> Nothing
+        orphans @?= Just (toJSON [object ["a" .= Id.render (min gone (memoryId memory)), "b" .= Id.render (max gone (memoryId memory))]])
+        _ <- copyMigration target plan (migrationToken plan) >>= right
+        pure (),
       testGroup
         "copy resumes after durable-stage failures"
         [ testCase (show point) $ fixture $ \source _ _ _ -> withTempDir $ \target -> do
