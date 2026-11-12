@@ -22,7 +22,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Support (right, withTempDir)
-import System.Directory (removeFile, renameDirectory)
+import System.Directory (doesFileExist, renameDirectory)
 import System.FilePath ((</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
@@ -78,6 +78,8 @@ transportTests =
         identityA <- BS.readFile (a </> "REPLICA")
         identityB <- BS.readFile (b </> "REPLICA")
         assertBool "join copied a replica identity" (identityA /= identityB)
+        leftovers <- traverse (doesFileExist . (b </>)) [".tmp.join", ".tmp.join-tip"]
+        leftovers @?= [False, False]
         repoB <- openRepository b >>= right
         before <- loadSnapshot repoB >>= right
         Set.size (pendingEvents (snapshotCheckpoint before)) @?= 1
@@ -97,12 +99,17 @@ transportTests =
         assertBool "unchanged sync hid local corruption" (case outcome of Left _ -> True; _ -> False)
         BS.readFile (a </> "CURRENT") >>= (@?= before)
         BS.readFile path >>= (@?= "corrupt after open"),
+      -- A finished join removes its journals, so stop a new join after its
+      -- registration: the last durable stage before the SYNC marker.
       testCase "join resumption never acknowledges its unpublished local registration" $ withPeers $ \remote _ _ b _ -> do
-        identity <- BS.readFile (b </> "REPLICA")
-        removeFile (b </> "SYNC")
-        _ <- joinReplica b (T.pack remote) "akyuu-sync-v1" "resume" >>= right
-        BS.readFile (b </> "REPLICA") >>= (@?= identity)
-        repo <- openRepository b >>= right
+        let c = b <> "-registered"
+            hook stage = when (stage == JoinRegistered) (ioError (userError "injected join failure"))
+        failed <- joinReplicaWith hook c (T.pack remote) "akyuu-sync-v1" "new"
+        assertBool "failure hook did not fire" (case failed of Left _ -> True; _ -> False)
+        identity <- BS.readFile (c </> "REPLICA")
+        _ <- joinReplica c (T.pack remote) "akyuu-sync-v1" "resume" >>= right
+        BS.readFile (c </> "REPLICA") >>= (@?= identity)
+        repo <- openRepository c >>= right
         after <- loadSnapshot repo >>= right
         Set.size (pendingEvents (snapshotCheckpoint after)) @?= 1,
       testGroup

@@ -158,7 +158,7 @@ data Check i
 -- | One command. The parameter is the type of the ids that it holds: 'IdSpec'
 -- when the command comes from the command line, and 'Id' when it is ready
 -- to run. 'resolveCommand' makes the change, and it can fail.
-data ReplicaResolution i = SelectHead i | MergeHeads (MemoryArgs i)
+data ReplicaResolution i = SelectHead i | MergeHeads (MemoryArgs i) | KeepLog (MemoryArgs i)
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
 data ReplicaContextArgs = ReplicaContextArgs (Maybe Name) (Maybe Name) Text (Maybe Text) [Name] ReplicaLogs.LogPageOptions
@@ -406,7 +406,7 @@ commandParser =
           <> cmd "read" (ReplicaRead <$> topicName <*> jsonFlag) "Read all current heads and their opaque version."
           <> cmd "create" (ReplicaCreate <$> topicName <*> memoryArgs <*> jsonFlag) "Create a topic that does not exist."
           <> cmd "replace" (ReplicaReplace <$> topicName <*> topicVersion <*> memoryArgs <*> jsonFlag) "Replace a resolved topic with a version check."
-          <> cmd "resolve" (ReplicaResolve <$> topicName <*> topicVersion <*> ((SelectHead <$> option idReader (long "select" <> metavar "ID" <> help "Select one current head by its complete memory ID.")) <|> (MergeHeads <$> memoryArgs)) <*> jsonFlag) "Resolve current heads with a selected or merged memory."
+          <> cmd "resolve" (ReplicaResolve <$> topicName <*> topicVersion <*> ((SelectHead <$> option idReader (long "select" <> metavar "ID" <> help "Select one current head by its complete memory ID.")) <|> ((\asLog -> if asLog then KeepLog else MergeHeads) <$> switch (long "as-log" <> help "Resolve a topic and log type conflict to the log. The new episode follows every log head.") <*> memoryArgs)) <*> jsonFlag) "Resolve current heads with a selected or merged memory."
           <> cmd "conflicts" (ReplicaConflicts <$> jsonFlag) "List unresolved topic conflicts."
           <> cmd "context" (ReplicaContext <$> some (option nameReader (long "ref" <> metavar "NAME" <> help "Read this topic. Repeat for more.")) <*> jsonFlag) "Read explicit topics from one checkpoint."
           <> cmd "configured-context" (ReplicaConfiguredContext <$> replicaContextArgs <*> jsonFlag) "Read configured policy, tiers and directory context."
@@ -971,6 +971,10 @@ runReplicaCommand root operation = do
           settings <- replicaSettings defaultReplicaContext
           content <- new args
           view <$> ExceptT (Topics.resolveTopicGuarded (ReplicaContext.resolutionGuard settings name) local name expected content)
+        ReplicaResolve name expected (KeepLog args) _ -> do
+          settings <- replicaSettings defaultReplicaContext
+          content <- new args
+          view <$> ExceptT (Topics.resolveLogGuarded (ReplicaContext.resolutionGuard settings name) local name expected content)
         ReplicaConflicts _ -> context <$> ExceptT (Topics.conflicts local)
         ReplicaContext names _ -> context <$> ExceptT (Topics.contextTopics local names)
         ReplicaConfiguredContext args _ -> do

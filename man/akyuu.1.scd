@@ -112,10 +112,12 @@ all writers and GC jobs together; old processes do not use this protocol.
 	Replace one resolved topic. Copy the complete opaque version from
 	*replica read*. A memory ID is not this version. Resolve conflicts first.
 
-*replica resolve* _name_ *--expected* _version_ (*--select* _id_ | *--kind* _text_ *--agent* _text_ [_edges_] [_body_]) [*--json*]
+*replica resolve* _name_ *--expected* _version_ (*--select* _id_ | [*--as-log*] *--kind* _text_ *--agent* _text_ [_edges_] [_body_]) [*--json*]
 	Resolve the current heads. Select one current memory, or write merged
 	content. Selection preserves the memory bytes. New content supersedes all
 	current head memories. A stale version refuses the operation.
+	*--as-log* resolves a topic and log type conflict to the log. The new
+	episode follows every current log head. The topic heads leave the ref.
 
 *replica conflicts* [*--json*]
 	List topic and ref type conflicts. Independent log heads are not conflicts.

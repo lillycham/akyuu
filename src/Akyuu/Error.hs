@@ -12,6 +12,7 @@ module Akyuu.Error
   ( AkyuuError (..),
     fromSupersede,
     describe,
+    describeName,
     describeParse,
   )
 where

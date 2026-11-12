@@ -32,6 +32,7 @@ module Akyuu.Sync.Logs
 where
 
 import Akyuu.Episode qualified as Episode
+import Akyuu.Error (describeName)
 import Akyuu.Graph (Edge (Edge, kind, target), EdgeType (DerivedFrom, Follows))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
@@ -146,7 +147,12 @@ renderPage :: LogPage -> Text
 renderPage report =
   T.unlines
     ( ["log: " <> nameText (viewName (pageTopic report)), "page: " <> T.pack (show (pageNumber (pageOptions report))) <> if pageHasMore report then " (more available)" else ""]
-        <> concat [["level: " <> T.pack (show (itemLevel item)), "memory: " <> Id.render (itemId item)] <> (if itemLevel item > 0 then ["direct sources: " <> T.intercalate " " (map Id.render (Levels.sources (itemMemory item))), "covered episodes: " <> T.intercalate " " (map Id.render (Set.toAscList (itemSources item)))] else []) <> [memBody (itemMemory item)] | item <- pageItems report]
+        <> concat
+          [ ["level: " <> T.pack (show (itemLevel item)), "memory: " <> Id.render (itemId item)]
+              <> (if itemLevel item > 0 then ["direct sources: " <> T.intercalate " " (map Id.render (Levels.sources (itemMemory item))), "covered episodes: " <> T.intercalate " " (map Id.render (Set.toAscList (itemSources item)))] else [])
+              <> [memBody (itemMemory item)]
+          | item <- pageItems report
+          ]
     )
 
 -- | All explicit predecessors, or the old one-derived-from chain fallback.
@@ -229,7 +235,7 @@ levelsWithin snapshot name budget maxLevels = runExceptT $ do
   pure levels
   where
     go k available = do
-      ref <- either (throwE . InvalidInput . T.pack . show) pure (Levels.levelRef name k)
+      ref <- either (throwE . InvalidInput . describeName (nameText name)) pure (Levels.levelRef name k)
       view <- ExceptT (topicViewAt snapshot ref)
       let check = (RefResource ref, viewVersion view)
       if k > 0 && viewStatus view == Missing
@@ -237,7 +243,11 @@ levelsWithin snapshot name budget maxLevels = runExceptT $ do
         else do
           when (k >= maxLevels) (throwE (InvalidInput "The log summary level budget was exceeded."))
           (result, used) <- ExceptT (logAtWithin snapshot ref maxBound available)
-          unless (Set.null (logFrontier result) && null (logFailures result)) (throwE (InvalidInput "The log history is incomplete. Restore the required episodes before a summary operation."))
+          unless
+            ( Set.null (logFrontier result)
+                && null (logFailures result)
+            )
+            (throwE (InvalidInput "The log history is incomplete. Restore the required episodes before a summary operation."))
           (rest, checks) <- go (k + 1) (available - used)
           pure (result : rest, check : checks)
 
@@ -254,7 +264,7 @@ summarise local name expected level ids input = runExceptT $ do
   let below = Set.fromList (map fst (logEntries (reports !! (level - 1))))
   unless (given `Set.isSubsetOf` below) (throwE (InvalidInput "Every summary source must belong to the immediately lower log level."))
   when (any (\edge -> kind edge `elem` [DerivedFrom, Follows]) (Set.toList (newEdges input))) (throwE (InvalidInput "Summary publication supplies derived_from and follows edges."))
-  targetName <- either (throwE . InvalidInput . T.pack . show) pure (Levels.levelRef name level)
+  targetName <- either (throwE . InvalidInput . describeName (nameText name)) pure (Levels.levelRef name level)
   targetVersion <- maybe (throwE (InvalidInput "The target summary level has no version.")) pure (lookup (RefResource targetName) (levelsChecks levels))
   ExceptT (appendLogChecked local targetName targetVersion input {newEdges = newEdges input <> Set.map (Edge DerivedFrom) given} (levelsChecks levels))
 
@@ -328,13 +338,33 @@ itemsJSON :: [LogItem] -> Value
 itemsJSON items = object ["entries" .= map itemJSON items]
 
 itemJSON :: LogItem -> Value
-itemJSON item = object ["memory" .= Id.render (itemId item), "body" .= memBody (itemMemory item), "created" .= memCreated (itemMemory item), "level" .= itemLevel item, "sources" .= map Id.render (Set.toAscList (itemSources item)), "direct_sources" .= (if itemLevel item > 0 then map Id.render (Levels.sources (itemMemory item)) else [])]
+itemJSON item =
+  object
+    [ "memory" .= Id.render (itemId item),
+      "body" .= memBody (itemMemory item),
+      "created" .= memCreated (itemMemory item),
+      "level" .= itemLevel item,
+      "sources" .= map Id.render (Set.toAscList (itemSources item)),
+      "direct_sources" .= (if itemLevel item > 0 then map Id.render (Levels.sources (itemMemory item)) else [])
+    ]
 
 logJSON :: LogRead -> Value
-logJSON report = object ["topic" .= viewJSON (logTopic report), "entries" .= [itemJSON (LogItem i m 0 (Set.singleton i)) | (i, m) <- logEntries report], "complete" .= (Set.null (logFrontier report) && null (logFailures report)), "frontier" .= map Id.render (Set.toAscList (logFrontier report)), "failures" .= [object ["memory" .= Id.render i, "message" .= describeError (StorageError err)] | (i, err) <- logFailures report]]
+logJSON report =
+  object
+    [ "topic" .= viewJSON (logTopic report),
+      "entries" .= [itemJSON (LogItem i m 0 (Set.singleton i)) | (i, m) <- logEntries report],
+      "complete" .= (Set.null (logFrontier report) && null (logFailures report)),
+      "frontier" .= map Id.render (Set.toAscList (logFrontier report)),
+      "failures" .= [object ["memory" .= Id.render i, "message" .= describeError (StorageError err)] | (i, err) <- logFailures report]
+    ]
 
 levelsJSON :: LogLevels -> Value
 levelsJSON levels = object ["ref" .= nameText (levelsBase levels), "version" .= Id.render (levelsToken levels), "levels" .= map logJSON (levelsReads levels)]
 
 renderLog :: LogRead -> Text
-renderLog report = T.unlines (["log: " <> nameText (viewName (logTopic report)), "version: " <> versionText (viewVersion (logTopic report))] <> concat [[Id.render i, memBody memory] | (i, memory) <- logEntries report] <> ["History is incomplete. Frontier: " <> T.intercalate ", " (map Id.render (Set.toAscList (logFrontier report))) | not (Set.null (logFrontier report)) || not (null (logFailures report))])
+renderLog report =
+  T.unlines
+    ( ["log: " <> nameText (viewName (logTopic report)), "version: " <> versionText (viewVersion (logTopic report))]
+        <> concat [[Id.render i, memBody memory] | (i, memory) <- logEntries report]
+        <> ["History is incomplete. Frontier: " <> T.intercalate ", " (map Id.render (Set.toAscList (logFrontier report))) | not (Set.null (logFrontier report)) || not (null (logFailures report))]
+    )

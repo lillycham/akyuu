@@ -143,7 +143,12 @@ parseBlobs ((hash, size, path) : more) bytes = do
   let (header, tailBytes) = BC.break (== '\n') bytes
       payload = BS.take size (BS.drop 1 tailBytes)
       rest = BS.drop (size + 1) (BS.drop 1 tailBytes)
-  unless (BC.words header == [hash, "blob", BC.pack (show size)] && BS.length payload == size && BS.take 1 (BS.drop size (BS.drop 1 tailBytes)) == "\n") (Left (InvalidArchive "Invalid Git blob response."))
+  unless
+    ( BC.words header == [hash, "blob", BC.pack (show size)]
+        && BS.length payload == size
+        && BS.take 1 (BS.drop size (BS.drop 1 tailBytes)) == "\n"
+    )
+    (Left (InvalidArchive "Invalid Git blob response."))
   Map.insert path payload <$> parseBlobs more rest
 parseBlobs _ _ = Left (InvalidArchive "Unexpected Git blob response.")
 
@@ -211,7 +216,15 @@ lowerHex :: Char -> Bool
 lowerHex c = isHexDigit c && c `notElem` ['A' .. 'F']
 
 hashText :: ByteString -> Either GitError Text
-hashText bytes = let hash = BC.takeWhile (/= '\n') bytes in if bytes == hash <> "\n" && validHash hash then Right (T.pack (BC.unpack hash)) else Left (InvalidArchive "Invalid Git object ID.")
+hashText bytes =
+  let hash = BC.takeWhile (/= '\n') bytes
+   in if bytes == hash <> "\n"
+        && validHash hash
+        then Right (T.pack (BC.unpack hash))
+        else Left (InvalidArchive "Invalid Git object ID.")
 
 describeGitError :: GitError -> Text
-describeGitError err = case err of GitCommand command failure -> "Git " <> command <> " failed: " <> describeProcessError failure; InvalidArchive message -> message; ArchiveStorage failure -> "The archive has invalid events or memory dependencies. " <> describeError (StorageError failure)
+describeGitError err = case err of
+  GitCommand command failure -> "Git " <> command <> " failed: " <> describeProcessError failure
+  InvalidArchive message -> message
+  ArchiveStorage failure -> "The archive has invalid events or memory dependencies. " <> describeError (StorageError failure)

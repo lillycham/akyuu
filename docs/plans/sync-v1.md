@@ -296,8 +296,9 @@ construction, so a changed checkpoint cannot retain removed events.
 
 State construction no longer repeats canonical event construction after wire
 decoding. Local writes and merges reuse events from private validated state.
-They still validate the complete combined graph. Incoming local events still
-receive canonical construction, including values changed through record updates.
+They still validate the complete combined graph. An event has no exported
+record fields, so a record update cannot change a validated event. A local
+write therefore needs no second canonical construction.
 
 Bounded reads now use the open file's size to choose the first allocation.
 The size is only a hint. If the file grows, reads continue in bounded chunks
@@ -399,6 +400,8 @@ An empty destination gets its own identity and a matching recovery journal.
 After interruption, acknowledge only the verified remote inventory. Never
 acknowledge a local registration that the remote has not received. Each join
 keeps a fresh REPLICA identity across retries. Unrelated nonempty targets fail.
+A complete join writes `SYNC` and then removes its journals. The interrupted
+cursor receives the same 40-digit check as the saved sync cursor.
 
 `replica migrate --source DIR --classification FILE --dry-run` reads a legacy
 snapshot under the source mutation lock. The JSON classification must name
@@ -418,6 +421,8 @@ after it collects a reviewed memory. The plan lists such a record in
 carries diagnostic metadata through the protocol archive, and LEGACY provides
 a local report. Matching journals resume after baseline import, local
 registration or archive preparation. The source stays unchanged.
+A complete copy writes LEGACY and then removes its journal. A repeat of the
+same plan returns the same report. A different plan is refused.
 
 This is a snapshot-copy migration, not in-place conversion or live cutover.
 Cutover still requires a verified backup, a quiescent source and coordinated
@@ -428,8 +433,9 @@ edited legacy stores remains unsupported.
 ## Local archive, collection, pins and reviews
 
 `replica archive` saves one complete accepted checkpoint locally. It does
-not acknowledge remote publication or clear the outbox. Archive payloads,
-events and manifests remain indefinitely. No command prunes them.
+not acknowledge remote publication or clear the outbox. Archive payloads
+and events remain indefinitely. No command prunes them. An acknowledgement
+removes archive manifests that are older than the acknowledged one.
 
 Transport calls `acknowledgePublished` only after it verifies remote
 inclusion of the archived checkpoint's complete payload and event sets.
@@ -548,6 +554,9 @@ Replica commands require complete IDs for memory links and selection.
 head's memory. It preserves its bytes and creates a new causal event. New
 content instead uses `--kind`, `--agent`, and a body source. It supersedes
 every current head memory. Ordinary replacement refuses conflicts.
+`--as-log` resolves a topic and log type conflict to the log. Its new episode
+follows every current log head, so the log keeps its history. The topic
+heads leave the ref. Only a type conflict accepts this option.
 
 Read responses include the checkpoint, opaque version, status and every head.
 Each head includes its event ID, memory ID, replica, timestamps and memory

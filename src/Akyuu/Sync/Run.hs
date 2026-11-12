@@ -4,6 +4,7 @@ module Akyuu.Sync.Run (SyncError (..), SyncPoint (..), configure, runSync, runSy
 
 import Akyuu.Fs (atomicWrite, ifMissing, ignoreIO, tryWith)
 import Akyuu.Id qualified as Id
+import Akyuu.Mutation (withLockFile)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointEvents, checkpointObjects, pendingEvents, pendingObjects)
 import Akyuu.Sync.Event (eventAction)
 import Akyuu.Sync.Git (Bundle (bundlePayloads, bundleState), GitError, ancestor, bundleAt, describeGitError, fetch, prepare, push, readBundle, writeBundle)
@@ -12,7 +13,6 @@ import Akyuu.Sync.Repository (RepositoryError, acknowledgePublished, archiveInco
 import Akyuu.Sync.State (ResourceState (RefTypeConflict, TopicHeads), State, events, interpret, merge, storeId)
 import Akyuu.Sync.Topics (TopicError (StorageError), describeError, initialiseLocal)
 import Akyuu.Sync.Types (resourceOf)
-import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, displayException)
 import Control.Monad (forM_, unless, void, when)
 import Control.Monad.IO.Class (liftIO)
@@ -22,12 +22,12 @@ import Data.Aeson.Types (parseEither, withObject)
 import Data.Bifunctor (first)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
+import Data.Foldable (traverse_)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, makeAbsolute, renameDirectory)
-import System.FileLock (SharedExclusive (Exclusive), withTryFileLock)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, makeAbsolute, removeFile, renameDirectory)
 import System.FilePath ((</>))
 
 data SyncError = SyncIO IOException | SyncGit GitError | SyncStorage RepositoryError | SyncInvalid Text | SyncBusy | RemoteRewritten | PublicationUnconfirmed deriving (Eq, Show)
@@ -45,24 +45,28 @@ transport :: IO (Either GitError a) -> Work a
 transport = ExceptT . fmap (first SyncGit)
 
 withSync :: FilePath -> Work a -> IO (Either SyncError a)
-withSync root action = go (100 :: Int)
-  where
-    go 0 = pure (Left SyncBusy)
-    go n = do
-      result <- tryWith SyncIO (withTryFileLock (root </> "sync.lock") Exclusive (const (runExceptT action)))
-      case result of
-        Left err -> pure (Left err)
-        Right Nothing -> threadDelay 10000 >> go (n - 1)
-        Right (Just value) -> pure value
+withSync root action = withLockFile (root </> "sync.lock") SyncBusy SyncIO (runExceptT action)
 
 settings :: Text -> Text -> IO (Either SyncError Settings)
 settings remote branch = runExceptT $ do
   let full = if "refs/heads/" `T.isPrefixOf` branch then branch else "refs/heads/" <> branch
       pieces = T.splitOn "/" full
       allowed c = c `elem` ['a' .. 'z'] || c `elem` ['A' .. 'Z'] || c `elem` ['0' .. '9'] || c `elem` ['-', '_', '.', '/']
-  unless (not (T.null remote) && T.strip remote == remote && not (T.any (`elem` ['\n', '\r', '\0']) remote) && not ("-" `T.isPrefixOf` remote)) (throwE (SyncInvalid "Give a nonblank remote path or URL."))
+  unless
+    ( not (T.null remote)
+        && T.strip remote == remote
+        && not (T.any (`elem` ['\n', '\r', '\0']) remote)
+        && not ("-" `T.isPrefixOf` remote)
+    )
+    (throwE (SyncInvalid "Give a nonblank remote path or URL."))
   when (("https://" `T.isPrefixOf` remote || "http://" `T.isPrefixOf` remote) && "@" `T.isInfixOf` remote) (throwE (SyncInvalid "Do not put credentials in a remote URL."))
-  unless (T.length full <= 200 && T.all allowed full && not (".." `T.isInfixOf` full) && all (\p -> not (T.null p) && not ("." `T.isPrefixOf` p) && not ("." `T.isSuffixOf` p) && not (".lock" `T.isSuffixOf` p)) pieces) (throwE (SyncInvalid "Give a valid branch below refs/heads/."))
+  unless
+    ( T.length full <= 200
+        && T.all allowed full
+        && not (".." `T.isInfixOf` full)
+        && all (\p -> not (T.null p) && not ("." `T.isPrefixOf` p) && not ("." `T.isSuffixOf` p) && not (".lock" `T.isSuffixOf` p)) pieces
+    )
+    (throwE (SyncInvalid "Give a valid branch below refs/heads/."))
   url <- if ":" `T.isInfixOf` remote then pure remote else liftIO (T.pack <$> makeAbsolute (T.unpack remote))
   pure (Settings url full)
 
@@ -96,8 +100,11 @@ remember root (Just tip) = liftIO (atomicWrite (root </> "SYNC-TIP") (BL.toStric
 -- The cursor is JSON, so parse it strictly rather than interpolating raw text
 -- into a revision argument. It never becomes a refspec or remote URL.
 readTip :: FilePath -> Work (Maybe Text)
-readTip root = do
-  bytes <- liftIO (ifMissing Nothing (Just <$> BS.readFile (root </> "SYNC-TIP")))
+readTip root = readCursor (root </> "SYNC-TIP")
+
+readCursor :: FilePath -> Work (Maybe Text)
+readCursor path = do
+  bytes <- liftIO (ifMissing Nothing (Just <$> BS.readFile path))
   case bytes of
     Nothing -> pure Nothing
     Just value -> case eitherDecodeStrict' value of
@@ -125,7 +132,10 @@ verifiedFetch end root (Settings remote branch) = do
   pure (tip, bundle)
 
 contains :: Bundle -> Bundle -> Bool
-contains whole part = storeId (bundleState whole) == storeId (bundleState part) && Map.keysSet (events (bundleState part)) `Set.isSubsetOf` Map.keysSet (events (bundleState whole)) && Map.keysSet (bundlePayloads part) `Set.isSubsetOf` Map.keysSet (bundlePayloads whole)
+contains whole part =
+  storeId (bundleState whole) == storeId (bundleState part)
+    && Map.keysSet (events (bundleState part)) `Set.isSubsetOf` Map.keysSet (events (bundleState whole))
+    && Map.keysSet (bundlePayloads part) `Set.isSubsetOf` Map.keysSet (bundlePayloads whole)
 
 runSync :: FilePath -> Bool -> IO (Either SyncError Value)
 runSync = runSyncWith (const (pure ())) 60
@@ -151,7 +161,15 @@ runSyncWith hook seconds root preview = withSync root $ do
       if preview
         then do
           combined <- maybe (pure (snapshotState before)) (either (const (throwE (SyncInvalid "The remote history cannot merge."))) pure . merge (snapshotState before) . bundleState) incoming
-          pure (object ["preview" .= True, "checkpoint" .= checkpointText (snapshotId before), "remote_tip" .= tip, "import_events" .= maybe 0 (\bundle -> Set.size (Map.keysSet (events (bundleState bundle)) `Set.difference` Map.keysSet (events (snapshotState before)))) incoming, "conflicts" .= countConflicts combined])
+          pure
+            ( object
+                [ "preview" .= True,
+                  "checkpoint" .= checkpointText (snapshotId before),
+                  "remote_tip" .= tip,
+                  "import_events" .= maybe 0 (\bundle -> Set.size (Map.keysSet (events (bundleState bundle)) `Set.difference` Map.keysSet (events (snapshotState before)))) incoming,
+                  "conflicts" .= countConflicts combined
+                ]
+            )
         else do
           forM_ incoming $ \bundle -> do
             -- The fetched bundle and local checkpoint were both fully verified.
@@ -181,7 +199,19 @@ runSyncWith hook seconds root preview = withSync root $ do
     finish repo key tip more = do
       accepted <- storage (acknowledgePublished repo key)
       saved <- liftIO (tryWith SyncIO (atomicWrite (root </> "SYNC-PUBLISHED") (BL.toStrict (encode (checkpointText key)))))
-      pure (object ["preview" .= False, "published_checkpoint" .= checkpointText key, "remote_tip" .= tip, "remote_changes_remaining" .= more, "status_saved" .= either (const False) (const True) saved, "checkpoint" .= checkpointText (snapshotId accepted), "pending_events" .= Set.size (pendingEvents (snapshotCheckpoint accepted)), "pending_objects" .= Set.size (pendingObjects (snapshotCheckpoint accepted)), "conflicts" .= countConflicts (snapshotState accepted)])
+      pure
+        ( object
+            [ "preview" .= False,
+              "published_checkpoint" .= checkpointText key,
+              "remote_tip" .= tip,
+              "remote_changes_remaining" .= more,
+              "status_saved" .= either (const False) (const True) saved,
+              "checkpoint" .= checkpointText (snapshotId accepted),
+              "pending_events" .= Set.size (pendingEvents (snapshotCheckpoint accepted)),
+              "pending_objects" .= Set.size (pendingObjects (snapshotCheckpoint accepted)),
+              "conflicts" .= countConflicts (snapshotState accepted)
+            ]
+        )
 
 status :: FilePath -> IO (Either SyncError Value)
 status root = runExceptT $ do
@@ -200,10 +230,28 @@ status root = runExceptT $ do
           bytes <- BS.readFile (root </> "SYNC-ERROR")
           pure (either (const Nothing) id (eitherDecodeStrict' bytes :: Either String (Maybe Text)))
       )
-  pure (object ["checkpoint" .= checkpointText (snapshotId snapshot), "last_fetched_tip" .= tip, "last_published_checkpoint" .= published, "last_error" .= failure, "pending_events" .= Set.size (pendingEvents (snapshotCheckpoint snapshot)), "pending_objects" .= Set.size (pendingObjects (snapshotCheckpoint snapshot)), "conflicts" .= countConflicts (snapshotState snapshot)])
+  pure
+    ( object
+        [ "checkpoint" .= checkpointText (snapshotId snapshot),
+          "last_fetched_tip" .= tip,
+          "last_published_checkpoint" .= published,
+          "last_error" .= failure,
+          "pending_events" .= Set.size (pendingEvents (snapshotCheckpoint snapshot)),
+          "pending_objects" .= Set.size (pendingObjects (snapshotCheckpoint snapshot)),
+          "conflicts" .= countConflicts (snapshotState snapshot)
+        ]
+    )
 
 countConflicts :: State -> Int
-countConflicts state = length [() | resource <- Set.toList (Set.fromList (map (resourceOf . eventAction) (Map.elems (events state)))), case interpret state resource of TopicHeads heads -> Map.size heads > 1; RefTypeConflict _ -> True; _ -> False]
+countConflicts state =
+  length
+    [ ()
+    | resource <- Set.toList (Set.fromList (map (resourceOf . eventAction) (Map.elems (events state)))),
+      case interpret state resource of
+        TopicHeads heads -> Map.size heads > 1
+        RefTypeConflict _ -> True
+        _ -> False
+    ]
 
 checkpointText :: CheckpointId -> Text
 checkpointText (CheckpointId digest) = Id.render digest
@@ -224,7 +272,7 @@ joinReplicaWith hook root remote branch label = do
       then do
         existing <- readSettings root
         unless (existing == config) (throwE (SyncInvalid "This target has a different sync configuration."))
-        _ <- ExceptT (first (SyncInvalid . T.pack . show) <$> initialiseLocal root label)
+        _ <- ExceptT (first (SyncInvalid . describeError) <$> initialiseLocal root label)
         ExceptT (status root)
       else do
         entries <- liftIO (listDirectory root)
@@ -241,9 +289,8 @@ joinReplicaWith hook root remote branch label = do
         transport (prepare end mirror)
         tip <- transport (fetch end mirror url branchName) >>= maybe (throwE (SyncInvalid "The remote protocol branch is empty.")) pure
         bundle <- transport (readBundle end mirror tip)
-        priorBytes <- liftIO (ifMissing Nothing (Just <$> BS.readFile (root </> ".tmp.join-tip")))
-        forM_ priorBytes $ \bytes -> do
-          previous <- either (const (throwE (SyncInvalid "Invalid interrupted join cursor."))) pure (eitherDecodeStrict' bytes)
+        prior <- readCursor (root </> ".tmp.join-tip")
+        forM_ prior $ \previous -> do
           follows <- transport (ancestor end mirror previous tip)
           old <- transport (readBundle end mirror previous)
           unless (follows && bundle `contains` old) (throwE RemoteRewritten)
@@ -253,11 +300,12 @@ joinReplicaWith hook root remote branch label = do
         liftIO (hook JoinImported)
         key <- storage (archiveIncoming repo (bundleState bundle) (Map.keysSet (bundlePayloads bundle)))
         _ <- storage (acknowledgePublished repo key)
-        _ <- ExceptT (first (SyncInvalid . T.pack . show) <$> initialiseLocal root label)
+        _ <- ExceptT (first (SyncInvalid . describeError) <$> initialiseLocal root label)
         liftIO (hook JoinRegistered)
         unless finalGit (liftIO (renameDirectory mirror (root </> "transport.git")))
         remember root (Just tip)
         liftIO (atomicWrite (root </> "SYNC") (BL.toStrict (encode (settingsJSON config))))
+        liftIO (traverse_ (ignoreIO . removeFile . (root </>)) [".tmp.join", ".tmp.join-tip"])
         ExceptT (status root)
 
 describeSyncError :: SyncError -> Text
