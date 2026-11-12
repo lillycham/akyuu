@@ -3,6 +3,7 @@
 module Akyuu.Mutation
   ( Mutation,
     withMutation,
+    withLockFile,
     checkMutation,
     mutationLockPath,
   )
@@ -24,11 +25,17 @@ mutationLockPath root = root </> "store.lock"
 -- | Acquire the process-safe, non-reentrant lock, with a one-second bounded
 -- wait. File locks are released by the OS on exceptions and process death.
 withMutation :: FilePath -> e -> (IOException -> e) -> (Mutation -> IO (Either e a)) -> IO (Either e a)
-withMutation root busy io action = go (100 :: Int)
+withMutation root busy io action = withLockFile (mutationLockPath root) busy io (action (Mutation root))
+
+-- | Hold an exclusive lock file for an action, with the same one-second
+-- bounded wait. The sync and migration locks use this too, each with its own
+-- file: only 'withMutation' gives evidence of the mutation lock.
+withLockFile :: FilePath -> e -> (IOException -> e) -> IO (Either e a) -> IO (Either e a)
+withLockFile path busy io action = go (100 :: Int)
   where
     go 0 = pure (Left busy)
     go n = do
-      got <- tryWith io (withTryFileLock (mutationLockPath root) Exclusive (const (action (Mutation root))))
+      got <- tryWith io (withTryFileLock path Exclusive (const action))
       case got of
         Left e -> pure (Left e)
         Right Nothing -> threadDelay 10000 >> go (n - 1)
