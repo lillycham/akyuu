@@ -21,6 +21,7 @@ module Akyuu.Sync.Topics
     selectTopic,
     resolveTopicGuarded,
     selectTopicGuarded,
+    resolveLogGuarded,
     appendLogChecked,
     changeResource,
     ResolutionGuard,
@@ -42,7 +43,7 @@ import Akyuu.Mutation (withMutation)
 import Akyuu.Ops (NewMemory (newAboutRefs, newBody, newEdges), buildMemory)
 import Akyuu.Refs (Name, nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
-import Akyuu.Sync.Event (eventAction, eventReplica, eventTime, mkEvent)
+import Akyuu.Sync.Event (describeEventError, eventAction, eventReplica, eventTime, mkEvent)
 import Akyuu.Sync.Repository (Repository, RepositoryError (ArchiveNotAccepted, CollectionIncomplete, CorruptData, IdentityMismatch, InvalidCheckpoint, InvalidMemory, InvalidPointer, InvalidResidency, InvalidRetentionDepth, InvalidState, MissingCheckpoint, MissingCurrent, MissingLogPredecessor, MissingPayload, MissingRetainedTarget, NotRepository, OversizedData, PublicationUncertain, RepositoryBusy, RepositoryIO, StaleCheckpoint, UnacceptedObject), Snapshot, commitLocal, initialise, loadSnapshot, openRepository, readMemory, readStoreIdentity, snapshotId, snapshotState)
 import Akyuu.Sync.Repository qualified as Repository
 import Akyuu.Sync.State (RefKind (LogKind, TopicKind), ResourceState (Absent, LogHeads, RefTypeConflict, Registered, TopicHeads), StateError (StaleVersion), Version, events, interpret, resourceHeads, storeId, version, versionText)
@@ -149,7 +150,7 @@ initialiseLocal path label = fmap join $ tryWith TopicIO $ runExceptT $ do
         _ -> do
           (nonce, now) <- liftIO freshEventData
           event <-
-            either (throwE . InvalidInput . T.pack . show) pure $
+            either (throwE . InvalidInput . describeEventError) pure $
               mkEvent (storeId state) replica nonce (Map.keysSet (resourceHeads state RegistryResource)) (RegisterReplica replica label) now
           result <- liftIO (commitLocal repo (version state RegistryResource) event [])
           case result of
@@ -251,6 +252,12 @@ resolveTopicGuarded guard local name expected new = writeTopicWith guard local n
 selectTopicGuarded :: ResolutionGuard -> LocalReplica -> Name -> Version -> Id -> IO (Either TopicError TopicView)
 selectTopicGuarded guard local name expected selected = writeTopicWith guard local name (ResolveWrite expected (Left selected))
 
+-- | Resolve a type conflict in favour of the log. The new episode follows
+-- every current log head, so the log keeps its whole history. The topic heads
+-- are consumed and their memories leave the ref.
+resolveLogGuarded :: ResolutionGuard -> LocalReplica -> Name -> Version -> NewMemory -> IO (Either TopicError TopicView)
+resolveLogGuarded guard local name expected new = writeTopicWith guard local name (ResolveLogWrite expected new)
+
 -- | Pin/review sets and observed clears use the same durable event transaction
 -- as topics. GC never calls this function or invents a removal event.
 changeResource :: LocalReplica -> Version -> Action -> IO (Either TopicError Snapshot)
@@ -271,7 +278,7 @@ changeResource (LocalReplica repo replica) expected action = fmap join $ tryWith
   unless (expected == token) (throwE (StaleResource resource token))
   traverse_ (storage . readMemory snapshot) targets
   (nonce, now) <- liftIO freshEventData
-  event <- either (throwE . InvalidInput . T.pack . show) pure (mkEvent (storeId state) replica nonce (Map.keysSet (resourceHeads state resource)) action now)
+  event <- either (throwE . InvalidInput . describeEventError) pure (mkEvent (storeId state) replica nonce (Map.keysSet (resourceHeads state resource)) action now)
   result <- liftIO (commitLocal repo expected event [])
   case result of
     Left (InvalidState StaleVersion) -> do
@@ -296,7 +303,7 @@ appendLogChecked local@(LocalReplica repo replica) name expected input checks = 
   (nonce, now) <- liftIO freshEventData
   let predecessors = Set.fromList [Edge Follows (headMemoryId entry) | entry <- viewHeads view]
   memory <- either (throwE . InvalidInput . describe) pure (buildMemory now input {newEdges = newEdges input <> predecessors})
-  event <- either (throwE . InvalidInput . T.pack . show) pure (mkEvent (storeId state) replica nonce (Map.keysSet (resourceHeads state (RefResource name))) (AppendLog name (memoryId memory)) now)
+  event <- either (throwE . InvalidInput . describeEventError) pure (mkEvent (storeId state) replica nonce (Map.keysSet (resourceHeads state (RefResource name))) (AppendLog name (memoryId memory)) now)
   result <- liftIO (Repository.commitLocalChecked repo expected event [(memoryId memory, renderMemory memory)] checks)
   case result of
     Left (InvalidState StaleVersion) -> ExceptT (readTopic local name) >>= throwE . StaleTopic
@@ -304,7 +311,7 @@ appendLogChecked local@(LocalReplica repo replica) name expected input checks = 
     Left err -> throwE (StorageError err)
     Right accepted -> viewAt accepted name
 
-data TopicWrite = CreateWrite NewMemory | ReplaceWrite Version NewMemory | ResolveWrite Version (Either Id NewMemory)
+data TopicWrite = CreateWrite NewMemory | ReplaceWrite Version NewMemory | ResolveWrite Version (Either Id NewMemory) | ResolveLogWrite Version NewMemory
 
 writeTopic :: LocalReplica -> Name -> TopicWrite -> IO (Either TopicError TopicView)
 writeTopic = writeTopicWith (const (pure (Right [])))
@@ -315,9 +322,10 @@ writeTopicWith guard local@(LocalReplica repo replica) name operation = fmap joi
   view <- viewAt snapshot name
   let state = snapshotState snapshot
       creating = case operation of CreateWrite _ -> True; _ -> False
-      resolving = case operation of ResolveWrite _ _ -> True; _ -> False
-      expected = case operation of CreateWrite _ -> Nothing; ReplaceWrite token _ -> Just token; ResolveWrite token _ -> Just token
-      content = case operation of CreateWrite input -> Right input; ReplaceWrite _ input -> Right input; ResolveWrite _ choice -> choice
+      resolving = case operation of ResolveWrite _ _ -> True; ResolveLogWrite _ _ -> True; _ -> False
+      asLog = case operation of ResolveLogWrite _ _ -> True; _ -> False
+      expected = case operation of CreateWrite _ -> Nothing; ReplaceWrite token _ -> Just token; ResolveWrite token _ -> Just token; ResolveLogWrite token _ -> Just token
+      content = case operation of CreateWrite input -> Right input; ReplaceWrite _ input -> Right input; ResolveWrite _ choice -> choice; ResolveLogWrite _ input -> Right input
   forExpected view expected
   checks <- if resolving then ExceptT (guard snapshot) else pure []
   when (creating && viewStatus view /= Missing) (throwE (ExistingTopic view))
@@ -325,20 +333,28 @@ writeTopicWith guard local@(LocalReplica repo replica) name operation = fmap joi
     when (viewStatus view == Missing) (throwE (MissingTopic name))
     when (viewStatus view == LogTopic) (throwE (IsLog name))
     when (not resolving && viewStatus view `elem` [Conflicted, TypeConflicted]) (throwE (NeedsResolution view))
+    when (asLog && viewStatus view /= TypeConflicted) (throwE (InvalidInput "Only a topic and log type conflict can resolve to a log."))
   (nonce, now) <- liftIO freshEventData
   (digest, payloads) <- case content of
     Right input -> do
       when (T.null (T.strip (newBody input))) (throwE (InvalidInput "A topic body must not be blank."))
       traverse_ (checkLink state) (Set.toAscList (newAboutRefs input))
-      let replaced = if creating then Set.empty else Set.fromList [Edge Supersedes (headMemoryId entry) | entry <- viewHeads view]
+      when (asLog && any ((== Follows) . kind) (Set.toList (newEdges input))) (throwE (InvalidInput "Log resolution supplies the follows edges. Do not supply them yourself."))
+      let replaced
+            | creating = Set.empty
+            | asLog = Set.fromList [Edge Follows (headMemoryId entry) | entry <- viewHeads view, headKind entry == LogKind]
+            | otherwise = Set.fromList [Edge Supersedes (headMemoryId entry) | entry <- viewHeads view]
       memory <- either (throwE . InvalidInput . describe) pure (buildMemory now input {newEdges = newEdges input <> replaced})
       pure (memoryId memory, [(memoryId memory, renderMemory memory)])
     Left choice -> do
       unless (choice `elem` map headMemoryId (viewHeads view)) (throwE (InvalidSelection choice))
       pure (choice, [])
   let parents = Map.keysSet (resourceHeads state (RefResource name))
-      action = if resolving then ResolveTopic name digest else SetTopic name digest
-  event <- either (throwE . InvalidInput . T.pack . show) pure (mkEvent (storeId state) replica nonce parents action now)
+      action
+        | asLog = ResolveLog name digest
+        | resolving = ResolveTopic name digest
+        | otherwise = SetTopic name digest
+  event <- either (throwE . InvalidInput . describeEventError) pure (mkEvent (storeId state) replica nonce parents action now)
   result <- liftIO (Repository.commitLocalChecked repo (viewVersion view) event payloads checks)
   case result of
     Left (InvalidState StaleVersion) -> do

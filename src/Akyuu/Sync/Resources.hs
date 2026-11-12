@@ -29,5 +29,17 @@ resourceJSON resource snapshot = object (["checkpoint" .= Id.render checkpoint, 
       PinResource digest -> ["type" .= ("pin" :: Text), "memory" .= Id.render digest, "pinned" .= (interpret state resource == PinState True)]
       ReviewResource a b ->
         let records = case interpret state resource of ReviewState entries -> entries; _ -> Map.empty
-         in ["type" .= ("review" :: Text), "a" .= Id.render (min a b), "b" .= Id.render (max a b), "reviewed" .= not (Map.null records), "records" .= [object ["event" .= Id.render digest, "author" .= reviewAuthor value, "reason" .= reviewReason value] | (EventId digest, value) <- Map.toAscList records]]
+         in [ "type" .= ("review" :: Text),
+              "a" .= Id.render (min a b),
+              "b" .= Id.render (max a b),
+              "reviewed" .= not (Map.null records),
+              "records"
+                .= [ object
+                       [ "event" .= Id.render digest,
+                         "author" .= reviewAuthor value,
+                         "reason" .= reviewReason value
+                       ]
+                   | (EventId digest, value) <- Map.toAscList records
+                   ]
+            ]
       _ -> []

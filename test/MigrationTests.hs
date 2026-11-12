@@ -70,6 +70,7 @@ migrationTests =
         identity <- BS.readFile (target </> "REPLICA")
         _ <- copyMigration target plan (migrationToken plan) >>= right
         BS.readFile (target </> "REPLICA") >>= (@?= identity)
+        doesFileExist (target </> ".tmp.migration") >>= (@?= False)
         Refs.getRef refs name >>= (@?= Right sourceBefore)
         doesFileExist (root </> "IDENTITY") >>= (@?= False)
         doesFileExist (target </> "LEGACY") >>= (@?= True),

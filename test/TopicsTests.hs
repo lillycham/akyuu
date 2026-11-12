@@ -3,15 +3,16 @@
 module TopicsTests (topicsTests, withLocal, forkTopic, topicName, newTopic, onlyHead) where
 
 import Akyuu.Error (AkyuuError (BadInput))
-import Akyuu.Graph (Edge (Edge), EdgeType (Supersedes))
+import Akyuu.Graph (Edge (Edge, kind), EdgeType (Follows, Supersedes))
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memAboutRefs, memAgent, memBody, memEdges), memoryId, renderMemory)
 import Akyuu.Ops (NewMemory (NewMemory, newAboutRefs), buildMemory, withEnv)
 import Akyuu.Refs (Name, mkName)
 import Akyuu.Sync.Event (mkEvent)
 import Akyuu.Sync.Repository (importState, loadSnapshot, openRepository, snapshotState)
+import Akyuu.Sync.State (RefKind (LogKind))
 import Akyuu.Sync.State qualified as State
-import Akyuu.Sync.Topics (LocalReplica, TopicContext (TopicContext), TopicError (ExistingTopic, InvalidInput, InvalidSelection, NeedsResolution, StaleTopic), TopicHead (headEvent, headMemory, headMemoryId, headReplica, headTime), TopicStatus (Conflicted, Missing, Resolved, TypeConflicted), TopicView (viewCheckpoint, viewHeads, viewName, viewStatus, viewVersion), conflicts, contextTopics, createTopic, initialiseLocal, openLocal, readTopic, replaceTopic, resolveTopic, selectTopic)
+import Akyuu.Sync.Topics (LocalReplica, TopicContext (TopicContext), TopicError (ExistingTopic, InvalidInput, InvalidSelection, NeedsResolution, StaleTopic), TopicHead (headEvent, headKind, headMemory, headMemoryId, headReplica, headTime), TopicStatus (Conflicted, LogTopic, Missing, Resolved, TypeConflicted), TopicView (viewCheckpoint, viewHeads, viewName, viewStatus, viewVersion), conflicts, contextTopics, createTopic, initialiseLocal, openLocal, readTopic, replaceTopic, resolveLogGuarded, resolveTopic, selectTopic)
 import Akyuu.Sync.Types (Action (AppendLog, RegisterReplica, SetTopic), Nonce (Nonce), ReplicaId (ReplicaId), Resource (RegistryResource), mkIdentifier)
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -131,6 +132,18 @@ topicsTests =
         replaceTopic local topicName (viewVersion forked) (newTopic "overwrite") >>= (@?= Left (NeedsResolution forked))
         resolved <- resolveTopic local topicName (viewVersion forked) (newTopic "chosen topic") >>= right
         viewStatus resolved @?= Resolved,
+      testCase "a type conflict can resolve to the log and keep its history" $ withLocal $ \root local -> do
+        forked <- forkTopic True root local
+        let logHeads = [headMemoryId entry | entry <- viewHeads forked, headKind entry == LogKind]
+        assertBool "expected a log head" (not (null logHeads))
+        resolved <- resolveLogGuarded (const (pure (Right []))) local topicName (viewVersion forked) (newTopic "kept as a log") >>= right
+        viewStatus resolved @?= LogTopic
+        entry <- onlyHead resolved
+        Set.filter ((== Follows) . kind) (memEdges (headMemory entry)) @?= Set.fromList (map (Edge Follows) logHeads),
+      testCase "only a type conflict can resolve to a log" $ withLocal $ \root local -> do
+        forked <- forkTopic False root local
+        result <- resolveLogGuarded (const (pure (Right []))) local topicName (viewVersion forked) (newTopic "not a log")
+        assertBool "a topic conflict became a log" (case result of Left (InvalidInput _) -> True; _ -> False),
       testCase "context includes missing and conflict markers from one checkpoint" $ withLocal $ \root local -> do
         _ <- forkTopic False root local
         missing <- right (mkName "me/missing")

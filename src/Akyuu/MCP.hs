@@ -185,6 +185,7 @@ data ReplicaCall
   | TopicCreate Name NewMemory
   | TopicReplace Name Version NewMemory
   | TopicResolve Name Version (Either Id NewMemory)
+  | TopicResolveLog Name Version NewMemory
   | TopicConflicts
   | TopicContext [Name]
   | ConfiguredContext (Maybe Text) (Maybe Text) [Name] ReplicaLogs.LogPageOptions
@@ -691,7 +692,7 @@ replicaToolList =
   [ tool "topic_read" "Read a topic with its opaque version and every current head. A conflict has no selected current value." (objectSchema [("ref", refSchema)] ["ref"]),
     tool "topic_create" "Create a topic. Fail if the name exists. The configured author is the default." (objectSchema (("ref", refSchema) : replicaMemoryProps) ["ref", "kind", "body"]),
     tool "topic_replace" "Replace one resolved topic. Copy the complete version from topic_read as expected. Resolve conflicts first." (objectSchema (("ref", refSchema) : ("expected", versionSchema) : replicaMemoryProps) ["ref", "expected", "kind", "body"]),
-    tool "topic_resolve" "Resolve every current head. Give select for one current memory, or kind and body for a merged memory. Require the complete observed version." (objectSchema (("ref", refSchema) : ("expected", versionSchema) : ("select", stringSchema "A complete memory ID from one current head.") : replicaMemoryProps) ["ref", "expected"]),
+    tool "topic_resolve" "Resolve every current head. Give select for one current memory, or kind and body for a merged memory. Require the complete observed version." (objectSchema (("ref", refSchema) : ("expected", versionSchema) : ("select", stringSchema "A complete memory ID from one current head.") : ("as_log", object ["type" .= ("boolean" :: Text), "default" .= False, "description" .= ("Resolve a topic and log type conflict to the log. Give kind and body for the episode that follows every log head." :: Text)]) : replicaMemoryProps) ["ref", "expected"]),
     tool "topic_conflicts" "List unresolved topic and type conflicts. Independent log heads are not conflicts." (objectSchema [] []),
     tool "topic_context" "Read explicit refs from one checkpoint, including missing refs and conflict markers. This experimental tool does not expand configured tiers." (objectSchema [("refs", object ["type" .= ("array" :: Text), "items" .= refSchema, "minItems" .= (1 :: Int)])] ["refs"]),
     tool "configured_context" "Read configured policy, tiers, directory refs and bounded log pages from one checkpoint. Unresolved controls suspend configured expansion. Logs retain recent episodes and use older summaries with exact source IDs." (objectSchema [("tier", stringSchema "The tier; default always."), ("cwd", stringSchema "The session directory."), ("refs", object ["type" .= ("array" :: Text), "items" .= refSchema]), ("log_page", countSchema 1), ("log_limit", countSchema 1), ("log_keep", countSchema 0), ("log_checkpoint", idSchema "The checkpoint from page one; required for later pages. Restart at page one if it changes.")] []),
@@ -792,7 +793,7 @@ parseArgs n args = case n of
     name <- refArg args
     expected <- idArg args "expected"
     level <- countArg "level" 1 1
-    ids <- required args "sources" (asList asText) "a list of complete memory IDs" >>= traverse (first (BadArguments . T.pack . show) . Id.parse)
+    ids <- required args "sources" (asList asText) "a list of complete memory IDs" >>= traverse (first (const (BadArguments "sources must be complete memory IDs.")) . Id.parse)
     unless (length ids >= 2 && Set.size (Set.fromList ids) == length ids) (Left (BadArguments "Give two or more distinct summary sources."))
     CallReplica . LogSummarise name expected level ids <$> memoryArg args plainEdges
   "log_resolution" -> CallReplica <$> (LogResolution <$> refArg args <*> countArg "keep" 10 0)
@@ -805,6 +806,8 @@ parseArgs n args = case n of
     ref <- refArg args
     expected <- versionArg args
     selected <- optIdArg args "select"
+    asLog <- fromMaybe False <$> optional' args "as_log" asBool "true or false"
+    unless (not asLog || selected == Nothing) (Left (BadArguments "Give select or as_log, not both."))
     content <- case selected of
       Nothing -> Right <$> memoryArg args plainEdges
       Just digest -> do
@@ -812,7 +815,7 @@ parseArgs n args = case n of
           (all (\(key, _) -> not (KM.member (K.fromText key) args)) memoryProps)
           (Left (BadArguments "Give select or new memory fields, not both."))
         pure (Left digest)
-    pure (CallReplica (TopicResolve ref expected content))
+    pure (CallReplica (case content of Right new | asLog -> TopicResolveLog ref expected new; _ -> TopicResolve ref expected content))
   "topic_conflicts" -> pure (CallReplica TopicConflicts)
   "topic_context" -> do
     refs <- required args "refs" (asList asText) "a list of ref names" >>= traverse parseName
@@ -1252,6 +1255,9 @@ runReplicaTool cfg local call = case call of
     TopicResolve name expected (Right new) -> case settings Nothing Nothing [] of
       Left err -> pure (failure err)
       Right options -> viewResult <$> Topics.resolveTopicGuarded (ReplicaContext.resolutionGuard options name) local name expected new
+    TopicResolveLog name expected new -> case settings Nothing Nothing [] of
+      Left err -> pure (failure err)
+      Right options -> viewResult <$> Topics.resolveLogGuarded (ReplicaContext.resolutionGuard options name) local name expected new
     TopicConflicts -> contextResult <$> Topics.conflicts local
     TopicContext names -> contextResult <$> Topics.contextTopics local names
     ConfiguredContext tier cwd refs pages -> case settings tier cwd refs of
