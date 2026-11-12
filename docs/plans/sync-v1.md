@@ -226,6 +226,12 @@ publication. Supersession edges may name collected history. Payloads have a
 16 MiB limit. Manifests have a 64 MiB limit. Reads enforce their limits before
 they allocate a complete file.
 
+Each manifest names the whole inventory. After a publication, the writer
+removes every manifest except the new one and the one that it replaced. This
+occurs under the mutation lock and is best effort. A reader that finds no
+manifest for its pointer reads `CURRENT` again. A missing manifest below an
+unchanged pointer is an explicit error. Archive manifests are not pruned.
+
 Transactions write and flush immutable files first. They publish `CURRENT`
 last. Repository initialisation also flushes ancestor directories. Recovery
 ignores temporary files and preparations outside the accepted manifest.
@@ -370,7 +376,11 @@ Progress metadata failure after acknowledgement does not reject the accepted
 publication. The response reports whether status metadata was saved.
 
 Git subprocesses run in owned groups with a shell anchor until cleanup.
-Close inherited descriptors in the child before Git executes. A full
+Close inherited descriptors in the child before Git executes. A shell
+that cannot name a descriptor above 9 in a redirection, such as dash, closes
+only descriptors 3 to 9. If the wrapper shell ends with no result, the
+command fails immediately. A failed command reports its exit status and its
+last three diagnostic lines. A full
 descriptor-limit scan proved expensive on Darwin. Bound stdout and discard
 excess stderr. Disable hooks, global/system Git configuration, interactive
 credentials and recursive submodules. SSH uses batch mode and the existing
@@ -402,7 +412,9 @@ describe their known legacy order, while log baselines name the current DAG
 without rewriting memory bytes. The Unix epoch is an explicit baseline
 sentinel, not an invented date for an original action. Missing historical
 generations remain diagnostics; missing current or retaining payloads fail.
-Preserve pins, reviews and tombstones. A canonical legacy-baseline memory
+Preserve pins, reviews and tombstones. Legacy GC keeps a review record
+after it collects a reviewed memory. The plan lists such a record in
+`reviews_without_memory` and does not import it. A canonical legacy-baseline memory
 carries diagnostic metadata through the protocol archive, and LEGACY provides
 a local report. Matching journals resume after baseline import, local
 registration or archive preparation. The source stays unchanged.
