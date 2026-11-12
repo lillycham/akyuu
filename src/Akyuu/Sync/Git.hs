@@ -20,9 +20,10 @@ import Akyuu.Id qualified as Id
 import Akyuu.Memory (renderMemory)
 import Akyuu.Sync.Checkpoint (checkpointObjects)
 import Akyuu.Sync.Event (eventAction, renderEvent)
-import Akyuu.Sync.Process (Deadline, ProcessError (GitFailed), runGit)
+import Akyuu.Sync.Process (Deadline, ProcessError (GitFailed), describeProcessError, runGit)
 import Akyuu.Sync.Repository (RepositoryError, Snapshot, readMemory, snapshotCheckpoint, snapshotState, verifyIncoming)
 import Akyuu.Sync.State (State, events, storeId)
+import Akyuu.Sync.Topics (TopicError (StorageError), describeError)
 import Akyuu.Sync.Types (Action (RegisterReplica), EventId (EventId), StoreId (StoreId), parseIdentifier, renderIdentifier)
 import Control.Monad (forM_, unless, void, when)
 import Control.Monad.Trans.Class (lift)
@@ -79,7 +80,7 @@ fetch end root remote branch = runExceptT $ do
 ancestor :: Deadline -> FilePath -> Text -> Text -> IO (Either GitError Bool)
 ancestor end root older newer = do
   outcome <- runExceptT (git end root ["merge-base", "--is-ancestor", T.unpack older, T.unpack newer] "" 1024)
-  pure $ case outcome of Right _ -> Right True; Left (GitCommand _ (GitFailed 1)) -> Right False; Left err -> Left err
+  pure $ case outcome of Right _ -> Right True; Left (GitCommand _ (GitFailed 1 _)) -> Right False; Left err -> Left err
 
 data Entry = Entry ByteString Int FilePath deriving (Eq, Show)
 
@@ -213,4 +214,4 @@ hashText :: ByteString -> Either GitError Text
 hashText bytes = let hash = BC.takeWhile (/= '\n') bytes in if bytes == hash <> "\n" && validHash hash then Right (T.pack (BC.unpack hash)) else Left (InvalidArchive "Invalid Git object ID.")
 
 describeGitError :: GitError -> Text
-describeGitError err = case err of GitCommand command failure -> "Git " <> command <> " failed: " <> T.pack (show failure); InvalidArchive message -> message; ArchiveStorage _ -> "The archive has invalid events or memory dependencies."
+describeGitError err = case err of GitCommand command failure -> "Git " <> command <> " failed: " <> describeProcessError failure; InvalidArchive message -> message; ArchiveStorage failure -> "The archive has invalid events or memory dependencies. " <> describeError (StorageError failure)

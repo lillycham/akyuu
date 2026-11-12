@@ -2,7 +2,7 @@
 
 module SyncProcessTests (syncProcessTests) where
 
-import Akyuu.Sync.Process (ProcessError (GitOutputLimit, GitStorageLimit, GitTimeout), deadline, runGit)
+import Akyuu.Sync.Process (ProcessError (GitFailed, GitOutputLimit, GitProcessIO, GitStorageLimit, GitTimeout), deadline, runGit)
 import Control.Concurrent (forkIO, killThread, newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Exception (finally)
 import Control.Monad (void)
@@ -53,7 +53,14 @@ syncProcessTests :: TestTree
 syncProcessTests =
   testGroup
     "bounded sync subprocesses"
-    [ scenario "stdout is bounded" "printf '%01000d' 0" $ \_ -> do
+    [ scenario "a failed command keeps its last diagnostic lines" "echo first >&2; echo second >&2; echo third >&2; printf 'fatal: no\\tremote\\n' >&2; exit 3" $ \_ -> do
+        end <- deadline 5
+        runGit end Nothing ["--version"] "" 64 >>= (@?= Left (GitFailed 3 "second; third; fatal: no remote")),
+      scenario "a dead wrapper shell fails before the deadline" "kill -KILL $PPID" $ \_ -> do
+        end <- deadline 10
+        result <- timeout 4000000 (runGit end Nothing ["--version"] "" 64)
+        result @?= Just (Left GitProcessIO),
+      scenario "stdout is bounded" "printf '%01000d' 0" $ \_ -> do
         end <- deadline 5
         runGit end Nothing ["--version"] "" 64 >>= (@?= Left GitOutputLimit),
       scenario "private Git storage is bounded during the command" "truncate -s 600M \"$AKYUU_TEST_DISK/large\"; sleep 30" $ \root -> do
