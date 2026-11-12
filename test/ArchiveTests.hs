@@ -12,7 +12,7 @@ import Akyuu.Refs (mkName)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), activeObjects, checkpointEvents, checkpointId, checkpointObjects, evictedObjects, pendingEvents, pendingObjects, renderCheckpoint, withEvicted)
 import Akyuu.Sync.Event (mkEvent)
 import Akyuu.Sync.Logs qualified as Logs
-import Akyuu.Sync.Repository (Boundary (EvictionsSynced, MemoryEvicted, WriteBoundary), CollectionPlan (collectionCandidates, collectionCheckpoint, collectionEvicted, collectionRetained), FaultHook, Repository, RepositoryError (ArchiveNotAccepted, CollectionIncomplete, InvalidResidency, RepositoryBusy, StaleCheckpoint, UnacceptedObject), Snapshot, WriteTarget (ArchiveCheckpointFile, ArchiveEventFile, ArchiveMemoryFile, CurrentFile), acknowledgePublished, acknowledgePublishedWith, archiveSnapshot, archiveSnapshotWith, collect, collectWith, importState, loadSnapshot, openRepository, planCollection, readMemory, snapshotCheckpoint, snapshotId, snapshotState)
+import Akyuu.Sync.Repository (Boundary (EvictionsSynced, MemoryEvicted, WriteBoundary), CollectionPlan (collectionCandidates, collectionCheckpoint, collectionEvicted, collectionRetained), FaultHook, Repository, RepositoryError (ArchiveNotAccepted, CollectionIncomplete, InvalidResidency, RepositoryBusy, StaleCheckpoint, UnacceptedObject), Snapshot, WriteTarget (ArchiveCheckpointFile, ArchiveEventFile, ArchiveMemoryFile, CurrentFile), acknowledgePublished, acknowledgePublishedWith, archiveSnapshot, archiveSnapshotWith, collect, collectWith, importState, loadSnapshot, openRepository, planCollection, readMemory, snapshotCheckpoint, snapshotId, snapshotState, verifyRepository)
 import Akyuu.Sync.Resources (writeResource)
 import Akyuu.Sync.Search (SearchReport (SearchReport), searchTopics)
 import Akyuu.Sync.State qualified as State
@@ -221,7 +221,7 @@ storageTests =
         let CheckpointId key = checkpointId invalid
         BS.writeFile (root </> "checkpoints" </> T.unpack (Id.render key)) (renderCheckpoint invalid)
         BS.writeFile (root </> "CURRENT") (encodeUtf8 (Id.render key <> "\n"))
-        loadSnapshot repo >>= (@?= Left InvalidResidency)
+        verifyRepository repo >>= (@?= Left InvalidResidency)
     ]
 
 retentionTests :: TestTree

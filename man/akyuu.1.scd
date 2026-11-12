@@ -191,6 +191,13 @@ all writers and GC jobs together; old processes do not use this protocol.
 	Keep pending export obligations. This command does not publish to a remote.
 	The archive retains bytes indefinitely and permits explicit fallback reads.
 
+*replica verify* [*--json*]
+	Read and check every accepted event and payload of the replica. Check
+	each hash, each payload link and the residency of evicted payloads.
+	Other commands check the events, and only the payloads that they read or
+	add. Run this command after a disk fault or a restore from backup. The
+	cost grows with the inventory.
+
 *replica sync-config* *--remote* _url_ [*--branch* _name_] [*--json*]
 	Configure one dedicated protocol branch. The default is akyuu-sync-v1.
 	This command makes a private bare transport repository but contacts no

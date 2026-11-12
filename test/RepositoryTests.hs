@@ -12,7 +12,7 @@ import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointEvents, che
 import Akyuu.Sync.Checkpoint qualified as Checkpoint
 import Akyuu.Sync.Event (Event, eventId, mkEvent, renderEvent)
 import Akyuu.Sync.Event qualified as Event
-import Akyuu.Sync.Repository (Boundary (DirectoryCreated, SnapshotValidated, WriteBoundary), Repository, RepositoryError (CorruptData, IdentityMismatch, InvalidPointer, InvalidState, MissingCurrent, MissingPayload, MissingRetainedTarget, NotRepository, PublicationUncertain, RepositoryBusy, RepositoryIO, UnacceptedObject), Snapshot, WriteTarget (CheckpointFile, CurrentFile, EventFile, IdentityFile, MemoryFile), acknowledgePublished, archiveSnapshot, collect, commitLocal, commitLocalWith, importState, initialise, initialiseWith, loadSnapshot, openRepository, readMemory, snapshotCheckpoint, snapshotId, snapshotState)
+import Akyuu.Sync.Repository (Boundary (DirectoryCreated, SnapshotValidated, WriteBoundary), Repository, RepositoryError (CorruptData, IdentityMismatch, InvalidPointer, InvalidState, MissingCurrent, MissingPayload, MissingRetainedTarget, NotRepository, PublicationUncertain, RepositoryBusy, RepositoryIO, UnacceptedObject), Snapshot, WriteTarget (CheckpointFile, CurrentFile, EventFile, IdentityFile, MemoryFile), acknowledgePublished, archiveSnapshot, collect, commitLocal, commitLocalWith, importState, initialise, initialiseWith, loadSnapshot, openRepository, readMemory, snapshotCheckpoint, snapshotId, snapshotState, verifyRepository)
 import Akyuu.Sync.Repository qualified as Repository
 import Akyuu.Sync.State (StateError (StaleVersion))
 import Akyuu.Sync.State qualified as State
@@ -57,7 +57,7 @@ oversizedTests =
             path = root </> directory </> digestName digest
         setFileSize path (fromIntegral limit + 100)
         canonical <- canonicalizePath path
-        loadSnapshot repo >>= (@?= Left (Repository.OversizedData canonical))
+        (if directory == "objects" then verifyRepository repo else loadSnapshot repo) >>= (@?= Left (Repository.OversizedData canonical))
     | directory <- ["objects", "events", "checkpoints"]
     ]
 
@@ -203,12 +203,15 @@ validationTests =
         canonicalRoot <- canonicalizePath root
         accepted <- writeFirst repo before >>= right
         BS.writeFile (root </> "objects" </> digestName (memoryId (memory "first"))) "corrupt"
-        result <- loadSnapshot repo
+        -- A load does not read payloads. The complete check and a read both report the damage.
+        _ <- loadSnapshot repo >>= right
+        result <- verifyRepository repo
         assertBool "corruption hidden" (isLeft result)
         readMemory accepted (memoryId (memory "first")) >>= (@?= Left (CorruptData (canonicalRoot </> "objects" </> digestName (memoryId (memory "first")))))
         let next = event 3 [topicEvent] (SetTopic name (memoryId (memory "second")))
-        commitLocal repo (State.version (snapshotState accepted) (RefResource name)) next [payload (memory "second")] >>= assertLeft
-        importState repo (snapshotState accepted) [payload (memory "first")] >>= assertLeft
+        commitLocal repo (State.version (snapshotState accepted) (RefResource name)) next [payload (memory "second")] >>= void . right
+        _ <- importState repo (snapshotState accepted) [payload (memory "first")] >>= right
+        verifyRepository repo >>= assertBool "a write repaired or hid the damage" . isLeft
         BS.readFile (root </> "objects" </> digestName (memoryId (memory "first"))) >>= (@?= "corrupt"),
       testCase "malformed CURRENT never resets the repository" $ withRepository $ \root repo _ -> do
         BS.writeFile (root </> "CURRENT") "bad\n"
@@ -341,6 +344,25 @@ preflightTests =
         readIORef attempts >>= (@?= 2)
         evictedObjects (snapshotCheckpoint after) @?= Set.singleton (memoryId (memory "first"))
         readMemory after (memoryId (memory "first")) >>= (@?= Right (memory "first")),
+      testCase "a new payload with an edge to an evicted payload restores it" $ withRepository $ \root repo before -> do
+        first <- writeFirst repo before >>= right
+        let secondEvent = event 3 [topicEvent] (SetTopic name (memoryId (memory "second")))
+        second <- commitLocal repo (State.version (snapshotState first) (RefResource name)) secondEvent [payload (memory "second")] >>= right
+        key <- archiveSnapshot repo second >>= right
+        published <- acknowledgePublished repo key >>= right
+        _ <- collect repo (snapshotId published) 1 >>= right
+        evicted <- loadSnapshot repo >>= right
+        evictedObjects (snapshotCheckpoint evicted) @?= Set.singleton (memoryId (memory "first"))
+        doesFileExist (root </> "objects" </> digestName (memoryId (memory "first"))) >>= (@?= False)
+        -- The edge goes through a payload that no event names.
+        let middle = must (mkMemory "fact" time "test" (Set.singleton (Edge About (memoryId (memory "first")))) "middle")
+            value = must (mkMemory "fact" time "test" (Set.singleton (Edge About (memoryId middle))) "third")
+            otherName = must (mkName "me/independent")
+            proposal = event 4 [] (SetTopic otherName (memoryId value))
+        after <- commitLocal repo (State.version (snapshotState evicted) (RefResource otherName)) proposal [payload value, payload middle] >>= right
+        evictedObjects (snapshotCheckpoint after) @?= Set.empty
+        doesFileExist (root </> "objects" </> digestName (memoryId (memory "first"))) >>= (@?= True)
+        verifyRepository repo >>= (@?= Right after),
       testCase "acknowledgement between validation and locking stays acknowledged" $ withRepository $ \_ repo before -> do
         first <- writeFirst repo before >>= right
         key <- archiveSnapshot repo first >>= right
@@ -372,12 +394,15 @@ preflightTests =
                          if delete then removeFile path else BS.writeFile path "corrupt"
                      hook _ = pure ()
                  result <- commitLocalWith hook repo (State.version (snapshotState first) (RefResource name)) proposal [payload (memory "proposal")]
-                 case result of
+                 -- A write reads every event file again, but no unrelated payload.
+                 -- The complete check reports a damaged payload.
+                 outcome <- if directory == "events" then pure result else right result >> verifyRepository repo
+                 case outcome of
                    Left (RepositoryIO _) | delete -> pure ()
                    Left (CorruptData actual) | not delete -> canonicalizePath path >>= (@?= actual)
-                   _ -> assertFailure ("retry hid damaged inventory: " <> show result)
-                 readIORef attempts >>= (@?= 1)
-                 doesFileExist (root </> "objects" </> digestName (memoryId (memory "proposal"))) >>= (@?= False)
+                   _ -> assertFailure ("damaged inventory was hidden: " <> show outcome)
+                 readIORef attempts >>= (@?= if directory == "events" then 1 else 2)
+                 doesFileExist (root </> "objects" </> digestName (memoryId (memory "proposal"))) >>= (@?= (directory /= "events"))
              | (directory, filename) <- [("objects", digestName (memoryId (memory "first"))), ("events", let EventId digest = eventId topicEvent in digestName digest)],
                delete <- [False, True]
              ],
