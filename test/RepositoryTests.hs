@@ -57,7 +57,7 @@ oversizedTests =
             path = root </> directory </> digestName digest
         setFileSize path (fromIntegral limit + 100)
         canonical <- canonicalizePath path
-        (if directory == "objects" then verifyRepository repo else loadSnapshot repo) >>= (@?= Left (Repository.OversizedData canonical))
+        (if directory == "checkpoints" then loadSnapshot repo else verifyRepository repo) >>= (@?= Left (Repository.OversizedData canonical))
     | directory <- ["objects", "events", "checkpoints"]
     ]
 
@@ -225,9 +225,39 @@ validationTests =
         doesFileExist (root </> "CURRENT") >>= (@?= False),
       testCase "corrupt accepted event is refused" $ withRepository $ \root repo before -> do
         BS.writeFile (root </> "events" </> eventName registration) "corrupt"
+        verifyRepository repo >>= assertLeft
+        -- The pack holds a checked copy of the event, so a load succeeds.
+        loadSnapshot repo >>= (@?= Right before)
+        removeFile (root </> "events.pack")
         loadSnapshot repo >>= assertLeft
         writeFirst repo before >>= assertLeft
         importState repo (snapshotState before) [] >>= assertLeft,
+      testCase "a damaged event pack is ignored, then replaced" $ withRepository $ \root repo before -> do
+        first <- writeFirst repo before >>= right
+        let pack = root </> "events.pack"
+            complete snapshot = sum [4 + BS.length (renderEvent value) | value <- Map.elems (State.events (snapshotState snapshot))]
+            next n parents = event n parents (SetTopic name (memoryId (memory "second")))
+        BS.readFile pack >>= (@?= complete first) . BS.length
+        -- A torn last record.
+        whole <- BS.readFile pack
+        BS.writeFile pack (BS.take (BS.length whole - 3) whole)
+        loadSnapshot repo >>= (@?= Right first)
+        second <- commitLocal repo (State.version (snapshotState first) (RefResource name)) (next 3 [topicEvent]) [payload (memory "second")] >>= right
+        BS.readFile pack >>= (@?= complete second) . BS.length
+        -- Bytes that are not records.
+        BS.writeFile pack "not a pack"
+        loadSnapshot repo >>= (@?= Right second)
+        third <- commitLocal repo (State.version (snapshotState second) (RefResource name)) (next 4 [next 3 [topicEvent]]) [] >>= right
+        BS.readFile pack >>= (@?= complete third) . BS.length
+        removeFile pack
+        loadSnapshot repo >>= (@?= Right third),
+      testCase "a pack record that the manifest does not name stays out of state" $ withRepository $ \root repo before -> do
+        first <- writeFirst repo before >>= right
+        let stray = renderEvent (event 9 [topicEvent] (SetTopic name (memoryId (memory "foreign"))))
+            size = BS.length stray
+        BS.appendFile (root </> "events.pack") (BS.pack [0, 0, fromIntegral (size `div` 256), fromIntegral size] <> stray)
+        loadSnapshot repo >>= (@?= Right first)
+        verifyRepository repo >>= (@?= Right first),
       testCase "corrupt checkpoint is refused" $ withRepository $ \root repo before -> do
         let CheckpointId digest = snapshotId before
         BS.writeFile (root </> "checkpoints" </> digestName digest) "corrupt"
@@ -394,15 +424,15 @@ preflightTests =
                          if delete then removeFile path else BS.writeFile path "corrupt"
                      hook _ = pure ()
                  result <- commitLocalWith hook repo (State.version (snapshotState first) (RefResource name)) proposal [payload (memory "proposal")]
-                 -- A write reads every event file again, but no unrelated payload.
-                 -- The complete check reports a damaged payload.
-                 outcome <- if directory == "events" then pure result else right result >> verifyRepository repo
+                 -- A write takes events from the pack and reads no unrelated payload.
+                 -- The complete check reports the damaged file.
+                 outcome <- right result >> verifyRepository repo
                  case outcome of
                    Left (RepositoryIO _) | delete -> pure ()
                    Left (CorruptData actual) | not delete -> canonicalizePath path >>= (@?= actual)
                    _ -> assertFailure ("damaged inventory was hidden: " <> show outcome)
-                 readIORef attempts >>= (@?= if directory == "events" then 1 else 2)
-                 doesFileExist (root </> "objects" </> digestName (memoryId (memory "proposal"))) >>= (@?= (directory /= "events"))
+                 readIORef attempts >>= (@?= 2)
+                 doesFileExist (root </> "objects" </> digestName (memoryId (memory "proposal"))) >>= (@?= True)
              | (directory, filename) <- [("objects", digestName (memoryId (memory "first"))), ("events", let EventId digest = eventId topicEvent in digestName digest)],
                delete <- [False, True]
              ],

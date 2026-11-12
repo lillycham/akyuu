@@ -32,13 +32,41 @@ is the later of the two outcomes in each trial.
 At 5,000 entries, median direct latency fell by 45%. Median pair duration fell
 by 41%. Both revisions accepted every write at every size.
 
-## What remains
+## What remained after the first change
 
-The cost of a write still grows with the inventory. Each load opens, hashes
-and decodes one file for each event. A separate trial made the causal graph
+The cost of a write still grew with the inventory. Each load opened, hashed
+and decoded one file for each event. A separate trial made the causal graph
 check incremental. It gave no measurable change at 5,000 entries (about
-430 ms), so that trial is not part of this change. The remaining cost is the
+430 ms), so that trial is not part of this change. The remaining cost was the
 event files, not the graph check or the payloads.
 
 These small samples do not establish tail latency or confidence intervals.
 They do not establish cross-process or Linux performance.
+
+## Follow-up: event pack and one render for each decode
+
+A micro-benchmark of the 5,191 event files of the 5,000-entry fixture gave
+these costs for one load: about 146 ms to open and read the files, 5 ms to
+hash them, and 174 ms to decode them. A decode rendered the canonical bytes
+twice and escaped each string one character at a time.
+
+Two changes followed. A decode now renders an event once, and a string with
+no special character skips the escape step. The decode cost fell to about
+80 ms. A load now takes event bytes from `events.pack`, one append-only file,
+and checks each record by its hash against the manifest. The event files stay
+the durable copy. A plain load at 5,000 entries fell from 358 ms to 139 ms.
+
+The same harness compared three builds: `b6d66b1`, the entry-validation
+change, and the pack with the decode change. Cells show the three medians in
+that order, in milliseconds.
+
+| Base entries | Direct commit, median | Pair duration, median |
+| --- | ---: | ---: |
+| 100 | 13.6 → 7.8 → 4.4 | 33.2 → 23.0 → 16.9 |
+| 1,000 | 128.8 → 77.9 → 34.1 | 224.3 → 127.0 → 54.9 |
+| 5,000 | 713.7 → 398.1 → 186.1 | 1138.6 → 699.2 → 315.8 |
+
+Every build accepted every write. The cost still grows with the inventory.
+The remainder is the decode of each event and the full checkpoint manifest,
+which is 1.7 MB at 5,000 unpublished entries and is read, parsed and written
+again for each write.
