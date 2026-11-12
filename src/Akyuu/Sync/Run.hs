@@ -10,10 +10,10 @@ import Akyuu.Sync.Git (Bundle (bundlePayloads, bundleState), GitError, ancestor,
 import Akyuu.Sync.Process (Deadline, deadline)
 import Akyuu.Sync.Repository (RepositoryError, acknowledgePublished, archiveIncoming, archiveSnapshot, importState, initialise, loadSnapshot, openRepository, snapshotCheckpoint, snapshotId, snapshotState)
 import Akyuu.Sync.State (ResourceState (RefTypeConflict, TopicHeads), State, events, interpret, merge, storeId)
-import Akyuu.Sync.Topics (initialiseLocal)
+import Akyuu.Sync.Topics (TopicError (StorageError), describeError, initialiseLocal)
 import Akyuu.Sync.Types (resourceOf)
 import Control.Concurrent (threadDelay)
-import Control.Exception (IOException)
+import Control.Exception (IOException, displayException)
 import Control.Monad (forM_, unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE)
@@ -71,7 +71,8 @@ settingsJSON (Settings remote branch) = object ["remote" .= remote, "branch" .= 
 
 readSettings :: FilePath -> Work Settings
 readSettings root = do
-  bytes <- liftIO (BS.readFile (root </> "SYNC"))
+  saved <- liftIO (ifMissing Nothing (Just <$> BS.readFile (root </> "SYNC")))
+  bytes <- maybe (throwE (SyncInvalid "This replica has no sync target. Run replica sync-config first.")) pure saved
   value <- either (const (throwE (SyncInvalid "Invalid sync configuration."))) pure (eitherDecodeStrict' bytes)
   (remote, branch) <- either (const (throwE (SyncInvalid "Invalid sync configuration."))) pure (parseEither (withObject "sync" (\o -> (,) <$> o .: "remote" <*> o .: "branch")) value)
   ExceptT (settings remote branch)
@@ -262,8 +263,8 @@ joinReplicaWith hook root remote branch label = do
 describeSyncError :: SyncError -> Text
 describeSyncError err = case err of
   SyncGit failure -> describeGitError failure
-  SyncStorage _ -> "The local replica operation failed. Its accepted checkpoint remains authoritative."
-  SyncIO _ -> "A sync file or process operation failed. Pending work is retained."
+  SyncStorage failure -> describeError (StorageError failure)
+  SyncIO failure -> "A sync file or process operation failed: " <> T.pack (displayException failure) <> ". Pending work is retained."
   SyncInvalid text -> text
   SyncBusy -> "Another sync holds the sync lock."
   RemoteRewritten -> "The remote archive was rewritten or lost accepted entries. Recovery is required."
