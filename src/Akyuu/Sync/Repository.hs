@@ -35,7 +35,7 @@ module Akyuu.Sync.Repository
   )
 where
 
-import Akyuu.Fs (AtomicStep (Renamed), atomicWriteWith, hGetBounded, ifMissing, syncDir, tryWith)
+import Akyuu.Fs (AtomicStep (Renamed), atomicWriteWith, hGetBounded, ifMissing, ignoreIO, syncDir, tryWith)
 import Akyuu.GC (retains)
 import Akyuu.Graph (Edge (kind, target), EdgeType (Follows))
 import Akyuu.Id (Id)
@@ -88,6 +88,7 @@ data RepositoryError
   | IdentityMismatch
   | InvalidPointer
   | MissingCurrent
+  | MissingCheckpoint CheckpointId
   | InvalidCheckpoint CheckpointError
   | InvalidState StateError
   | CorruptData FilePath
@@ -170,6 +171,7 @@ initialiseWith hook path store = fmap join $ tryWith RepositoryIO $ do
           (throwE MissingCurrent)
         saveCheckpoint hook repo checkpoint
         publishCurrent hook repo checkpoint
+        pruneCheckpoints repo [checkpointId checkpoint]
         pure repo
 
 openRepository :: FilePath -> IO (Either RepositoryError Repository)
@@ -213,9 +215,7 @@ loadSnapshotReusing :: Repository -> Maybe (Snapshot, Map Id Memory) -> IO (Eith
 loadSnapshotReusing repo@(Repository root store) cached = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   identity <- liftIO (boundedRead 256 (root </> "IDENTITY"))
   unless (identity == identityBytes store) (throwE IdentityMismatch)
-  pointer <- liftIO (boundedRead 128 (root </> "CURRENT"))
-  digest <- either throwE pure (parsePointer pointer)
-  bytes <- readChecked maxCheckpointBytes (checkpointPath repo (CheckpointId digest)) digest
+  bytes <- readCurrentManifest repo (5 :: Int)
   checkpoint <- either (throwE . InvalidCheckpoint) pure (parseCheckpoint bytes)
   unless (checkpointStore checkpoint == store) (throwE IdentityMismatch)
   eventBytes <- traverse (\key@(EventId hash) -> (key,) <$> readChecked maxEventBytes (eventPath repo key) hash) (Set.toAscList (checkpointEvents checkpoint))
@@ -228,6 +228,23 @@ loadSnapshotReusing repo@(Repository root store) cached = fmap join $ tryWith Re
   validatePayloads state memories
   unless (Set.null (evictedObjects checkpoint `Set.intersection` retained 1 checkpoint state memories)) (throwE InvalidResidency)
   pure (Snapshot root checkpoint state, memories)
+
+-- A writer keeps the manifest that it replaced, and prunes older ones. A reader
+-- that loses this race sees a missing manifest and a changed pointer: read the
+-- pointer again. A missing manifest under an unchanged pointer is damage.
+readCurrentManifest :: Repository -> Int -> ExceptT RepositoryError IO ByteString
+readCurrentManifest repo@(Repository root _) tries = do
+  digest <- pointerNow
+  found <- ExceptT (ifMissing (Right Nothing) (fmap Just <$> runExceptT (readChecked maxCheckpointBytes (checkpointPath repo (CheckpointId digest)) digest)))
+  case found of
+    Just bytes -> pure bytes
+    Nothing -> do
+      later <- pointerNow
+      if later /= digest && tries > 1
+        then readCurrentManifest repo (tries - 1)
+        else throwE (if later /= digest then RepositoryBusy else MissingCheckpoint (CheckpointId digest))
+  where
+    pointerNow = liftIO (boundedRead 128 (root </> "CURRENT")) >>= either throwE pure . parsePointer
 
 parsePointer :: ByteString -> Either RepositoryError Id
 parsePointer bytes = do
@@ -312,6 +329,7 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
       traverse_ (\(key, event) -> saveImmutable hook (EventFile key) (eventPath repo key) (renderEvent event)) (Map.toAscList newEvents)
       saveCheckpoint hook repo checkpoint
       publishCurrent hook repo checkpoint
+      pruneCheckpoints repo [checkpointId checkpoint, snapshotId old]
       pure (Snapshot root checkpoint state)
 
 verifyPayload :: (Id, ByteString) -> ExceptT RepositoryError IO (Id, (ByteString, Memory))
@@ -472,6 +490,7 @@ acknowledgePublishedWith hook repo@(Repository root store) key = withMutation ro
   checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted (evictedObjects previous) base)
   saveCheckpoint hook repo checkpoint
   publishCurrent hook repo checkpoint
+  pruneCheckpoints repo [checkpointId checkpoint, snapshotId current]
   pure (Snapshot root checkpoint (snapshotState current))
 
 -- | Prepare the archive outside the lock, then recheck and recompute under
@@ -497,6 +516,7 @@ collectWith hook repo@(Repository root _) expected depth = fmap join $ tryWith R
     checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone (snapshotCheckpoint current))
     saveCheckpoint hook repo checkpoint
     publishCurrent hook repo checkpoint
+    pruneCheckpoints repo [checkpointId checkpoint, snapshotId current]
     -- A failed unlink is retryable: CURRENT already excludes these active copies.
     removal <- liftIO $ tryWith (CollectionIncomplete (checkpointId checkpoint)) $ do
       traverse_
@@ -536,6 +556,19 @@ publishCurrent hook (Repository root _) checkpoint = do
     Left err -> do
       visible <- liftIO (readIORef renamed)
       throwE (if visible then PublicationUncertain key err else RepositoryIO err)
+
+-- | Remove superseded manifests. Each manifest names the whole inventory, so
+-- an unpruned directory grows with writes times inventory size. Callers hold
+-- the mutation lock and have published CURRENT, so no other manifest is in
+-- preparation. Removal is best effort: a failure never rejects the accepted
+-- publication, and a later write tries again. Archive manifests are separate.
+pruneCheckpoints :: Repository -> [CheckpointId] -> ExceptT RepositoryError IO ()
+pruneCheckpoints (Repository root _) keep = liftIO $ ignoreIO $ do
+  let directory = root </> "checkpoints"
+      kept = Set.fromList [T.unpack (Id.render digest) | CheckpointId digest <- keep]
+      manifest file = either (const False) (const True) (Id.parse (T.pack file))
+  files <- listDirectory directory
+  traverse_ (\file -> ignoreIO (removeFile (directory </> file))) [file | file <- files, manifest file, file `Set.notMember` kept]
 
 objectPath :: Repository -> Id -> FilePath
 objectPath (Repository root _) digest = root </> "objects" </> T.unpack (Id.render digest)
