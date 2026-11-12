@@ -208,12 +208,16 @@ parseIdentity bytes = do
 -- checks the hash of each one that it returns. 'verifyRepository' is the
 -- complete check of the files on disk.
 loadSnapshot :: Repository -> IO (Either RepositoryError Snapshot)
-loadSnapshot repo = loadSnapshotReusing repo Nothing
+loadSnapshot repo = fmap (fmap fst) (loadSnapshotReusing UsePack repo Nothing)
+
+-- | Where a load takes event bytes from. The pack is a derived copy, so the
+-- complete check reads the event files and ignores it.
+data EventSource = UsePack | FilesOnly deriving (Eq)
 
 -- A retry keeps the decoded events of its earlier attempt. It still reads and
--- hashes every event file: a missing or corrupt copy must remain an error.
-loadSnapshotReusing :: Repository -> Maybe Snapshot -> IO (Either RepositoryError Snapshot)
-loadSnapshotReusing repo@(Repository root store) cached = fmap join $ tryWith RepositoryIO $ runExceptT $ do
+-- hashes the bytes of every event again.
+loadSnapshotReusing :: EventSource -> Repository -> Maybe Snapshot -> IO (Either RepositoryError (Snapshot, Pack))
+loadSnapshotReusing source repo@(Repository root store) cached = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   identity <- liftIO (boundedRead 256 (root </> "IDENTITY"))
   unless (identity == identityBytes store) (throwE IdentityMismatch)
   bytes <- readCurrentManifest repo (5 :: Int)
@@ -222,10 +226,77 @@ loadSnapshotReusing repo@(Repository root store) cached = fmap join $ tryWith Re
   let previousState = case cached of
         Just old | Map.keysSet (State.events (snapshotState old)) `Set.isSubsetOf` checkpointEvents checkpoint -> snapshotState old
         _ -> State.empty store
-  eventBytes <- traverse (\key@(EventId hash) -> (key,) <$> readChecked maxEventBytes (eventPath repo key) hash) (Set.toAscList (checkpointEvents checkpoint))
+  pack <- if source == UsePack then liftIO (readPack repo) else pure emptyPack
+  let fromFile key@(EventId hash) = readChecked maxEventBytes (eventPath repo key) hash
+  eventBytes <- traverse (\key -> (key,) <$> maybe (fromFile key) pure (Map.lookup key (packRecords pack))) (Set.toAscList (checkpointEvents checkpoint))
   let newBytes = filter (\(key, _) -> Map.notMember key (State.events previousState)) eventBytes
   state <- either (throwE . InvalidState) pure (State.extendBytes previousState newBytes)
-  pure (Snapshot root checkpoint state)
+  pure (Snapshot root checkpoint state, pack)
+
+-- | The event pack is one append-only file that holds a copy of the accepted
+-- event bytes, so a load opens one file and not one file for each event. Each
+-- record is a four-byte big-endian length and the canonical bytes of an event.
+-- The key of a record is the hash of its bytes, and a load takes only the
+-- records that the manifest names. A wrong, torn or foreign record can
+-- therefore never enter state: the load reads that event from its file. The
+-- event files stay the durable copy. Only a writer that holds the mutation
+-- lock changes the pack, after it has published CURRENT.
+data Pack = Pack
+  { packRecords :: Map EventId ByteString,
+    -- | The length of the well-formed prefix.
+    packValid :: Int,
+    -- | The length of the file. It differs from 'packValid' after damage.
+    packSize :: Int
+  }
+
+emptyPack :: Pack
+emptyPack = Pack Map.empty 0 0
+
+packPath :: Repository -> FilePath
+packPath (Repository root _) = root </> "events.pack"
+
+-- A pack larger than this is not read. Loads then use the event files.
+maxPackBytes :: Int
+maxPackBytes = 1024 * 1024 * 1024
+
+readPack :: Repository -> IO Pack
+readPack repo = fmap (either (const emptyPack) id) $ tryWith (id :: IOException -> IOException) $ ifMissing emptyPack $ do
+  bytes <- boundedRead maxPackBytes (packPath repo)
+  pure $
+    if BS.length bytes > maxPackBytes
+      then emptyPack {packSize = BS.length bytes}
+      else go bytes 0 Map.empty
+  where
+    go bytes offset records
+      | BS.length bytes - offset < 4 = Pack records offset (BS.length bytes)
+      | size > maxEventBytes || BS.length bytes - offset - 4 < size = Pack records offset (BS.length bytes)
+      | otherwise = go bytes (offset + 4 + size) (Map.insert (EventId (Id.hashBytes record)) record records)
+      where
+        size = BS.foldl' (\total byte -> total * 256 + fromIntegral byte) 0 (BS.take 4 (BS.drop offset bytes))
+        record = BS.take size (BS.drop (offset + 4) bytes)
+
+packRecord :: ByteString -> ByteString
+packRecord bytes = BS.pack [fromIntegral (size `div` 16777216), fromIntegral (size `div` 65536), fromIntegral (size `div` 256), fromIntegral size] <> bytes
+  where
+    size = BS.length bytes
+
+-- | Add the accepted events that the pack lacks. The caller holds the mutation
+-- lock and loaded the pack before it took the lock. An unchanged, well-formed
+-- pack takes an append. Any other pack is damaged or belongs to an earlier
+-- repair, so the writer replaces it with a complete one. The pack is a
+-- derived copy: a failure here never rejects the accepted publication.
+updatePack :: Repository -> Pack -> State -> IO ()
+updatePack repo pack state = ignoreIO $ do
+  size <- ifMissing 0 (withBinaryFile (packPath repo) ReadMode (fmap fromIntegral . hFileSize))
+  let table = State.events state
+      missing = Map.withoutKeys table (Map.keysSet (packRecords pack))
+      records = BS.concat . map (packRecord . renderEvent) . Map.elems
+  if size > maxPackBytes
+    then pure ()
+    else
+      if size == packValid pack && packValid pack == packSize pack
+        then unless (Map.null missing) (BS.appendFile (packPath repo) (records missing))
+        else atomicWriteWith (const (pure ())) (packPath repo) (records table)
 
 -- | Read and check every accepted file: each event and payload hash, each
 -- memory, each payload link, and the residency of evicted payloads. The cost
@@ -236,7 +307,7 @@ verifyRepository repo = fmap (fmap fst) (loadSnapshotMemories repo)
 
 loadSnapshotMemories :: Repository -> IO (Either RepositoryError (Snapshot, Map Id Memory))
 loadSnapshotMemories repo = fmap join $ tryWith RepositoryIO $ runExceptT $ do
-  snapshot <- ExceptT (loadSnapshot repo)
+  (snapshot, _) <- ExceptT (loadSnapshotReusing FilesOnly repo Nothing)
   let checkpoint = snapshotCheckpoint snapshot
       state = snapshotState snapshot
   memories <- loadMemories repo (checkpointObjects checkpoint)
@@ -300,7 +371,7 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
   where
     retry 0 _ = pure (Left RepositoryBusy)
     retry remaining cached = runExceptT $ do
-      old <- ExceptT (loadSnapshotReusing repo cached)
+      (old, pack) <- ExceptT (loadSnapshotReusing UsePack repo cached)
       liftIO (hook (SnapshotValidated (snapshotId old)))
       outcome <- ExceptT $ withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
         identity <- liftIO (boundedRead 256 (root </> "IDENTITY"))
@@ -309,9 +380,9 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
         digest <- either throwE pure (parsePointer pointer)
         if CheckpointId digest /= snapshotId old
           then pure Nothing
-          else Just <$> persist old
+          else Just <$> persist old pack
       maybe (ExceptT (retry (remaining - 1) (Just old))) pure outcome
-    persist old = do
+    persist old pack = do
       state <- either throwE pure (advance (snapshotState old))
       supplied <- Map.fromList <$> traverse verifyPayload payloads
       let previous = snapshotCheckpoint old
@@ -353,6 +424,7 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
       saveCheckpoint hook repo checkpoint
       publishCurrent hook repo checkpoint
       pruneCheckpoints repo [checkpointId checkpoint, snapshotId old]
+      liftIO (updatePack repo pack state)
       pure (Snapshot root checkpoint state)
 
 verifyPayload :: (Id, ByteString) -> ExceptT RepositoryError IO (Id, (ByteString, Memory))

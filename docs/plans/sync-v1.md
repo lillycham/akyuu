@@ -245,8 +245,20 @@ not inspect directory listings. Replica search indexes only causal topic
 heads from one captured checkpoint. Legacy search still uses the legacy store.
 
 The repository checks data when the data enters. A load reads the manifest
-and every event. It checks their hashes and the complete causal graph. A
-load does not read payloads. A payload read checks the hash of that payload.
+and the bytes of every event. It checks their hashes and the complete causal
+graph. A load does not read payloads. A payload read checks the hash of that
+payload.
+
+A load takes event bytes from `events.pack` where it can. The pack is one
+append-only file with a copy of the accepted events. Each record is a
+four-byte big-endian length and the canonical bytes of one event. The hash
+of a record is its key, and a load takes only the records that the manifest
+names. A wrong, torn or foreign record cannot enter state: the load reads
+that event from its file in `events/`. The event files stay the durable
+copy, and sync, archive and migration do not read the pack. A writer adds
+new events to the pack after it publishes `CURRENT`, under the mutation
+lock. A writer that finds a damaged pack replaces it. A load does not notice
+damage to an event file while the pack holds that event.
 
 A transaction checks what it adds. It checks each new payload, each new
 event, and their links into the accepted inventory. Accepted inventories
@@ -254,8 +266,9 @@ only grow, so the links of old entries stay satisfied. If the checkpoint has
 evicted payloads, the transaction follows retaining edges from its new roots
 and restores each evicted payload that they reach.
 
-`replica verify` reads and checks every accepted event and payload, each
-payload link and the residency of evicted payloads. Its cost grows with the
+`replica verify` reads and checks every accepted event file and payload,
+each payload link and the residency of evicted payloads. It does not use
+the pack. Its cost grows with the
 inventory. Collection makes the same complete check before it evicts. Run
 `replica verify` after a disk fault, a restore from backup or a manual
 change to the repository.
@@ -296,10 +309,11 @@ This relies on the existing immutable-file contract. Supported writers never
 rewrite accepted content. GC saves archive fallback before active eviction.
 Checkpoint identity includes pending and residency metadata, so an
 acknowledgement or collection also forces a new load. Each new operation
-reads and hashes every event again; it uses no persistent validation cache.
+reads and hashes the bytes of every event again. The pack holds bytes, not
+results: it is not a validation cache.
 
 Within one transaction, retries reuse decoded events from the previous
-attempt. Every retry still reads and hashes each event file. New events
+attempt. Every retry still reads and hashes the bytes of each event. New events
 receive full wire checks, and the combined graph receives full checks. A
 smaller event inventory forces fresh state construction, so a changed
 checkpoint cannot retain removed events.

@@ -194,9 +194,10 @@ all writers and GC jobs together; old processes do not use this protocol.
 *replica verify* [*--json*]
 	Read and check every accepted event and payload of the replica. Check
 	each hash, each payload link and the residency of evicted payloads.
-	Other commands check the events, and only the payloads that they read or
-	add. Run this command after a disk fault or a restore from backup. The
-	cost grows with the inventory.
+	Other commands check the bytes of each event, which they take from the
+	event pack where they can, and only the payloads that they read or add.
+	This command reads every event file and ignores the pack. Run it after a
+	disk fault or a restore from backup. The cost grows with the inventory.
 
 *replica sync-config* *--remote* _url_ [*--branch* _name_] [*--json*]
 	Configure one dedicated protocol branch. The default is akyuu-sync-v1.
