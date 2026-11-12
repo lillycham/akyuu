@@ -50,7 +50,7 @@ import Akyuu.Sync.State (State, StateError (StaleDependency), Version)
 import Akyuu.Sync.State qualified as State
 import Akyuu.Sync.Types (Action (AppendLog), EventId (EventId), Resource, StoreId (StoreId), parseIdentifier, renderIdentifier)
 import Control.Exception (IOException)
-import Control.Monad (join, unless, when)
+import Control.Monad (forM_, join, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE)
 import Data.Bifunctor (first)
@@ -63,7 +63,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
-import System.Directory (canonicalizePath, createDirectory, doesDirectoryExist, listDirectory, removeFile)
+import System.Directory (canonicalizePath, createDirectory, doesDirectoryExist, getModificationTime, listDirectory, removeFile)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (IOMode (ReadMode), hFileSize, withBinaryFile)
 import System.IO.Error (isAlreadyExistsError)
@@ -442,7 +442,10 @@ archiveIncoming repo@(Repository root store) state objects = fmap join $ tryWith
   pure (snapshotId snapshot)
 
 included :: Checkpoint -> Checkpoint -> Bool
-included part whole = checkpointStore part == checkpointStore whole && checkpointEvents part `Set.isSubsetOf` checkpointEvents whole && checkpointObjects part `Set.isSubsetOf` checkpointObjects whole
+included part whole =
+  checkpointStore part == checkpointStore whole
+    && checkpointEvents part `Set.isSubsetOf` checkpointEvents whole
+    && checkpointObjects part `Set.isSubsetOf` checkpointObjects whole
 
 saveArchive :: FaultHook -> Repository -> Snapshot -> ExceptT RepositoryError IO ()
 saveArchive hook repo@(Repository root _) snapshot = do
@@ -491,6 +494,7 @@ acknowledgePublishedWith hook repo@(Repository root store) key = withMutation ro
   saveCheckpoint hook repo checkpoint
   publishCurrent hook repo checkpoint
   pruneCheckpoints repo [checkpointId checkpoint, snapshotId current]
+  pruneArchiveMarkers repo key
   pure (Snapshot root checkpoint (snapshotState current))
 
 -- | Prepare the archive outside the lock, then recheck and recompute under
@@ -556,6 +560,21 @@ publishCurrent hook (Repository root _) checkpoint = do
     Left err -> do
       visible <- liftIO (readIORef renamed)
       throwE (if visible then PublicationUncertain key err else RepositoryIO err)
+
+-- | Remove archive commit markers older than an acknowledged one. Only
+-- acknowledgement reads a marker. An older marker names a subset of an
+-- inventory that is now published, so no later acknowledgement needs it. A
+-- newer marker can belong to an archive that is still unpublished: keep it.
+-- Archive payloads and events are not touched. Removal is best effort.
+pruneArchiveMarkers :: Repository -> CheckpointId -> ExceptT RepositoryError IO ()
+pruneArchiveMarkers repo@(Repository root _) key@(CheckpointId acknowledged) = liftIO $ ignoreIO $ do
+  let directory = root </> "archive" </> "checkpoints"
+      manifest file = either (const False) (const True) (Id.parse (T.pack file))
+  reference <- getModificationTime (archiveCheckpointPath repo key)
+  files <- listDirectory directory
+  forM_ [file | file <- files, manifest file, file /= T.unpack (Id.render acknowledged)] $ \file -> ignoreIO $ do
+    written <- getModificationTime (directory </> file)
+    when (written < reference) (removeFile (directory </> file))
 
 -- | Remove superseded manifests. Each manifest names the whole inventory, so
 -- an unpruned directory grows with writes times inventory size. Callers hold
