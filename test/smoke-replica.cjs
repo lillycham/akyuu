@@ -184,6 +184,9 @@ async function main() {
   assert.equal(finalReview.structuredContent.reviewed, false);
   const localArchive = jsonCli(['replica', 'archive']);
   assert.match(localArchive.archived_checkpoint, /^sha256-/);
+  const verified = jsonCli(['replica', 'verify']);
+  assert.match(verified.checkpoint, /^sha256-/);
+  assert.ok(verified.events > 0 && verified.payloads > 0);
   const gcPlan = jsonCli(['replica', 'gc', '--dry-run', '--keep-generations', '1']);
   assert.deepEqual(gcPlan.candidates, [], 'Unpublished data must stay active even after local archive.');
   const gcDone = jsonCli(['replica', 'gc', '--expected', gcPlan.checkpoint, '--keep-generations', '1']);

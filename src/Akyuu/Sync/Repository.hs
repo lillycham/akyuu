@@ -12,6 +12,7 @@ module Akyuu.Sync.Repository
     openRepository,
     readStoreIdentity,
     loadSnapshot,
+    verifyRepository,
     commitLocal,
     commitLocalChecked,
     commitLocalWith,
@@ -201,33 +202,47 @@ parseIdentity bytes = do
   unless (identityBytes store == bytes) (Left NotRepository)
   pure store
 
+-- | Capture the accepted checkpoint. A load reads the manifest and the events,
+-- and checks their hashes and the causal graph. It does not read payloads:
+-- every payload was checked when it entered the repository, and 'readMemory'
+-- checks the hash of each one that it returns. 'verifyRepository' is the
+-- complete check of the files on disk.
 loadSnapshot :: Repository -> IO (Either RepositoryError Snapshot)
-loadSnapshot repo = fmap (fmap fst) (loadSnapshotMemories repo)
+loadSnapshot repo = loadSnapshotReusing repo Nothing
 
--- Keep verified payloads for the duration of one operation. This is not a
--- cross-call cache: every new load still verifies the full on-disk inventory.
-loadSnapshotMemories :: Repository -> IO (Either RepositoryError (Snapshot, Map Id Memory))
-loadSnapshotMemories repo = loadSnapshotReusing repo Nothing
-
--- Retry reuse is limited to one transaction. Every file is still read and
--- hashed, including old entries: missing or corrupt copies must remain errors.
-loadSnapshotReusing :: Repository -> Maybe (Snapshot, Map Id Memory) -> IO (Either RepositoryError (Snapshot, Map Id Memory))
+-- A retry keeps the decoded events of its earlier attempt. It still reads and
+-- hashes every event file: a missing or corrupt copy must remain an error.
+loadSnapshotReusing :: Repository -> Maybe Snapshot -> IO (Either RepositoryError Snapshot)
 loadSnapshotReusing repo@(Repository root store) cached = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   identity <- liftIO (boundedRead 256 (root </> "IDENTITY"))
   unless (identity == identityBytes store) (throwE IdentityMismatch)
   bytes <- readCurrentManifest repo (5 :: Int)
   checkpoint <- either (throwE . InvalidCheckpoint) pure (parseCheckpoint bytes)
   unless (checkpointStore checkpoint == store) (throwE IdentityMismatch)
-  eventBytes <- traverse (\key@(EventId hash) -> (key,) <$> readChecked maxEventBytes (eventPath repo key) hash) (Set.toAscList (checkpointEvents checkpoint))
   let previousState = case cached of
-        Just (old, _) | Map.keysSet (State.events (snapshotState old)) `Set.isSubsetOf` checkpointEvents checkpoint -> snapshotState old
+        Just old | Map.keysSet (State.events (snapshotState old)) `Set.isSubsetOf` checkpointEvents checkpoint -> snapshotState old
         _ -> State.empty store
-      newBytes = filter (\(key, _) -> Map.notMember key (State.events previousState)) eventBytes
+  eventBytes <- traverse (\key@(EventId hash) -> (key,) <$> readChecked maxEventBytes (eventPath repo key) hash) (Set.toAscList (checkpointEvents checkpoint))
+  let newBytes = filter (\(key, _) -> Map.notMember key (State.events previousState)) eventBytes
   state <- either (throwE . InvalidState) pure (State.extendBytes previousState newBytes)
-  memories <- loadMemoriesReusing repo (maybe Map.empty snd cached) (checkpointObjects checkpoint)
+  pure (Snapshot root checkpoint state)
+
+-- | Read and check every accepted file: each event and payload hash, each
+-- memory, each payload link, and the residency of evicted payloads. The cost
+-- grows with the inventory. Collection uses it, because eviction acts on the
+-- whole payload graph.
+verifyRepository :: Repository -> IO (Either RepositoryError Snapshot)
+verifyRepository repo = fmap (fmap fst) (loadSnapshotMemories repo)
+
+loadSnapshotMemories :: Repository -> IO (Either RepositoryError (Snapshot, Map Id Memory))
+loadSnapshotMemories repo = fmap join $ tryWith RepositoryIO $ runExceptT $ do
+  snapshot <- ExceptT (loadSnapshot repo)
+  let checkpoint = snapshotCheckpoint snapshot
+      state = snapshotState snapshot
+  memories <- loadMemories repo (checkpointObjects checkpoint)
   validatePayloads state memories
   unless (Set.null (evictedObjects checkpoint `Set.intersection` retained 1 checkpoint state memories)) (throwE InvalidResidency)
-  pure (Snapshot root checkpoint state, memories)
+  pure (snapshot, memories)
 
 -- A writer keeps the manifest that it replaced, and prunes older ones. A reader
 -- that loses this race sees a missing manifest and a changed pointer: read the
@@ -274,16 +289,18 @@ importState = importStateWith (const (pure ()))
 importStateWith :: FaultHook -> Repository -> State -> [(Id, ByteString)] -> IO (Either RepositoryError Snapshot)
 importStateWith hook repo incoming payloads = transact hook repo payloads (first InvalidState . (`State.merge` incoming))
 
--- | Verify immutable inventory before taking the writer lock. A matching
--- CURRENT and identity bind that validation to publication. A changed pointer
--- releases the lock and retries from fresh disk state, at most three times.
+-- | Load the checkpoint before taking the writer lock. A matching CURRENT and
+-- identity bind that snapshot to publication. A changed pointer releases the
+-- lock and retries from fresh disk state, at most three times.
 -- Resource/dependency versions are still checked by advance under the lock.
+-- The accepted inventory was checked when it entered. A transaction checks
+-- what it adds: new events, new payloads, and their links into the inventory.
 transact :: FaultHook -> Repository -> [(Id, ByteString)] -> (State -> Either RepositoryError State) -> IO (Either RepositoryError Snapshot)
 transact hook repo@(Repository root store) payloads advance = fmap join $ tryWith RepositoryIO $ retry (3 :: Int) Nothing
   where
     retry 0 _ = pure (Left RepositoryBusy)
     retry remaining cached = runExceptT $ do
-      (old, oldMemories) <- ExceptT (loadSnapshotReusing repo cached)
+      old <- ExceptT (loadSnapshotReusing repo cached)
       liftIO (hook (SnapshotValidated (snapshotId old)))
       outcome <- ExceptT $ withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
         identity <- liftIO (boundedRead 256 (root </> "IDENTITY"))
@@ -292,16 +309,18 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
         digest <- either throwE pure (parsePointer pointer)
         if CheckpointId digest /= snapshotId old
           then pure Nothing
-          else Just <$> persist old oldMemories
-      maybe (ExceptT (retry (remaining - 1) (Just (old, oldMemories)))) pure outcome
-    persist old oldMemories = do
+          else Just <$> persist old
+      maybe (ExceptT (retry (remaining - 1) (Just old))) pure outcome
+    persist old = do
       state <- either throwE pure (advance (snapshotState old))
       supplied <- Map.fromList <$> traverse verifyPayload payloads
       let previous = snapshotCheckpoint old
           objectIds = checkpointObjects previous <> Map.keysSet supplied
           eventIds = Map.keysSet (State.events state)
-      let memories = Map.union (Map.map snd supplied) oldMemories
-      validatePayloads state memories
+          newPayloads = Map.withoutKeys supplied (checkpointObjects previous)
+          newEvents = Map.withoutKeys (State.events state) (checkpointEvents previous)
+          memoryOf digest = maybe (readParsed repo digest) (pure . snd) (Map.lookup digest supplied)
+      validateAdded memoryOf state objectIds newEvents (Map.map snd newPayloads)
       base <-
         either (throwE . InvalidCheckpoint) pure $
           mkCheckpoint
@@ -310,15 +329,19 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
             objectIds
             (pendingEvents previous <> (eventIds `Set.difference` checkpointEvents previous))
             (pendingObjects previous <> (objectIds `Set.difference` checkpointObjects previous))
-      let gone = evictedObjects previous `Set.difference` retained 1 base state memories
-          restored = evictedObjects previous `Set.difference` gone
+      -- No evicted payload was retained at the old checkpoint. Only the roots
+      -- that this transaction adds can newly retain one, so walk from those.
+      let newRoots = Set.fromList (concatMap (actionPayloads . Event.eventAction) (Map.elems newEvents)) <> Map.keysSet newPayloads
+      restored <-
+        if Set.null (evictedObjects previous)
+          then pure Set.empty
+          else Set.intersection (evictedObjects previous) <$> reachable memoryOf objectIds newRoots
+      let gone = evictedObjects previous `Set.difference` restored
       checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone base)
-      -- Accepted files were verified above and became durable before their old
-      -- CURRENT publication. Only new payloads and restored copies need a save.
+      -- Accepted files became durable before their old CURRENT publication.
+      -- Only new payloads and restored copies need a save.
       -- Prepared but unaccepted files still pass through saveImmutable and its
       -- directory flush, including retries after a rename interrupted by death.
-      let newPayloads = Map.withoutKeys supplied (checkpointObjects previous)
-          newEvents = Map.withoutKeys (State.events state) (checkpointEvents previous)
       traverse_ (\(digest, (bytes, _)) -> saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes) (Map.toAscList newPayloads)
       traverse_
         ( \digest -> do
@@ -364,15 +387,43 @@ validatePayloads state memories = do
     checkMemory (digest, memory) = traverse_ (checkEdge digest) (Set.toAscList (memEdges memory))
     checkEdge source edge = when (retains (kind edge) && Map.notMember (target edge) memories) (throwE (MissingRetainedTarget source (target edge)))
 
-loadMemoriesReusing :: Repository -> Map Id Memory -> Set.Set Id -> ExceptT RepositoryError IO (Map Id Memory)
-loadMemoriesReusing repo cached ids = Map.fromList <$> traverse readOne (Set.toAscList ids)
+-- | The checks of 'validatePayloads', for the part that a transaction adds.
+-- Old events and payloads keep the checks that they passed at entry, and the
+-- inventory only grows, so their links stay satisfied.
+validateAdded :: (Id -> ExceptT RepositoryError IO Memory) -> State -> Set.Set Id -> Map EventId Event -> Map Id Memory -> ExceptT RepositoryError IO ()
+validateAdded memoryOf state objects newEvents newPayloads = do
+  traverse_ (\digest -> unless (digest `Set.member` objects) (throwE (MissingPayload digest))) (concatMap (actionPayloads . Event.eventAction) (Map.elems newEvents))
+  traverse_ (\(digest, memory) -> traverse_ (checkEdge digest) (Set.toAscList (memEdges memory))) (Map.toAscList newPayloads)
+  traverse_ checkLog (Map.toAscList newEvents)
   where
-    readOne digest = do
-      bytes <- readObjectBytes repo digest
-      memory <- case Map.lookup digest cached of
-        Just verified -> pure verified
-        Nothing -> either (throwE . InvalidMemory digest) pure (parseMemory bytes)
-      pure (digest, memory)
+    checkEdge source edge = when (retains (kind edge) && Set.notMember (target edge) objects) (throwE (MissingRetainedTarget source (target edge)))
+    checkLog (eventId, event) = case Event.eventAction event of
+      AppendLog _ digest -> do
+        memory <- memoryOf digest
+        let linked = Set.fromList [target edge | edge <- Set.toList (memEdges memory), kind edge == Follows]
+            parents = [value | parent <- Set.toList (Event.eventParents event), Just previous <- [Map.lookup parent (State.events state)], value <- actionPayloads (Event.eventAction previous)]
+        traverse_ (\parent -> unless (parent `Set.member` linked) (throwE (MissingLogPredecessor eventId parent))) parents
+      _ -> pure ()
+
+-- | Every accepted payload that the roots retain, through retaining edges.
+-- It reads only the memories on the way.
+reachable :: (Id -> ExceptT RepositoryError IO Memory) -> Set.Set Id -> Set.Set Id -> ExceptT RepositoryError IO (Set.Set Id)
+reachable memoryOf objects = go Set.empty
+  where
+    go seen pending = case Set.minView pending of
+      Nothing -> pure seen
+      Just (digest, rest)
+        | digest `Set.member` seen || digest `Set.notMember` objects -> go seen rest
+        | otherwise -> do
+            memory <- memoryOf digest
+            let children = Set.fromList [target edge | edge <- Set.toList (memEdges memory), retains (kind edge)]
+            go (Set.insert digest seen) (rest <> children)
+
+loadMemories :: Repository -> Set.Set Id -> ExceptT RepositoryError IO (Map Id Memory)
+loadMemories repo ids = Map.fromList <$> traverse (\digest -> (digest,) <$> readParsed repo digest) (Set.toAscList ids)
+
+readParsed :: Repository -> Id -> ExceptT RepositoryError IO Memory
+readParsed repo digest = readObjectBytes repo digest >>= either (throwE . InvalidMemory digest) pure . parseMemory
 
 -- | Explicit reads are scoped to the captured checkpoint, never directory listings.
 readMemory :: Snapshot -> Id -> IO (Either RepositoryError Memory)
@@ -432,10 +483,10 @@ archiveSnapshotWith hook repo@(Repository root _) captured = fmap join $ tryWith
 -- Used by resumable joins before the first local registration is published.
 archiveIncoming :: Repository -> State -> Set.Set Id -> IO (Either RepositoryError CheckpointId)
 archiveIncoming repo@(Repository root store) state objects = fmap join $ tryWith RepositoryIO $ runExceptT $ do
-  (current, available) <- ExceptT (loadSnapshotMemories repo)
+  current <- ExceptT (loadSnapshot repo)
   checkpoint <- either (throwE . InvalidCheckpoint) pure (mkCheckpoint (State.storeId state) (Map.keysSet (State.events state)) objects Set.empty Set.empty)
   unless (State.storeId state == store && included checkpoint (snapshotCheckpoint current)) (throwE ArchiveNotAccepted)
-  let memories = Map.restrictKeys available objects
+  memories <- loadMemories repo objects
   validatePayloads state memories
   let snapshot = Snapshot root checkpoint state
   saveArchive (const (pure ())) repo snapshot

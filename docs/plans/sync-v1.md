@@ -244,15 +244,25 @@ Captured snapshots retain their accepted ID sets. Explicit memory reads do
 not inspect directory listings. Replica search indexes only causal topic
 heads from one captured checkpoint. Legacy search still uses the legacy store.
 
-The prototype validates full event and payload inventories on each load and
-commit. This favours a simple correctness boundary. Incremental validation
-and performance acceptance remain open.
+The repository checks data when the data enters. A load reads the manifest
+and every event. It checks their hashes and the complete causal graph. A
+load does not read payloads. A payload read checks the hash of that payload.
 
-Within one operation, transactions, GC plans and incoming archive preparation
-reuse the verified payload map. Transactions save only new dependencies and
-required restorations. Accepted dependencies became durable before their
-previous `CURRENT` publication. Unaccepted preparations still pass through
-the durable save path on retry. Later operations validate disk bytes again.
+A transaction checks what it adds. It checks each new payload, each new
+event, and their links into the accepted inventory. Accepted inventories
+only grow, so the links of old entries stay satisfied. If the checkpoint has
+evicted payloads, the transaction follows retaining edges from its new roots
+and restores each evicted payload that they reach.
+
+`replica verify` reads and checks every accepted event and payload, each
+payload link and the residency of evicted payloads. Its cost grows with the
+inventory. Collection makes the same complete check before it evicts. Run
+`replica verify` after a disk fault, a restore from backup or a manual
+change to the repository.
+
+Transactions save only new dependencies and required restorations. Accepted
+dependencies became durable before their previous `CURRENT` publication.
+Unaccepted preparations still pass through the durable save path on retry.
 
 Unchanged sync validates the fetched bundle once. It does not read that same
 Git commit again as a previous tip. A verified incoming inventory that is
@@ -285,14 +295,14 @@ still publish in their previous durable order.
 This relies on the existing immutable-file contract. Supported writers never
 rewrite accepted content. GC saves archive fallback before active eviction.
 Checkpoint identity includes pending and residency metadata, so an
-acknowledgement or collection also forces revalidation. Each new operation
-validates disk bytes again; it uses no persistent validation cache.
+acknowledgement or collection also forces a new load. Each new operation
+reads and hashes every event again; it uses no persistent validation cache.
 
-Within one transaction, retries reuse parsed events and memories from the
-previous attempt. Every retry still reads and hashes each inventory file.
-New events receive full wire checks. The combined graph, payload links and
-residency receive full checks. A smaller event inventory forces fresh state
-construction, so a changed checkpoint cannot retain removed events.
+Within one transaction, retries reuse decoded events from the previous
+attempt. Every retry still reads and hashes each event file. New events
+receive full wire checks, and the combined graph receives full checks. A
+smaller event inventory forces fresh state construction, so a changed
+checkpoint cannot retain removed events.
 
 State construction no longer repeats canonical event construction after wire
 decoding. Local writes and merges reuse events from private validated state.
@@ -476,9 +486,10 @@ Imports preserve earlier eviction for unchanged data. A new live ref, pin or
 pending event restores its required payload before publication. A greater
 generation depth also restores required historical copies.
 
-All accepted events and payload IDs stay in the checkpoint. Load validates
-their complete bytes, including archive fallback, and rejects eviction of
-any current or pending dependency. Full inventory validation remains costly.
+All accepted events and payload IDs stay in the checkpoint. `replica verify`
+validates their complete bytes, including archive fallback, and rejects
+eviction of any current or pending dependency. Its cost grows with the
+inventory.
 The local archive is a filesystem pool for this prototype. The separate Git
 transport preserves the same immutable archive and acknowledgement rules.
 

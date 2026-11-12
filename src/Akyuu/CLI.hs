@@ -60,7 +60,7 @@ import Akyuu.SearchEval (defaultEvalSetRef)
 import Akyuu.Seed qualified as Seed
 import Akyuu.Source qualified as Source
 import Akyuu.Store qualified as Store
-import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
+import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointEvents, checkpointObjects)
 import Akyuu.Sync.Context qualified as ReplicaContext
 import Akyuu.Sync.Logs qualified as ReplicaLogs
 import Akyuu.Sync.Migration qualified as ReplicaMigration
@@ -182,6 +182,7 @@ data ReplicaCommand i
   | ReplicaTodo Name Int Int Bool
   | ReplicaUnfold i Bool
   | ReplicaArchive Bool
+  | ReplicaVerify Bool
   | ReplicaGC Int (Maybe i) Bool Bool
   | ReplicaPinState i Bool
   | ReplicaPin i Version Bool Bool
@@ -419,6 +420,7 @@ commandParser =
           <> cmd "log-todo" (ReplicaTodo <$> topicName <*> option (atLeast 2) (long "size" <> value 8 <> metavar "N" <> help "Sources per suggested summary.") <*> keepEpisodes <*> jsonFlag) "List uncovered source batches for summaries."
           <> cmd "unfold" (ReplicaUnfold <$> argument idReader (metavar "ID") <*> jsonFlag) "Read the exact direct sources of an accepted summary."
           <> cmd "archive" (ReplicaArchive <$> jsonFlag) "Save a complete durable local archive. This does not acknowledge remote publication."
+          <> cmd "verify" (ReplicaVerify <$> jsonFlag) "Read and check every accepted event and payload. Other commands check only what they read or add."
           <> cmd "sync-config" (ReplicaSyncConfigure <$> remoteURL <*> syncBranch <*> jsonFlag) "Configure one sync target. This command does not contact the remote."
           <> cmd "sync" (ReplicaSync <$> switch (long "dry-run" <> help "Fetch and report changes without import, acknowledgement or push.") <*> jsonFlag) "Exchange accepted memory data through the configured Git branch."
           <> cmd "sync-status" (ReplicaSyncStatus <$> jsonFlag) "Report local progress and pending counts without a remote call."
@@ -1009,6 +1011,17 @@ runReplicaCommand root operation = do
           snapshot <- ExceptT (Topics.captureSnapshot local)
           CheckpointId digest <- store (ReplicaRepository.archiveSnapshot repo snapshot)
           pure (object ["archived_checkpoint" .= Id.render digest], "Local archive saved: " <> Id.render digest)
+        ReplicaVerify _ -> do
+          repo <- repository
+          snapshot <- store (ReplicaRepository.verifyRepository repo)
+          let CheckpointId digest = ReplicaRepository.snapshotId snapshot
+              checkpoint = ReplicaRepository.snapshotCheckpoint snapshot
+              eventCount = Set.size (checkpointEvents checkpoint)
+              payloadCount = Set.size (checkpointObjects checkpoint)
+          pure
+            ( object ["checkpoint" .= Id.render digest, "events" .= eventCount, "payloads" .= payloadCount],
+              "Replica verified: " <> T.pack (show eventCount) <> " events, " <> T.pack (show payloadCount) <> " payloads, checkpoint " <> Id.render digest <> "."
+            )
         ReplicaGC depth expected dry _ -> do
           repo <- repository
           report <-
@@ -1049,6 +1062,7 @@ runReplicaCommand root operation = do
       ReplicaTodo _ _ _ flag -> flag
       ReplicaUnfold _ flag -> flag
       ReplicaArchive flag -> flag
+      ReplicaVerify flag -> flag
       ReplicaGC _ _ _ flag -> flag
       ReplicaPinState _ flag -> flag
       ReplicaPin _ _ _ flag -> flag
