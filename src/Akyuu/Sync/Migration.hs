@@ -28,7 +28,7 @@ import Data.Aeson (Value, encode, object, (.=))
 import Data.Bifunctor (first)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
-import Data.List (sortOn)
+import Data.List (partition, sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -86,8 +86,11 @@ planMigration root classification = do
         raw <- liftIO (BS.readFile (Review.reviewPath store a b))
         let expectedHeaders = ["agent: " <> reviewAgent review, "reviewed: " <> T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (reviewAt review)), "verdict: distinct"]
         unless (takeWhile (not . T.null) (T.lines (decodeUtf8 raw)) == expectedHeaders) (throwE (SyncInvalid "A legacy review has invalid headers. Repair it before migration."))
+      -- Legacy GC keeps a review record after it collects a reviewed memory.
+      -- Such a record has no pair left to describe: report it, do not import it.
+      let (liveReviews, orphanReviews) = partition (\((a, b), _) -> Map.member a payloads && Map.member b payloads) reviews
       let refsJSON = [object ["ref" .= nameText name, "type" .= (classification Map.! nameText name), "current" .= Id.render (current ref), "generations" .= map Id.render (history ref), "missing_generations" .= [Id.render i | i <- history ref, Map.notMember i payloads]] | (name, ref) <- values]
-          report = object ["refs" .= refsJSON, "objects" .= map Id.render (Map.keys payloads), "pins" .= map Id.render (Set.toAscList pins), "reviews" .= [object ["a" .= Id.render a, "b" .= Id.render b, "author" .= reviewAgent review, "at" .= reviewAt review, "reason" .= reviewNote review] | ((a, b), review) <- reviews], "tombstones" .= [object ["memory" .= Id.render i, "record" .= decodeUtf8 (GC.renderTombstone tombstone)] | (i, tombstone) <- tombstones], "baseline_time" .= ("1970-01-01T00:00:00Z: import sentinel; original action dates are unknown" :: Text)]
+          report = object ["refs" .= refsJSON, "objects" .= map Id.render (Map.keys payloads), "pins" .= map Id.render (Set.toAscList pins), "reviews" .= [object ["a" .= Id.render a, "b" .= Id.render b, "author" .= reviewAgent review, "at" .= reviewAt review, "reason" .= reviewNote review] | ((a, b), review) <- reviews], "reviews_without_memory" .= [object ["a" .= Id.render a, "b" .= Id.render b] | ((a, b), _) <- orphanReviews], "tombstones" .= [object ["memory" .= Id.render i, "record" .= decodeUtf8 (GC.renderTombstone tombstone)] | (i, tombstone) <- tombstones], "baseline_time" .= ("1970-01-01T00:00:00Z: import sentinel; original action dates are unknown" :: Text)]
           fingerprint = Id.hashBytes (BL.toStrict (encode report))
           identifier tag = either (error . T.unpack) id (mkIdentifier (BS.take 16 (Id.toBytes (Id.hashBytes (tag <> Id.toBytes fingerprint)))))
           identity = StoreId (identifier "store")
@@ -106,7 +109,7 @@ planMigration root classification = do
           then (: []) <$> either throwE pure (make ("log:" <> encodeUtf8 (nameText name)) [] (AppendLog name (current ref)))
           else either throwE pure (build [] [] available)
       pinEvents <- traverse (\i -> either throwE pure (make ("pin:" <> Id.toBytes i) [] (SetPin i))) (Set.toAscList pins)
-      reviewEvents <- traverse (\((a, b), review) -> either throwE pure (make ("review:" <> Id.toBytes a <> Id.toBytes b) [] (SetReview a b (ReviewValue (reviewAgent review) (reviewNote review))))) reviews
+      reviewEvents <- traverse (\((a, b), review) -> either throwE pure (make ("review:" <> Id.toBytes a <> Id.toBytes b) [] (SetReview a b (ReviewValue (reviewAgent review) (reviewNote review))))) liveReviews
       let allEvents = registration : refEvents <> pinEvents <> reviewEvents
       metadata <- either (throwE . SyncInvalid . T.pack . show) pure (mkMemory "legacy-baseline" (posixSecondsToUTCTime 0) "migration" Set.empty (decodeUtf8 (BL.toStrict (encode report))))
       let complete = Map.insert (memoryId metadata) (renderMemory metadata) payloads
