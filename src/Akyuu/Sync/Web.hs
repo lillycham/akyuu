@@ -11,7 +11,7 @@ import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Context (ContextOptions (logOptions), configuredWith, reportJSON)
 import Akyuu.Sync.Logs (LogPageOptions (LogPageOptions, pageNumber, pageSize, recentWhole), pageJSON, pageUnchecked)
 import Akyuu.Sync.Repository (readMemory, snapshotId)
-import Akyuu.Sync.Search (searchAt, searchJSON)
+import Akyuu.Sync.Search (searchJSON, searchViews)
 import Akyuu.Sync.Topics (LocalReplica, TopicError (ConfigurationChanged, InvalidInput, StorageError), TopicStatus (LogTopic), TopicView (viewName, viewStatus), captureSnapshot, errorJSON, topicNames, topicViewAt, viewJSON)
 import Akyuu.Web.Api (securityHeaders)
 import Akyuu.Web.Page (dataPage, withFonts)
@@ -56,7 +56,7 @@ readViewChecked local options expected query limit = runExceptT $ do
       pages = Map.fromList paged
       pageOf name = maybe (pageUnchecked snapshot name (logOptions options)) pure (Map.lookup name pages)
   context <- ExceptT (configuredWith pageOf snapshot options)
-  search <- traverse (\text -> ExceptT (searchAt snapshot text limit)) query
+  search <- traverse (\text -> ExceptT (searchViews (snapshotId snapshot) topics [] text limit)) query
   pure (object ["checkpoint" .= Id.render checkpoint, "topics" .= map viewJSON topics, "logs" .= logs, "context" .= reportJSON context, "search" .= fmap searchJSON search])
 
 staticPage :: LocalReplica -> ContextOptions -> IO (Either TopicError ByteString)
