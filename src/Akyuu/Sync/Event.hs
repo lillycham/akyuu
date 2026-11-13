@@ -22,8 +22,8 @@ module Akyuu.Sync.Event
 where
 
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (timeFormat)
 import Akyuu.Refs qualified as Refs
+import Akyuu.Sync.Stamp (formatStamp, parseStamp)
 import Akyuu.Sync.Types (Action (AppendLog, ClearPin, ClearReview, RegisterReplica, ResolveLog, ResolveTopic, SetPin, SetReview, SetTopic), EventId (EventId), Nonce (Nonce), ReplicaId (ReplicaId), ReviewValue (ReviewValue), StoreId (StoreId), normaliseAction, parseIdentifier, renderIdentifier)
 import Control.Monad (unless, when)
 import Data.Aeson (Value, eitherDecodeStrict')
@@ -37,7 +37,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8)
-import Data.Time (UTCTime (utctDay, utctDayTime), defaultTimeLocale, formatTime, parseTimeM, toGregorian)
+import Data.Time (UTCTime (utctDay, utctDayTime), toGregorian)
 
 -- | A validated event. The fields are positional and the getters below are
 -- plain functions: an exported record field would permit a record update,
@@ -94,9 +94,9 @@ construct :: StoreId -> ReplicaId -> Nonce -> Set EventId -> Action -> UTCTime -
 construct store replica nonce parents action time = do
   when (Set.size parents > maxEventParents) (Left TooManyParents)
   let event = Event store replica nonce parents (normaliseAction action) time
-      timeText = formatTime defaultTimeLocale timeFormat time
+      timeText = formatStamp time
       (year, _, _) = toGregorian (utctDay time)
-  unless (year >= 1 && year <= 9999 && utctDayTime time < 86400 && (parseTimeM True defaultTimeLocale timeFormat timeText :: Maybe UTCTime) == Just time) $
+  unless (year >= 1 && year <= 9999 && utctDayTime time < 86400 && parseStamp timeText == Just time) $
     Left (BadEvent "Event time must round-trip at whole-second precision.")
   case action of
     RegisterReplica _ label -> unless (validAuthor label) (Left (BadEvent "Replica label must be nonempty, trimmed, and one line."))
@@ -112,7 +112,7 @@ eventId :: Event -> EventId
 eventId = EventId . Id.hashBytes . renderEvent
 
 renderEvent :: Event -> ByteString
-renderEvent event = renderWith (formatTime defaultTimeLocale timeFormat (eventTime event)) event
+renderEvent event = renderWith (formatStamp (eventTime event)) event
 
 renderWith :: String -> Event -> ByteString
 renderWith timeText event = header <> array fields <> "\n"
@@ -182,7 +182,7 @@ parseFields value = do
       parents <- Set.fromList <$> traverse (fmap EventId . checked . first (T.pack . show) . Id.parse) parentTexts
       action <- parseJSON actionValue >>= parseAction
       timeText <- parseJSON timeValue
-      time <- maybe (fail "Invalid event time.") pure (parseTimeM True defaultTimeLocale timeFormat (T.unpack timeText))
+      time <- maybe (fail "Invalid event time.") pure (parseStamp (T.unpack timeText))
       either (fail . show) pure (construct store replica nonce parents action time)
     _ -> fail "An event must have exactly six fields."
 

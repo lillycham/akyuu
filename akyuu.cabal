@@ -81,6 +81,7 @@ library
                    , Akyuu.Supersede
                    , Akyuu.Sync.Types
                    , Akyuu.Sync.Event
+                   , Akyuu.Sync.Stamp
                    , Akyuu.Sync.State
                    , Akyuu.Sync.Checkpoint
                    , Akyuu.Sync.Repository
