@@ -438,16 +438,16 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
       checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone base)
       -- Accepted files became durable before their old CURRENT publication.
       -- Only new payloads and restored copies need a save.
-      -- Prepared but unaccepted files still pass through saveImmutable and its
-      -- directory flush, including retries after a rename interrupted by death.
-      traverse_ (\(digest, (bytes, _)) -> saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes) (Map.toAscList newPayloads)
-      traverse_
-        ( \digest -> do
-            bytes <- readObjectBytes repo digest
-            saveImmutable hook (MemoryFile digest) (objectPath repo digest) bytes
+      -- Prepared but unaccepted files still pass through prepareImmutable and
+      -- one directory flush, including retries after a rename interrupted by death.
+      saveDirectory
+        (root </> "objects")
+        ( [prepareImmutable hook (MemoryFile digest) (objectPath repo digest) bytes | (digest, (bytes, _)) <- Map.toAscList newPayloads]
+            <> [readObjectBytes repo digest >>= prepareImmutable hook (MemoryFile digest) (objectPath repo digest) | digest <- Set.toAscList restored]
         )
-        (Set.toAscList restored)
-      traverse_ (\(key, event) -> saveImmutable hook (EventFile key) (eventPath repo key) (renderEvent event)) (Map.toAscList newEvents)
+      saveDirectory
+        (root </> "events")
+        [prepareImmutable hook (EventFile key) (eventPath repo key) (renderEvent event) | (key, event) <- Map.toAscList newEvents]
       saveCheckpoint hook repo checkpoint
       publishCurrent hook repo checkpoint
       pruneCheckpoints repo [checkpointId checkpoint, snapshotId old]
@@ -612,8 +612,12 @@ saveArchive scope hook repo@(Repository root _) snapshot = do
       (objects, entries) = case scope of
         AllEntries -> (checkpointObjects checkpoint, table)
         PendingEntries -> (pendingObjects checkpoint, Map.restrictKeys table (pendingEvents checkpoint))
-  traverse_ (\digest -> readObjectBytes repo digest >>= saveImmutable hook (ArchiveMemoryFile digest) (archiveObjectPath repo digest)) (Set.toAscList objects)
-  traverse_ (\(key, event) -> saveImmutable hook (ArchiveEventFile key) (archiveEventPath repo key) (renderEvent event)) (Map.toAscList entries)
+  saveDirectory
+    (root </> "archive/objects")
+    [readObjectBytes repo digest >>= prepareImmutable hook (ArchiveMemoryFile digest) (archiveObjectPath repo digest) | digest <- Set.toAscList objects]
+  saveDirectory
+    (root </> "archive/events")
+    [prepareImmutable hook (ArchiveEventFile key) (archiveEventPath repo key) (renderEvent event) | (key, event) <- Map.toAscList entries]
   -- A manifest is the archive commit marker. It comes after every dependency.
   saveImmutable hook (ArchiveCheckpointFile (snapshotId snapshot)) (archiveCheckpointPath repo (snapshotId snapshot)) (renderCheckpoint checkpoint)
 
@@ -691,7 +695,9 @@ collectWith hook repo@(Repository root _) expected depth = fmap join $ tryWith R
     plan <- either throwE pure (collectionPlan current memories depth)
     let gone = (collectionEvicted plan <> collectionCandidates plan) `Set.difference` collectionRetained plan
         restored = collectionEvicted plan `Set.difference` gone
-    traverse_ (\digest -> readObjectBytes repo digest >>= saveImmutable hook (MemoryFile digest) (objectPath repo digest)) (Set.toAscList restored)
+    saveDirectory
+      (root </> "objects")
+      [readObjectBytes repo digest >>= prepareImmutable hook (MemoryFile digest) (objectPath repo digest) | digest <- Set.toAscList restored]
     checkpoint <- either (throwE . InvalidCheckpoint) pure (withEvicted gone (snapshotCheckpoint current))
     saveCheckpoint hook repo checkpoint
     publishCurrent hook repo checkpoint
@@ -714,13 +720,27 @@ saveCheckpoint hook repo checkpoint = saveImmutable hook (CheckpointFile (checkp
 
 saveImmutable :: FaultHook -> WriteTarget -> FilePath -> ByteString -> ExceptT RepositoryError IO ()
 saveImmutable hook target path bytes = do
+  reused <- prepareImmutable hook target path bytes
+  when reused (liftIO (syncDir (takeDirectory path)))
+
+prepareImmutable :: FaultHook -> WriteTarget -> FilePath -> ByteString -> ExceptT RepositoryError IO Bool
+prepareImmutable hook target path bytes = do
   existing <- liftIO (ifMissing Nothing (Just <$> boundedRead (BS.length bytes) path))
   case existing of
     Just old -> do
       unless (old == bytes) (throwE (CorruptData path))
-      -- A prior process can die after rename but before the directory flush.
-      liftIO (syncDir (takeDirectory path))
-    Nothing -> liftIO (atomicWriteWith (hook . WriteBoundary target) path bytes)
+      pure True
+    Nothing -> do
+      liftIO (atomicWriteWith (hook . WriteBoundary target) path bytes)
+      pure False
+
+-- | Save a batch of immutable files in one directory. A prior process can die
+-- after a rename and before the directory flush, so if any file was already on
+-- disk, flush the directory once after the batch.
+saveDirectory :: FilePath -> [ExceptT RepositoryError IO Bool] -> ExceptT RepositoryError IO ()
+saveDirectory directory actions = do
+  reused <- sequence actions
+  when (or reused) (liftIO (syncDir directory))
 
 publishCurrent :: FaultHook -> Repository -> Checkpoint -> ExceptT RepositoryError IO ()
 publishCurrent hook (Repository root _) checkpoint = do
