@@ -358,7 +358,7 @@ removalTests =
         loadSnapshot reopened >>= (@?= Right after)
         _ <- importState repo (snapshotState captured) [(headMemoryId entry, renderMemory (headMemory entry)) | entry <- old] >>= right
         forM_ old (\entry -> doesFileExist (objectPath root (headMemoryId entry)) >>= (@?= False))
-        SearchReport _ _ hits <- searchTopics local "fossil" 10 >>= right
+        SearchReport _ _ hits _ <- searchTopics local "fossil" 10 >>= right
         hits @?= []
         checkpointObjects (snapshotCheckpoint after) @?= checkpointObjects (snapshotCheckpoint captured),
       testCase "a new live reference restores a locally evicted payload" $ withRepository $ \root local repo -> do
