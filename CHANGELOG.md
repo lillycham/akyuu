@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0.0 (2026-11-13)
 
 ### Compatibility
 
@@ -59,6 +59,17 @@
   standard input and prints the id of the session, with the command that makes
   a pointer to it. The Claude Code plugin has this hook, and its `memory` skill
   says when to use it.
+
+- An experimental replicated store (`replica` and `mcp --tool-set replica`,
+  docs/sync-architecture.md). A replica records causal events over topics,
+  logs, pins and reviews, publishes immutable checkpoints through `CURRENT`,
+  keeps a durable archive outbox, and syncs over a bare Git repository with
+  incremental bundle trees. Concurrent heads stay visible until an explicit
+  resolution (`resolve`, `select` or `resolve-log`). `replica migrate` copies
+  a snapshot of an existing store into a new replica, `replica verify` checks
+  every accepted file and link, `replica gc` evicts inactive local copies
+  after archiving, and `replica serve` runs a read-only browser for the
+  replica.
 
 ### Fixed
 
