@@ -105,6 +105,7 @@ data TopicError
   | InvalidSelection Id
   | UnregisteredReplica ReplicaId
   | ConfigurationChanged
+  | LogChanged
   | TextIndexFailed Text
   | StaleResource Resource Version
   deriving (Eq, Show)
@@ -421,6 +422,7 @@ errorJSON err = object (["error" .= (code :: Text), "message" .= describeError e
       InvalidSelection _ -> ("invalid-selection", Nothing)
       InvalidInput _ -> ("invalid-input", Nothing)
       ConfigurationChanged -> ("configuration-changed", Nothing)
+      LogChanged -> ("log-changed", Nothing)
       TextIndexFailed _ -> ("text-index-error", Nothing)
       StaleResource _ _ -> ("stale-version", Nothing)
 
@@ -446,6 +448,7 @@ describeError :: TopicError -> Text
 describeError err = case err of
   StaleResource _ _ -> "The resource version changed. Read its state before another write."
   ConfigurationChanged -> "The configured policy or tier version changed. Read configured context before another resolution."
+  LogChanged -> "A paged log changed after its first page. Read page one again."
   TextIndexFailed message -> "The topic text index failed: " <> message
   InvalidInput text -> text
   TopicIO io -> T.pack (displayException io)

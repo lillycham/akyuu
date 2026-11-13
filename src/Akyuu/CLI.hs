@@ -446,7 +446,7 @@ commandParser =
                 <$> option (atLeast 1) (long "log-page" <> value 1 <> metavar "N" <> help "The page of each resolved log; default 1.")
                 <*> option (atLeast 1) (long "log-limit" <> value 20 <> metavar "N" <> help "Entries per log page, from 1 to 100.")
                 <*> option (atLeast 0) (long "log-keep" <> value 10 <> metavar "N" <> help "Recent episodes to retain whole; default 10.")
-                <*> optional (option (eitherReader (first (const "Give a complete checkpoint ID.") . Id.parse . T.pack)) (long "checkpoint" <> metavar "ID" <> help "The checkpoint from the first log page. Required after page 1."))
+                <*> optional (option (eitherReader (first (const "Give a complete log version.") . Id.parse . T.pack)) (long "log-version" <> metavar "ID" <> help "The log version from the first log page. Required after page 1."))
             )
     jsonFlag = switch (long "json" <> help "Print structured JSON, including operation errors.")
     keepEpisodes = option (atLeast 0) (long "keep" <> value 10 <> metavar "N" <> help "Recent episodes to retain whole.")

@@ -8,13 +8,12 @@ import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memEdges), memoryId, renderMemory)
 import Akyuu.Ops (NewMemory (newEdges), buildMemory)
 import Akyuu.Refs (Name, mkName)
-import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Event (mkEvent)
 import Akyuu.Sync.Logs (LogItem (itemId, itemLevel, itemSources), LogLevels (levelsChecks, levelsReads, levelsToken), LogRead (logEntries, logFailures, logFrontier), appendLog, levelsAt, logAt, orderEntries, predecessors, readLevels, readLog, resolution, summarise, todo, unfold)
 import Akyuu.Sync.Logs qualified as Logs
 import Akyuu.Sync.Repository (RepositoryError (MissingLogPredecessor), importState, loadSnapshot, openRepository, snapshotId, snapshotState)
 import Akyuu.Sync.State qualified as State
-import Akyuu.Sync.Topics (LocalReplica, TopicError (InvalidInput, NeedsResolution, StaleTopic), TopicHead (headEvent, headMemory, headMemoryId, headTime), TopicStatus (LogTopic), TopicView (viewHeads, viewStatus, viewVersion), appendLogChecked, captureSnapshot, createTopic, readTopic)
+import Akyuu.Sync.Topics (LocalReplica, TopicError (InvalidInput, LogChanged, NeedsResolution, StaleTopic), TopicHead (headEvent, headMemory, headMemoryId, headTime), TopicStatus (LogTopic), TopicView (viewHeads, viewStatus, viewVersion), appendLogChecked, captureSnapshot, createTopic, readTopic)
 import Akyuu.Sync.Types (Action (AppendLog, RegisterReplica), EventId, Nonce (Nonce), ReplicaId (ReplicaId), Resource (RegistryResource), mkIdentifier)
 import Data.ByteString qualified as BS
 import Data.List (sort)
@@ -89,25 +88,30 @@ replicaLogTests =
         Logs.levelsAtBounded snapshot logName 3 >>= assertInvalid
         complete <- Logs.levelsAtBounded snapshot logName 4 >>= right
         length (levelsReads complete) @?= 2,
-      testCase "log pages preserve coverage and require the same captured checkpoint" $ withLocal $ \_ local -> do
+      testCase "log pages preserve coverage and require the same log version" $ withLocal $ \_ local -> do
         ids <- traverse (append local) ["a", "b", "c", "d", "e"]
         compressed <- summary local 1 (take 3 ids) "abc"
         snapshot <- captureSnapshot local >>= right
-        let CheckpointId checkpoint = snapshotId snapshot
-            options = Logs.LogPageOptions 1 2 1 Nothing
+        let options = Logs.LogPageOptions 1 2 1 Nothing
         first <- Logs.pageAt snapshot logName options >>= right
         map itemId (Logs.pageItems first) @?= reverse (drop 3 ids)
         Logs.pageHasMore first @?= True
-        second <- Logs.pageAt snapshot logName options {Logs.pageNumber = 2, Logs.pageCheckpoint = Just checkpoint} >>= right
+        let next = options {Logs.pageNumber = 2, Logs.pageToken = Just (Logs.pageVersion first)}
+        second <- Logs.pageAt snapshot logName next >>= right
         map itemId (Logs.pageItems second) @?= [compressed]
         assertCover ids (Logs.pageItems first <> Logs.pageItems second)
         Logs.pageHasMore second @?= False
         Logs.pageAt snapshot logName options {Logs.pageNumber = 2} >>= assertInvalid
+        -- A write to another topic changes the checkpoint, not the log.
+        _ <- createTopic local (either (error . show) id (mkName "me/other")) (newTopic "unrelated") >>= right
+        unrelated <- captureSnapshot local >>= right
+        assertBool "the checkpoint did not change" (snapshotId unrelated /= snapshotId snapshot)
+        continued <- Logs.pageAt unrelated logName next >>= right
+        Logs.pageItems continued @?= Logs.pageItems second
         _ <- append local "later"
         current <- captureSnapshot local >>= right
-        result <- Logs.pageAt current logName options {Logs.pageNumber = 2, Logs.pageCheckpoint = Just checkpoint}
-        assertBool "stale page accepted" (case result of Left _ -> True; _ -> False)
-        again <- Logs.pageAt snapshot logName options {Logs.pageNumber = 2, Logs.pageCheckpoint = Just checkpoint} >>= right
+        Logs.pageAt current logName next >>= (@?= Left LogChanged)
+        again <- Logs.pageAt snapshot logName next >>= right
         again @?= second,
       testCase "page parameters cannot create unbounded output or overflow offsets" $ withLocal $ \_ local -> do
         _ <- append local "a"
