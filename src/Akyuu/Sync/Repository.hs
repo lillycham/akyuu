@@ -65,7 +65,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
-import System.Directory (canonicalizePath, createDirectory, doesDirectoryExist, getModificationTime, listDirectory, removeFile)
+import System.Directory (canonicalizePath, createDirectory, doesDirectoryExist, listDirectory, removeFile)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (IOMode (ReadMode), hFileSize, withBinaryFile)
 import System.IO.Error (isAlreadyExistsError)
@@ -669,7 +669,7 @@ acknowledgePublishedWith hook repo@(Repository root store) key = withMutation ro
   saveCheckpoint hook repo checkpoint
   publishCurrent hook repo checkpoint
   pruneCheckpoints repo [checkpointId checkpoint, snapshotId current]
-  pruneArchiveMarkers repo key
+  pruneArchiveMarkers repo key archived
   pure (Snapshot root checkpoint (snapshotState current))
 
 -- | Prepare the archive outside the lock, then recheck and recompute under
@@ -736,20 +736,22 @@ publishCurrent hook (Repository root _) checkpoint = do
       visible <- liftIO (readIORef renamed)
       throwE (if visible then PublicationUncertain key err else RepositoryIO err)
 
--- | Remove archive commit markers older than an acknowledged one. Only
--- acknowledgement reads a marker. An older marker names a subset of an
--- inventory that is now published, so no later acknowledgement needs it. A
--- newer marker can belong to an archive that is still unpublished: keep it.
--- Archive payloads and events are not touched. Removal is best effort.
-pruneArchiveMarkers :: Repository -> CheckpointId -> ExceptT RepositoryError IO ()
-pruneArchiveMarkers repo@(Repository root _) key@(CheckpointId acknowledged) = liftIO $ ignoreIO $ do
+-- | Remove the archive commit markers whose inventory the acknowledged one
+-- includes. Only acknowledgement reads a marker, and such a marker names
+-- nothing that is not now published, so no later acknowledgement needs it.
+-- Any other marker can belong to an archive that is still unpublished: keep
+-- it. Inclusion decides, not file times: a stale snapshot can be archived
+-- after a larger one. A marker that cannot be read is kept. Archive payloads
+-- and events are not touched. Removal is best effort.
+pruneArchiveMarkers :: Repository -> CheckpointId -> Checkpoint -> ExceptT RepositoryError IO ()
+pruneArchiveMarkers repo@(Repository root _) (CheckpointId acknowledged) published = liftIO $ ignoreIO $ do
   let directory = root </> "archive" </> "checkpoints"
-      manifest file = either (const False) (const True) (Id.parse (T.pack file))
-  reference <- getModificationTime (archiveCheckpointPath repo key)
   files <- listDirectory directory
-  forM_ [file | file <- files, manifest file, file /= T.unpack (Id.render acknowledged)] $ \file -> ignoreIO $ do
-    written <- getModificationTime (directory </> file)
-    when (written < reference) (removeFile (directory </> file))
+  forM_ [(file, digest) | file <- files, Right digest <- [Id.parse (T.pack file)], digest /= acknowledged] $ \(file, digest) -> ignoreIO $ do
+    marker <- runExceptT (readChecked maxCheckpointBytes (archiveCheckpointPath repo (CheckpointId digest)) digest >>= either (throwE . InvalidCheckpoint) pure . parseCheckpoint)
+    case marker of
+      Right checkpoint | included checkpoint published -> removeFile (directory </> file)
+      _ -> pure ()
 
 -- | Remove superseded manifests. Each manifest names the whole inventory, so
 -- an unpruned directory grows with writes times inventory size. Callers hold

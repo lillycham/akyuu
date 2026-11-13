@@ -168,7 +168,7 @@ storageTests =
         pendingObjects (snapshotCheckpoint acknowledged) @?= Set.singleton (headMemoryId newest)
         Set.size (pendingEvents (snapshotCheckpoint acknowledged)) @?= 1
         acknowledgePublished repo key >>= (@?= Right acknowledged),
-      testCase "acknowledgement removes older archive markers and keeps newer ones" $ withRepository $ \root local repo -> do
+      testCase "acknowledgement removes included archive markers and keeps larger ones" $ withRepository $ \root local repo -> do
         _ <- createTopic local topicName (newTopic "first") >>= right
         old <- loadSnapshot repo >>= right >>= \captured -> archiveSnapshot repo captured >>= right
         before <- readTopic local topicName >>= right
@@ -177,9 +177,10 @@ storageTests =
         let directory = root </> "archive" </> "checkpoints"
             marker (CheckpointId digest) = T.unpack (Id.render digest)
             markers = Set.fromList <$> listDirectory directory
-        -- Do not depend on the timestamp resolution of the file system.
-        written <- getModificationTime (directory </> marker new)
-        setModificationTime (directory </> marker old) (addUTCTime (-60) written)
+        -- Make the larger archive look older, as when a stale snapshot is
+        -- archived after a newer one. Inclusion, not file time, must decide.
+        written <- getModificationTime (directory </> marker old)
+        setModificationTime (directory </> marker new) (addUTCTime (-60) written)
         _ <- acknowledgePublished repo old >>= right
         markers >>= (@?= Set.fromList [marker old, marker new])
         _ <- acknowledgePublished repo new >>= right
