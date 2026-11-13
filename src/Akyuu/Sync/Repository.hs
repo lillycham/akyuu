@@ -10,6 +10,7 @@ module Akyuu.Sync.Repository
     initialise,
     initialiseWith,
     openRepository,
+    openSnapshot,
     readStoreIdentity,
     loadSnapshot,
     verifyRepository,
@@ -180,13 +181,18 @@ initialiseWith hook path store = fmap join $ tryWith RepositoryIO $ do
         pure repo
 
 openRepository :: FilePath -> IO (Either RepositoryError Repository)
-openRepository path = fmap join $ tryWith RepositoryIO $ runExceptT $ do
+openRepository = fmap (fmap fst) . openSnapshot
+
+-- | Open a repository, and keep the snapshot that the open loaded to check
+-- it. A caller that reads at once can use that snapshot and save a load.
+openSnapshot :: FilePath -> IO (Either RepositoryError (Repository, Snapshot))
+openSnapshot path = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   root <- liftIO (canonicalizePath path)
   bytes <- liftIO (boundedRead 256 (root </> "IDENTITY"))
   store <- either throwE pure (parseIdentity bytes)
   let repo = Repository root store
-  _ <- ExceptT (loadSnapshot repo)
-  pure repo
+  snapshot <- ExceptT (loadSnapshot repo)
+  pure (repo, snapshot)
 
 readStoreIdentity :: FilePath -> IO (Either RepositoryError StoreId)
 readStoreIdentity root =
