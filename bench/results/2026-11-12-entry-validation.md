@@ -70,3 +70,29 @@ Every build accepted every write. The cost still grows with the inventory.
 The remainder is the decode of each event and the full checkpoint manifest,
 which is 1.7 MB at 5,000 unpublished entries and is read, parsed and written
 again for each write.
+
+## Follow-up: time stamps and one render for each manifest
+
+An event decode parsed its time stamp two times through `String` functions.
+A checkpoint parse rendered the manifest about four times, and each use of a
+checkpoint ID rendered and hashed it again. A delta manifest was considered
+and not built: the cost was this repeated work in memory, not the size of the
+file on disk.
+
+The module `Akyuu.Sync.Stamp` formats and parses the usual time stamp
+directly and sends every other input to the general functions. Property tests
+compare both paths. A checkpoint now holds its canonical bytes and its ID, and
+computes each at most once. No byte of an event or a manifest changed.
+
+The decode of 5,191 events fell from 80 ms to 22 ms. A plain load at 5,000
+entries fell from 139 ms to 72 ms. The harness compared `b6d66b1`, the pack
+build and this build. All durations are milliseconds.
+
+| Base entries | Direct commit, median | Pair duration, median |
+| --- | ---: | ---: |
+| 100 | 13.0 → 4.3 → 2.6 | 32.3 → 16.9 → 14.5 |
+| 1,000 | 130.8 → 34.7 → 16.6 | 231.3 → 55.5 → 36.3 |
+| 5,000 | 697.8 → 180.6 → 85.6 | 1175.7 → 314.3 → 157.1 |
+
+Every build accepted every write. The cost still grows with the inventory,
+at about 17 microseconds for each entry in place of about 140.

@@ -4,8 +4,10 @@ module SyncTests (syncTests) where
 
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
+import Akyuu.Memory (timeFormat)
 import Akyuu.Refs (Name, mkName)
 import Akyuu.Sync.Event (Event, EventError (EventTooLarge, NonCanonicalEvent, TooManyParents), eventAction, eventId, eventTime, maxEventBytes, maxEventParents, mkEvent, parseEvent, renderEvent)
+import Akyuu.Sync.Stamp (formatStamp, parseStamp)
 import Akyuu.Sync.State (RefKind (LogKind, TopicKind), ResourceState (LogHeads, PinState, RefTypeConflict, Registered, ReviewState, TopicHeads), State, StateError (IncompatibleStores, InvalidRefTransition, InvalidRegistration, MissingParent, NeedsResolution, ParentResourceMismatch, StaleVersion, UnknownReplica, WrongEventId, WrongParents, WrongStore), applyLocal, empty, events, fromBytes, fromEvents, interpret, merge, resourceHeads, version)
 import Akyuu.Sync.State qualified as State
 import Akyuu.Sync.Types (Action (AppendLog, ClearPin, ClearReview, RegisterReplica, ResolveLog, ResolveTopic, SetPin, SetReview, SetTopic), EventId (EventId), Identifier, Nonce (Nonce), ReplicaId (ReplicaId), Resource (PinResource, RefResource, RegistryResource, ReviewResource), ReviewValue (ReviewValue), StoreId (StoreId), mkIdentifier, parseIdentifier, renderIdentifier)
@@ -16,13 +18,13 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8, encodeUtf8)
-import Data.Time (UTCTime (UTCTime, utctDayTime), fromGregorian, secondsToDiffTime)
+import Data.Time (UTCTime (UTCTime, utctDayTime), defaultTimeLocale, formatTime, fromGregorian, parseTimeM, picosecondsToDiffTime, secondsToDiffTime)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
-import Test.Tasty.QuickCheck (Gen, chooseInt, conjoin, forAll, shuffle, testProperty, vectorOf, (===))
+import Test.Tasty.QuickCheck (Gen, chooseInt, chooseInteger, conjoin, elements, forAll, frequency, shuffle, testProperty, vectorOf, (===))
 
 syncTests :: TestTree
-syncTests = testGroup "Akyuu.Sync" [encodingTests, validationTests, topicTests, logTests, removalTests, localTests, lawTests]
+syncTests = testGroup "Akyuu.Sync" [encodingTests, validationTests, topicTests, logTests, removalTests, localTests, lawTests, stampTests]
 
 must :: (Show e) => Either e a -> a
 must = either (error . show) id
@@ -264,6 +266,43 @@ genHistory = do
     add prior (n, (choice, value)) =
       let parent = if null prior || choice == 0 then [] else [prior !! (choice `mod` length prior)]
        in prior <> [event n parent (SetTopic name (memory value))]
+
+-- The direct paths must agree with the general time functions on every input.
+stampTests :: TestTree
+stampTests =
+  testGroup
+    "time stamps"
+    [ testProperty "format matches formatTime" $ forAll genTime $ \time ->
+        formatStamp time === formatTime defaultTimeLocale timeFormat time,
+      testProperty "parse matches parseTimeM on formatted times" $ forAll genTime $ \time ->
+        let text = formatTime defaultTimeLocale timeFormat time
+         in parseStamp text === slowParse text,
+      testProperty "parse matches parseTimeM on changed text" $ forAll genTime $ \time -> forAll (genChanged (formatTime defaultTimeLocale timeFormat time)) $ \text ->
+        parseStamp text === slowParse text
+    ]
+  where
+    slowParse text = parseTimeM True defaultTimeLocale timeFormat text :: Maybe UTCTime
+    genTime = do
+      year <- frequency [(6, chooseInteger (1000, 9999)), (2, chooseInteger (1, 999)), (1, chooseInteger (-50, 0)), (1, chooseInteger (10000, 12000))]
+      month <- chooseInt (1, 12)
+      day <- chooseInt (1, 31)
+      pico <- frequency [(3, (* 1000000000000) <$> chooseInteger (0, 86400)), (1, chooseInteger (0, 86401 * 1000000000000))]
+      pure (UTCTime (fromGregorian year month day) (picosecondsToDiffTime pico))
+    genChanged :: String -> Gen String
+    genChanged text = do
+      edits <- chooseInt (1, 3)
+      changed <- foldr (=<<) (pure text) (replicate edits change)
+      padding <- elements ["", " ", "\n"]
+      elements [changed, padding <> changed, changed <> padding]
+    change text = do
+      position <- chooseInt (0, max 0 (length text - 1))
+      char <- elements "0123456789-T:Z 6"
+      kind <- chooseInt (0, 2 :: Int)
+      let (before, after) = splitAt position text
+      pure $ case kind of
+        0 -> before <> [char] <> drop 1 after
+        1 -> before <> [char] <> after
+        _ -> before <> drop 1 after
 
 lawTests :: TestTree
 lawTests =
