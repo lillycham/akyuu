@@ -541,6 +541,9 @@ collectionPlan snapshot memories depth = do
 -- Accepted inventories only grow and archive files are immutable. Preparation
 -- therefore needs no mutation lock. Concurrent GC saves the same bytes before
 -- unlinking an active copy, so readers can always use archive fallback.
+-- Preparation saves the pending events and payloads. Every other accepted
+-- entry left the pending sets through an acknowledgement, which checked its
+-- archive copy.
 archiveSnapshot :: Repository -> Snapshot -> IO (Either RepositoryError CheckpointId)
 archiveSnapshot = archiveSnapshotWith (const (pure ()))
 
@@ -548,7 +551,7 @@ archiveSnapshotWith :: FaultHook -> Repository -> Snapshot -> IO (Either Reposit
 archiveSnapshotWith hook repo@(Repository root _) captured = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   current <- ExceptT (loadSnapshot repo)
   unless (snapshotRoot captured == root && included (snapshotCheckpoint captured) (snapshotCheckpoint current)) (throwE ArchiveNotAccepted)
-  saveArchive hook repo captured
+  saveArchive PendingEntries hook repo captured
   pure (snapshotId captured)
 
 -- | Archive exactly the remotely verified inventory, not newer local events.
@@ -561,7 +564,7 @@ archiveIncoming repo@(Repository root store) state objects = fmap join $ tryWith
   memories <- loadMemories repo objects
   validatePayloads state memories
   let snapshot = Snapshot root checkpoint state
-  saveArchive (const (pure ())) repo snapshot
+  saveArchive AllEntries (const (pure ())) repo snapshot
   pure (snapshotId snapshot)
 
 included :: Checkpoint -> Checkpoint -> Bool
@@ -570,17 +573,39 @@ included part whole =
     && checkpointEvents part `Set.isSubsetOf` checkpointEvents whole
     && checkpointObjects part `Set.isSubsetOf` checkpointObjects whole
 
-saveArchive :: FaultHook -> Repository -> Snapshot -> ExceptT RepositoryError IO ()
-saveArchive hook repo@(Repository root _) snapshot = do
+-- | Which entries of a checkpoint an archive preparation saves. A join and a
+-- collection save all of them. They do not rely on an earlier archive.
+data ArchiveScope = AllEntries | PendingEntries
+
+saveArchive :: ArchiveScope -> FaultHook -> Repository -> Snapshot -> ExceptT RepositoryError IO ()
+saveArchive scope hook repo@(Repository root _) snapshot = do
   liftIO (traverse_ (ensureDirectory hook . (root </>)) ["archive/objects", "archive/events", "archive/checkpoints"])
   let checkpoint = snapshotCheckpoint snapshot
-  traverse_ (\digest -> readObjectBytes repo digest >>= saveImmutable hook (ArchiveMemoryFile digest) (archiveObjectPath repo digest)) (Set.toAscList (checkpointObjects checkpoint))
-  traverse_ (\(key, event) -> saveImmutable hook (ArchiveEventFile key) (archiveEventPath repo key) (renderEvent event)) (Map.toAscList (State.events (snapshotState snapshot)))
+      table = State.events (snapshotState snapshot)
+      (objects, entries) = case scope of
+        AllEntries -> (checkpointObjects checkpoint, table)
+        PendingEntries -> (pendingObjects checkpoint, Map.restrictKeys table (pendingEvents checkpoint))
+  traverse_ (\digest -> readObjectBytes repo digest >>= saveImmutable hook (ArchiveMemoryFile digest) (archiveObjectPath repo digest)) (Set.toAscList objects)
+  traverse_ (\(key, event) -> saveImmutable hook (ArchiveEventFile key) (archiveEventPath repo key) (renderEvent event)) (Map.toAscList entries)
   -- A manifest is the archive commit marker. It comes after every dependency.
   saveImmutable hook (ArchiveCheckpointFile (snapshotId snapshot)) (archiveCheckpointPath repo (snapshotId snapshot)) (renderCheckpoint checkpoint)
 
-loadArchive :: Repository -> CheckpointId -> ExceptT RepositoryError IO Checkpoint
-loadArchive repo@(Repository _ store) key@(CheckpointId digest) = do
+-- | Read an archive manifest, and check the archive copy of each of its
+-- entries that is still pending in the given checkpoint. Those are the
+-- entries whose obligations an acknowledgement clears. Each copy has the hash
+-- of an accepted entry, so it has the bytes that passed the checks at entry.
+loadArchive :: Repository -> CheckpointId -> Checkpoint -> ExceptT RepositoryError IO Checkpoint
+loadArchive repo@(Repository _ store) key@(CheckpointId digest) current = do
+  bytes <- readChecked maxCheckpointBytes (archiveCheckpointPath repo key) digest
+  checkpoint <- either (throwE . InvalidCheckpoint) pure (parseCheckpoint bytes)
+  unless (checkpointStore checkpoint == store) (throwE IdentityMismatch)
+  traverse_ (\eventId@(EventId hash) -> readChecked maxEventBytes (archiveEventPath repo eventId) hash) (Set.toAscList (checkpointEvents checkpoint `Set.intersection` pendingEvents current))
+  traverse_ (\i -> readChecked maxPayloadBytes (archiveObjectPath repo i) i) (Set.toAscList (checkpointObjects checkpoint `Set.intersection` pendingObjects current))
+  pure checkpoint
+
+-- The complete check of one archive: every event, every payload and their links.
+_verifyArchive :: Repository -> CheckpointId -> ExceptT RepositoryError IO Checkpoint
+_verifyArchive repo@(Repository _ store) key@(CheckpointId digest) = do
   bytes <- readChecked maxCheckpointBytes (archiveCheckpointPath repo key) digest
   checkpoint <- either (throwE . InvalidCheckpoint) pure (parseCheckpoint bytes)
   unless (checkpointStore checkpoint == store) (throwE IdentityMismatch)
@@ -608,7 +633,7 @@ acknowledgePublished = acknowledgePublishedWith (const (pure ()))
 acknowledgePublishedWith :: FaultHook -> Repository -> CheckpointId -> IO (Either RepositoryError Snapshot)
 acknowledgePublishedWith hook repo@(Repository root store) key = withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
   current <- ExceptT (loadSnapshot repo)
-  archived <- loadArchive repo key
+  archived <- loadArchive repo key (snapshotCheckpoint current)
   liftIO (syncDir (takeDirectory (archiveCheckpointPath repo key)))
   let previous = snapshotCheckpoint current
   unless (included archived previous) (throwE ArchiveNotAccepted)
@@ -632,7 +657,7 @@ collectWith hook repo@(Repository root _) expected depth = fmap join $ tryWith R
   unless (depth >= 1 && depth <= 1000) (throwE InvalidRetentionDepth)
   captured <- ExceptT (loadSnapshot repo)
   unless (snapshotId captured == expected) (throwE StaleCheckpoint)
-  saveArchive hook repo captured
+  saveArchive AllEntries hook repo captured
   ExceptT $ withMutation root RepositoryBusy RepositoryIO $ \_ -> runExceptT $ do
     (current, memories) <- ExceptT (loadSnapshotMemories repo)
     unless (snapshotId current == expected) (throwE StaleCheckpoint)

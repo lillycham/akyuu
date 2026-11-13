@@ -194,10 +194,15 @@ storageTests =
         loadSnapshot repo >>= (@?= Right captured),
       testCase "corrupt archive bytes block acknowledgement and collection" $ withRepository $ \root local repo -> do
         old <- versions local
+        let target = archivePath root (headMemoryId (head old))
+        unpublished <- loadSnapshot repo >>= right
+        _ <- archiveSnapshot repo unpublished >>= right
+        BS.writeFile target "corrupt"
+        acknowledgePublished repo (snapshotId unpublished) >>= assertLeft
+        loadSnapshot repo >>= (@?= Right unpublished)
+        removeFile target
         before <- publish repo
-        _ <- archiveSnapshot repo before >>= right
-        BS.writeFile (archivePath root (headMemoryId (head old))) "corrupt"
-        acknowledgePublished repo (snapshotId before) >>= assertLeft
+        BS.writeFile target "corrupt"
         collect repo (snapshotId before) 1 >>= assertLeft
         loadSnapshot repo >>= (@?= Right before)
         forM_ old (\entry -> doesFileExist (objectPath root (headMemoryId entry)) >>= (@?= True)),

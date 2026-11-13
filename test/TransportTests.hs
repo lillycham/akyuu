@@ -7,7 +7,7 @@ import Akyuu.Refs (mkName)
 import Akyuu.Sync.Checkpoint (pendingEvents, pendingObjects)
 import Akyuu.Sync.Git qualified as Git
 import Akyuu.Sync.Process (deadline, runGit)
-import Akyuu.Sync.Repository (loadSnapshot, openRepository, snapshotCheckpoint)
+import Akyuu.Sync.Repository (loadSnapshot, openRepository, snapshotCheckpoint, verifyRepository)
 import Akyuu.Sync.Run (SyncError (RemoteRewritten), SyncPoint (AfterFetch, AfterPush, BeforePush, JoinImported, JoinRegistered), configure, joinReplica, joinReplicaWith, runSync, runSyncWith)
 import Akyuu.Sync.State qualified as State
 import Akyuu.Sync.Topics (LocalReplica, TopicError (NeedsResolution), TopicHead (headMemoryId), TopicStatus (Conflicted, Resolved), TopicView (viewHeads, viewStatus, viewVersion), createTopic, initialiseLocal, openLocal, readTopic, replaceTopic, selectTopic)
@@ -88,15 +88,61 @@ transportTests =
         _ <- runSync a False >>= right
         after <- loadSnapshot repoB >>= right
         pendingEvents (snapshotCheckpoint after) @?= Set.empty,
-      testCase "unchanged sync preserves the checkpoint and still checks local bytes" $ withPeers $ \_ a localA _ _ -> do
+      testCase "a sync adds only new files on top of the remote commit" $ withPeers $ \remote a localA b localB -> do
+        end <- deadline 60
+        _ <- runSync b False >>= right
+        _ <- runSync a False >>= right
+        parent <- tip remote
+        edit localA "one more revision"
+        _ <- runSync a False >>= right
+        child <- tip remote
+        first <- runGit end Nothing ["--git-dir", remote, "rev-parse", T.unpack child <> "^"] "" 128 >>= right
+        T.strip (T.pack (BC.unpack first)) @?= parent
+        changes <- runGit end Nothing ["--git-dir", remote, "diff-tree", "-r", "--no-commit-id", "--name-status", T.unpack parent, T.unpack child] "" 65536 >>= right
+        -- One event and one payload, and no other change to the tree.
+        map (take 1 . BC.unpack) (BC.lines changes) @?= ["A", "A"]
+        -- The other replica reads and verifies the complete new tree.
+        _ <- runSync b False >>= right
+        viewA <- readTopic localA topicName >>= right
+        viewB <- readTopic localB topicName >>= right
+        map headMemoryId (viewHeads viewB) @?= map headMemoryId (viewHeads viewA)
+        -- A fresh replica can join from the tree.
+        withTempDir $ \other -> void (joinReplica (other </> "c") (T.pack remote) "akyuu-sync-v1" "c" >>= right),
+      testCase "a replica that lost accepted data reads the unchanged tip again" $ withPeers $ \remote a localA _ _ -> do
+        edit localA "second revision"
+        _ <- runSync a False >>= right
+        current <- tip remote
+        -- A fresh join holds the complete tree. Give it the cursor of a later
+        -- commit that it never read, as after a restore from an old backup.
+        withTempDir $ \base -> do
+          let c = base </> "c"
+          _ <- joinReplica c (T.pack remote) "akyuu-sync-v1" "c" >>= right
+          localC <- openLocal c >>= right
+          _ <- runSync c False >>= right
+          edit localA "third revision"
+          _ <- runSync a False >>= right
+          later <- tip remote
+          assertBool "the remote did not advance" (later /= current)
+          end <- deadline 60
+          _ <- Git.fetch end (c </> "transport.git") (T.pack remote) "refs/heads/akyuu-sync-v1" >>= right
+          BS.writeFile (c </> "SYNC-TIP") (BC.pack (show (T.unpack later)))
+          _ <- runSync c False >>= right
+          viewA <- readTopic localA topicName >>= right
+          viewC <- readTopic localC topicName >>= right
+          map headMemoryId (viewHeads viewC) @?= map headMemoryId (viewHeads viewA),
+      testCase "unchanged sync preserves the checkpoint and reads no local payload" $ withPeers $ \_ a localA _ _ -> do
         before <- BS.readFile (a </> "CURRENT")
         _ <- runSync a False >>= right
         BS.readFile (a </> "CURRENT") >>= (@?= before)
         entry <- readTopic localA topicName >>= right >>= onlyHead
         let path = a </> "objects" </> T.unpack (Id.render (headMemoryId entry))
             hook point = when (point == AfterFetch) (BS.writeFile path "corrupt after open")
-        outcome <- runSyncWith hook 60 a False
-        assertBool "unchanged sync hid local corruption" (case outcome of Left _ -> True; _ -> False)
+        -- Nothing is pending and the remote did not change, so the sync has no
+        -- payload to read. The complete check reports the damage.
+        _ <- runSyncWith hook 60 a False >>= right
+        repoA <- openRepository a >>= right
+        outcome <- verifyRepository repoA
+        assertBool "the complete check hid local corruption" (case outcome of Left _ -> True; _ -> False)
         BS.readFile (a </> "CURRENT") >>= (@?= before)
         BS.readFile path >>= (@?= "corrupt after open"),
       -- A finished join removes its journals, so stop a new join after its
@@ -211,7 +257,7 @@ transportTests =
         current <- Git.fetch end (b </> "transport.git") (T.pack remote) "refs/heads/akyuu-sync-v1" >>= right >>= maybe (assertFailure "Missing tip") pure
         old <- Git.readBundle end (b </> "transport.git") current >>= right
         let empty = Git.Bundle (State.empty (State.storeId (Git.bundleState old))) Map.empty
-        bad <- Git.writeBundle end (b </> "transport.git") (Just current) empty >>= right
+        bad <- Git.writeBundle end (b </> "transport.git") (Just current) Nothing empty >>= right
         Git.push end (b </> "transport.git") (T.pack remote) "refs/heads/akyuu-sync-v1" bad >>= right
         runSync b False >>= (@?= Left RemoteRewritten),
       testCase "fetch failure retains accepted local writes and export obligations" $ withPeers $ \remote a localA _ _ -> do
