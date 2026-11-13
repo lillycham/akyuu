@@ -8,7 +8,7 @@ import Akyuu.Levels qualified as Levels
 import Akyuu.Memory (Memory (memBody, memCreated))
 import Akyuu.Refs (nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
-import Akyuu.Sync.Context (ContextOptions (logOptions), configuredUnchecked, reportJSON)
+import Akyuu.Sync.Context (ContextOptions (logOptions), configuredWith, reportJSON)
 import Akyuu.Sync.Logs (LogPageOptions (LogPageOptions, pageNumber, pageSize, recentWhole), pageJSON, pageUnchecked)
 import Akyuu.Sync.Repository (readMemory, snapshotId)
 import Akyuu.Sync.Search (searchAt, searchJSON)
@@ -26,6 +26,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy qualified as BL
 import Data.FileEmbed (embedFile)
+import Data.Map.Strict qualified as Map
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -49,8 +50,12 @@ readViewChecked local options expected query limit = runExceptT $ do
   -- The browser binds every page to one checkpoint (above), which is stricter
   -- than the log version rule, so it reads pages without that rule.
   topics <- traverse (ExceptT . topicViewAt snapshot) (topicNames snapshot)
-  logs <- liftIO (traverse (\topic -> do result <- pageUnchecked snapshot (viewName topic) (logOptions options); pure (either (\err -> object ["ref" .= nameText (viewName topic), "error" .= errorJSON err]) pageJSON result)) (filter ((== LogTopic) . viewStatus) topics))
-  context <- ExceptT (configuredUnchecked snapshot options)
+  -- Page each log once. The configured context takes its pages from here.
+  paged <- liftIO (traverse (\topic -> (viewName topic,) <$> pageUnchecked snapshot (viewName topic) (logOptions options)) (filter ((== LogTopic) . viewStatus) topics))
+  let logs = [either (\err -> object ["ref" .= nameText name, "error" .= errorJSON err]) pageJSON result | (name, result) <- paged]
+      pages = Map.fromList paged
+      pageOf name = maybe (pageUnchecked snapshot name (logOptions options)) pure (Map.lookup name pages)
+  context <- ExceptT (configuredWith pageOf snapshot options)
   search <- traverse (\text -> ExceptT (searchAt snapshot text limit)) query
   pure (object ["checkpoint" .= Id.render checkpoint, "topics" .= map viewJSON topics, "logs" .= logs, "context" .= reportJSON context, "search" .= fmap searchJSON search])
 
