@@ -81,6 +81,8 @@ runGit end watched args input limit = do
       pid <- getPid ph
       forM_ [hin, hout, herr] (`hSetBinaryMode` True)
       overflow <- newIORef False
+      -- The time of the last disk budget check. 0 makes the first poll check.
+      lastDisk <- newIORef (0 :: Word64)
       output <- newEmptyMVar
       let drain handle cap failLarge = go [] 0
             where
@@ -105,7 +107,14 @@ runGit end watched args input limit = do
           poll = do
             left <- remaining end
             tooMuch <- readIORef overflow
-            disk <- maybe (pure True) underBudget watched
+            -- The budget walk reads the whole private repository. Polls come
+            -- every 10 ms, so check the disk at most every 250 ms.
+            now <- getMonotonicTimeNSec
+            checked <- readIORef lastDisk
+            disk <-
+              if now - checked >= diskInterval
+                then writeIORef lastDisk now >> maybe (pure True) underBudget watched
+                else pure True
             if left <= 0
               then pure (Left GitTimeout)
               else
@@ -153,6 +162,10 @@ runGit end watched args input limit = do
           said = filter (not . T.null) (map (T.strip . clean) (T.lines (decodeUtf8With lenientDecode bytes)))
        in T.takeEnd 400 (T.intercalate "; " (reverse (take 3 (reverse said))))
     parseStatus bytes = case BC.readInt bytes of Just (n, rest) | rest == "\n" && n >= 0 && n <= 255 -> Just n; _ -> Nothing
+
+-- | The least time between two disk budget checks, in nanoseconds.
+diskInterval :: Word64
+diskInterval = 250000000
 
 underBudget :: FilePath -> IO Bool
 underBudget root = (<= 512 * 1024 * 1024) <$> size root
