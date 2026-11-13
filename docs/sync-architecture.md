@@ -1,7 +1,7 @@
 # Replica sync architecture
 
-This document describes the experimental replica store on the
-`codex/sync-v2-validation` branch. It describes the current prototype, not a
+This document describes the experimental replica store (`akyuu replica` and
+`akyuu mcp --tool-set replica`). It describes the current prototype, not a
 production migration or a background sync service. The protocol is still
 experimental. All replicas must use compatible repository formats.
 
@@ -126,20 +126,21 @@ sequenceDiagram
   R-->>C: checkpoint and sync result
 ```
 
-## Locking and validation in this branch
+## Locking and validation
 
 The repository uses a short mutation lock to serialize checkpoint
-publication. It validates the inventory before acquiring that lock. Under
+publication. It loads the current snapshot before acquiring that lock. Under
 the lock, it checks that `IDENTITY` and `CURRENT` still match the captured
-snapshot. If either changed, it releases the lock and validates again, with
+snapshot. If either changed, it releases the lock and loads again, with
 at most three preflight snapshots. Resource and policy versions are checked
 under the lock before publication.
 
-Within one operation, validated event and payload values can be reused across
-retries. The reader still reads and hashes inventory files. It rechecks the
-combined event graph, payload links and residency. A smaller event inventory
-forces fresh state construction. This reuse is scoped to one operation; it
-does not create a persistent validation cache.
+A snapshot load reads the manifest and accepted events, checks their hashes
+and canonical bytes, and validates the causal event graph. Accepted events are
+also cached in `events.pack`, where each record is accepted only if its hash is
+an ID that the manifest names. Payloads are checked when they enter a
+transaction and when they are read. `replica verify` and `replica gc` check
+every event file, every payload and their links across the full inventory.
 
 Reads use the open file's size as an allocation hint. The hint does not limit
 the read: reads continue in chunks until EOF or the configured byte cap.
@@ -148,19 +149,11 @@ canonical-format checks still run on the bytes read.
 
 ## Scope and validation status
 
-The current work improves local validation cost and writer contention. It
-does not change protocol bytes. The measured 5,000-entry runs show lower
-direct-commit and paired-write medians after bounded reads. These small
-single-machine samples do not establish tail latency or Linux performance.
-The separate writer-preflight experiment improved write success under
-contention but increased latency at smaller sizes. Performance acceptance is
-still open.
-
 The implementation has extensive unit, crash-boundary, CLI, MCP, HTTP, sync,
 join, GC and migration checks. Those checks do not establish live-store
 compatibility, coordinated migration, HTTPS authentication, packet-loss
-recovery or Linux performance. The branch remains experimental; it has not
-been merged or deployed to a live store.
+recovery or Linux performance. The replica store remains experimental and opt-in
+alongside the v1 store.
 
 For exact format rules and test history, see [Sync v1 implementation
 status](plans/sync-v1.md) and the dated experiments in
