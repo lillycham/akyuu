@@ -16,9 +16,9 @@ import Akyuu.Sync.Repository (Boundary (EvictionsSynced, MemoryEvicted, WriteBou
 import Akyuu.Sync.Resources (writeResource)
 import Akyuu.Sync.Search (SearchReport (SearchReport), searchTopics)
 import Akyuu.Sync.State qualified as State
-import Akyuu.Sync.Topics (LocalReplica, TopicHead (headMemory, headMemoryId), TopicView (viewVersion), changeResource, createTopic, readTopic, replaceTopic)
+import Akyuu.Sync.Topics (LocalReplica, TopicHead (headEvent, headMemory, headMemoryId),TopicView (viewVersion), changeResource, createTopic, readTopic, replaceTopic)
 import Akyuu.Sync.Topics qualified as Topics
-import Akyuu.Sync.Types (Action (ClearPin, ClearReview, RegisterReplica, SetPin, SetReview), EventId, Nonce (Nonce), ReplicaId (ReplicaId), Resource (PinResource, RegistryResource, ReviewResource), ReviewValue (ReviewValue), mkIdentifier)
+import Akyuu.Sync.Types (Action (ClearPin, ClearReview, RegisterReplica, SetPin, SetReview, SetTopic),EventId, Nonce (Nonce), ReplicaId (ReplicaId), Resource (PinResource, RegistryResource, ReviewResource), ReviewValue (ReviewValue), mkIdentifier)
 import Control.Concurrent (forkFinally, forkIO, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (finally, throwIO)
 import Control.Monad (foldM, forM_, void, when)
@@ -380,6 +380,29 @@ removalTests =
         forM_ old (\entry -> doesFileExist (objectPath root (headMemoryId entry)) >>= (@?= True))
         after <- loadSnapshot repo >>= right
         evictedObjects (snapshotCheckpoint after) @?= Set.empty,
+      testCase "a branch from an old ancestor restores copies that a deep collection retains" $ withRepository $ \root local repo -> do
+        old <- versions local
+        ready <- publish repo
+        _ <- collect repo (snapshotId ready) 2 >>= right
+        let fossil = headMemoryId (head old)
+        evicted <- loadSnapshot repo >>= right
+        evictedObjects (snapshotCheckpoint evicted) @?= Set.singleton fossil
+        -- A peer replaces the first version, concurrent with the later ones.
+        -- The first version is now one generation below a head, not two.
+        _ <- importConcurrent repo (Set.singleton (headEvent (head old))) (SetTopic topicName (headMemoryId (old !! 1)))
+        after <- loadSnapshot repo >>= right
+        assertBool "a retained ancestor stayed evicted" (fossil `Set.member` activeObjects (snapshotCheckpoint after))
+        doesFileExist (objectPath root fossil) >>= (@?= True)
+        plan <- planCollection repo 2 >>= right
+        collectionRetained plan `Set.intersection` evictedObjects (snapshotCheckpoint after) @?= Set.empty,
+      testCase "a plain write after collection restores no historical copy" $ withRepository $ \_ local repo -> do
+        old <- versions local
+        ready <- publish repo
+        _ <- collect repo (snapshotId ready) 1 >>= right
+        current <- readTopic local topicName >>= right
+        _ <- replaceTopic local topicName (viewVersion current) (newTopic "after collection") >>= right
+        after <- loadSnapshot repo >>= right
+        evictedObjects (snapshotCheckpoint after) @?= Set.fromList (map headMemoryId old),
       testCase "a pending intermediate pin protects an already accepted payload" $ withRepository $ \_ local repo -> do
         old <- versions local
         published <- publish repo

@@ -1,6 +1,6 @@
 -- | Roots from accepted causal state. Local eviction never removes an event,
 -- archive payload or review record. Generations follow every causal branch.
-module Akyuu.Sync.Retention (retained, actionPayloads) where
+module Akyuu.Sync.Retention (retained, actionPayloads, generationDistances) where
 
 import Akyuu.GC (retains)
 import Akyuu.Graph (Edge (kind, target))
@@ -24,6 +24,22 @@ actionPayloads action = case action of
   SetPin digest -> [digest]
   SetReview a b _ -> [a, b]
   _ -> []
+
+-- | The generation of each event below the current heads of the given refs:
+-- 0 for a head, 1 for its parents, and so on, below the limit. An event is
+-- in the generations of 'retained' at depth d exactly when its distance is
+-- less than d.
+generationDistances :: Int -> State -> [Resource] -> Map EventId Int
+generationDistances limit state resources = go 0 start Map.empty
+  where
+    table = events state
+    start = Set.unions [Map.keysSet (resourceHeads state resource) | resource@(RefResource _) <- resources]
+    go k frontier seen
+      | k >= limit || Set.null frontier = seen
+      | otherwise =
+          let fresh = Set.filter (`Map.notMember` seen) frontier
+              next = Set.unions [eventParents event | key <- Set.toList fresh, Just event <- [Map.lookup key table]]
+           in go (k + 1) next (Map.union seen (Map.fromSet (const k) fresh))
 
 -- | Depth includes the current generation. Pending event payloads also root
 -- intermediate versions, even if no current ref names them. The caller has

@@ -46,10 +46,10 @@ import Akyuu.Mutation (withMutation)
 import Akyuu.Sync.Checkpoint (Checkpoint, CheckpointError, CheckpointId (CheckpointId), activeObjects, checkpointEvents, checkpointId, checkpointObjects, checkpointStore, evictedObjects, maxCheckpointBytes, mkCheckpoint, parseCheckpoint, pendingEvents, pendingObjects, renderCheckpoint, withEvicted)
 import Akyuu.Sync.Event (Event, maxEventBytes, renderEvent)
 import Akyuu.Sync.Event qualified as Event
-import Akyuu.Sync.Retention (actionPayloads, retained)
+import Akyuu.Sync.Retention (actionPayloads, generationDistances, retained)
 import Akyuu.Sync.State (State, StateError (StaleDependency), Version)
 import Akyuu.Sync.State qualified as State
-import Akyuu.Sync.Types (Action (AppendLog), EventId (EventId), Resource, StoreId (StoreId), parseIdentifier, renderIdentifier)
+import Akyuu.Sync.Types (Action (AppendLog), EventId (EventId), Resource (RefResource), StoreId (StoreId), parseIdentifier, renderIdentifier, resourceOf)
 import Control.Exception (IOException)
 import Control.Monad (forM_, join, unless, when)
 import Control.Monad.IO.Class (liftIO)
@@ -130,6 +130,10 @@ type FaultHook = Boundary -> IO ()
 
 maxPayloadBytes :: Int
 maxPayloadBytes = 16 * 1024 * 1024
+
+-- | The largest generation depth that a collection accepts.
+maxRetentionDepth :: Int
+maxRetentionDepth = 1000
 
 snapshotId :: Snapshot -> CheckpointId
 snapshotId = checkpointId . snapshotCheckpoint
@@ -400,9 +404,26 @@ transact hook repo@(Repository root store) payloads advance = fmap join $ tryWit
             objectIds
             (pendingEvents previous <> (eventIds `Set.difference` checkpointEvents previous))
             (pendingObjects previous <> (objectIds `Set.difference` checkpointObjects previous))
-      -- No evicted payload was retained at the old checkpoint. Only the roots
-      -- that this transaction adds can newly retain one, so walk from those.
-      let newRoots = Set.fromList (concatMap (actionPayloads . Event.eventAction) (Map.elems newEvents)) <> Map.keysSet newPayloads
+      -- No evicted payload was retained at the old checkpoint, at the depth
+      -- of the collection that evicted it. Two things can newly retain one:
+      -- the roots that this transaction adds, and an old event that moves to
+      -- a lower generation. The second happens when a new event branches from
+      -- an old ancestor, not from a head. The depth of the last collection is
+      -- not recorded, so treat every old event that moves closer to a head as
+      -- a root. A plain append or a concurrent write on one head moves none.
+      let previousState = snapshotState old
+          touched = Set.toList (Set.fromList [resource | event <- Map.elems newEvents, resource@(RefResource _) <- [resourceOf (Event.eventAction event)]])
+          before = generationDistances maxRetentionDepth previousState touched
+          after = generationDistances maxRetentionDepth state touched
+          closer =
+            [ event
+            | (key, distance) <- Map.toList after,
+              Just event <- [Map.lookup key (State.events previousState)],
+              maybe True (distance <) (Map.lookup key before)
+            ]
+          newRoots =
+            Set.fromList (concatMap (actionPayloads . Event.eventAction) (Map.elems newEvents <> closer))
+              <> Map.keysSet newPayloads
       restored <-
         if Set.null (evictedObjects previous)
           then pure Set.empty
@@ -530,7 +551,7 @@ planCollection repo depth = fmap join $ tryWith RepositoryIO $ runExceptT $ do
 
 collectionPlan :: Snapshot -> Map Id Memory -> Int -> Either RepositoryError CollectionPlan
 collectionPlan snapshot memories depth = do
-  unless (depth >= 1 && depth <= 1000) (Left InvalidRetentionDepth)
+  unless (depth >= 1 && depth <= maxRetentionDepth) (Left InvalidRetentionDepth)
   let checkpoint = snapshotCheckpoint snapshot
       live = retained depth checkpoint (snapshotState snapshot) memories
   pure (CollectionPlan (snapshotId snapshot) live (activeObjects checkpoint `Set.difference` live) (evictedObjects checkpoint))
@@ -654,7 +675,7 @@ collect = collectWith (const (pure ()))
 
 collectWith :: FaultHook -> Repository -> CheckpointId -> Int -> IO (Either RepositoryError CollectionPlan)
 collectWith hook repo@(Repository root _) expected depth = fmap join $ tryWith RepositoryIO $ runExceptT $ do
-  unless (depth >= 1 && depth <= 1000) (throwE InvalidRetentionDepth)
+  unless (depth >= 1 && depth <= maxRetentionDepth) (throwE InvalidRetentionDepth)
   captured <- ExceptT (loadSnapshot repo)
   unless (snapshotId captured == expected) (throwE StaleCheckpoint)
   saveArchive AllEntries hook repo captured
