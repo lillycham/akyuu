@@ -108,10 +108,15 @@ configuredUnchecked snapshot options = runExceptT $ do
         contextLogVersion = pagesToken logs,
         contextOthers = filter (`notElem` wanted) (topicNames snapshot),
         availableTiers = maybe [] tierNames parsed,
-        maintenanceReady =
-          all ((`elem` [Missing, Resolved]) . viewStatus) [policy, manifest]
-            && (viewStatus manifest == Missing || isJust parsed)
+        maintenanceReady = controlsReady policy manifest
       }
+
+-- | Whether the control refs permit maintenance: each is missing or resolved,
+-- and a resolved manifest parses. It reads only the two control views.
+controlsReady :: TopicView -> TopicView -> Bool
+controlsReady policy manifest =
+  all ((`elem` [Missing, Resolved]) . viewStatus) [policy, manifest]
+    && (viewStatus manifest == Missing || isJust (resolvedBody manifest >>= either (const Nothing) Just . parseManifest))
 
 issues :: Text -> TopicView -> [Text]
 issues label view = case viewStatus view of
@@ -129,12 +134,16 @@ resolvedBody view = case (viewStatus view, viewHeads view) of
 -- | Repairs to the control refs themselves must remain possible. Missing
 -- controls permit initial setup; ambiguous or invalid controls block other
 -- resolutions. Version dependencies close the check/publication race.
+-- The guard reads only the two control refs: the rest of the configured
+-- context has no part in the decision, and an unreadable unrelated topic
+-- must not block a resolution.
 resolutionGuard :: ContextOptions -> Name -> ResolutionGuard
 resolutionGuard options target snapshot
   | target `elem` [policyRef options, manifestRef options] = pure (Right [])
   | otherwise = runExceptT $ do
-      report <- ExceptT (configuredAt snapshot options)
-      if not (maintenanceReady report)
+      policy <- ExceptT (topicViewAt snapshot (policyRef options))
+      manifest <- ExceptT (topicViewAt snapshot (manifestRef options))
+      if not (controlsReady policy manifest)
         then throwE (InvalidInput "Configured policy or tiers are unresolved. Read configured_context and repair the control refs before another resolution.")
         else pure [(RefResource ref, version (snapshotState snapshot) (RefResource ref)) | ref <- nub [policyRef options, manifestRef options]]
 

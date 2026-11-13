@@ -150,6 +150,16 @@ contextTests =
         Context.maintenanceReady report @?= False
         assertBool "missing parse diagnostic" (any (T.isInfixOf "invalid") (Context.contextIssues report))
         Topics.resolveTopicGuarded (Context.resolutionGuard options topicName) local topicName (viewVersion created) (newTopic "blocked") >>= assertInvalid,
+      testCase "an unreadable tier topic does not block an unrelated resolution" $ withLocal $ \root local -> do
+        controls local "always: me/broken"
+        broken <- Topics.createTopic local (name "me/broken") (newTopic "will be damaged") >>= right >>= onlyHead
+        forked <- forkTopic False root local
+        BS.writeFile (root </> "objects" </> T.unpack (Id.render (headMemoryId broken))) "damaged"
+        -- The full context cannot read the damaged topic. The guard needs only the controls.
+        context <- Context.configuredContext local options
+        assertBool "the damaged topic was read" (either (const True) (const False) context)
+        resolved <- Topics.resolveTopicGuarded (Context.resolutionGuard options topicName) local topicName (viewVersion forked) (newTopic "merged") >>= right
+        viewStatus resolved @?= Resolved,
       testCase "missing tier and missing member preserve the other data" $ withLocal $ \_ local -> do
         controls local "always: me/missing"
         report <- Context.configuredContext local options >>= right
