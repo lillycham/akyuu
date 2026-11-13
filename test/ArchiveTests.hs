@@ -16,9 +16,9 @@ import Akyuu.Sync.Repository (Boundary (EvictionsSynced, MemoryEvicted, WriteBou
 import Akyuu.Sync.Resources (writeResource)
 import Akyuu.Sync.Search (SearchReport (SearchReport), searchTopics)
 import Akyuu.Sync.State qualified as State
-import Akyuu.Sync.Topics (LocalReplica, TopicHead (headEvent, headMemory, headMemoryId),TopicView (viewVersion), changeResource, createTopic, readTopic, replaceTopic)
+import Akyuu.Sync.Topics (LocalReplica, TopicHead (headEvent, headMemory, headMemoryId), TopicView (viewVersion), changeResource, createTopic, readTopic, replaceTopic)
 import Akyuu.Sync.Topics qualified as Topics
-import Akyuu.Sync.Types (Action (ClearPin, ClearReview, RegisterReplica, SetPin, SetReview, SetTopic),EventId, Nonce (Nonce), ReplicaId (ReplicaId), Resource (PinResource, RegistryResource, ReviewResource), ReviewValue (ReviewValue), mkIdentifier)
+import Akyuu.Sync.Types (Action (ClearPin, ClearReview, RegisterReplica, SetPin, SetReview, SetTopic), EventId, Nonce (Nonce), ReplicaId (ReplicaId), Resource (PinResource, RegistryResource, ReviewResource), ReviewValue (ReviewValue), mkIdentifier)
 import Control.Concurrent (forkFinally, forkIO, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (finally, throwIO)
 import Control.Monad (foldM, forM_, void, when)

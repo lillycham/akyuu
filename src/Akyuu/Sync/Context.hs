@@ -21,7 +21,7 @@ import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Logs (LogPage, LogPageOptions (pageToken), pageJSON, pageUnchecked, pagesToken, renderPage, validatePageOptions, validatePageRange)
 import Akyuu.Sync.Repository (Snapshot, snapshotId, snapshotState)
 import Akyuu.Sync.State (version)
-import Akyuu.Sync.Topics (LocalReplica, ResolutionGuard, TopicError (InvalidInput, LogChanged),TopicHead (headMemory), TopicStatus (Conflicted, LogTopic, Missing, Resolved, TypeConflicted), TopicView (viewHeads, viewName, viewStatus), captureSnapshot, describeError, renderView, topicNames, topicViewAt, viewJSON)
+import Akyuu.Sync.Topics (LocalReplica, ResolutionGuard, TopicError (InvalidInput, LogChanged), TopicHead (headMemory), TopicStatus (Conflicted, LogTopic, Missing, Resolved, TypeConflicted), TopicView (viewHeads, viewName, viewStatus), captureSnapshot, describeError, renderView, topicNames, topicViewAt, viewJSON)
 import Akyuu.Sync.Types (Resource (RefResource))
 import Akyuu.Tier (Place, parseManifest, placeRefs, tierNames, tierRefs)
 import Control.Monad (when)
@@ -84,7 +84,7 @@ configuredUnchecked snapshot options = configuredWith (\name -> pageUnchecked sn
 configuredWith :: (Name -> IO (Either TopicError LogPage)) -> Snapshot -> ContextOptions -> IO (Either TopicError ContextReport)
 configuredWith pageOf snapshot options = runExceptT $ do
   ExceptT (pure (validatePageRange (logOptions options)))
-  policy <-ExceptT (topicViewAt snapshot (policyRef options))
+  policy <- ExceptT (topicViewAt snapshot (policyRef options))
   manifest <- ExceptT (topicViewAt snapshot (manifestRef options))
   let controlIssues = issues "Policy" policy <> issues "Tier manifest" manifest
       parsed = resolvedBody manifest >>= either (const Nothing) Just . parseManifest
