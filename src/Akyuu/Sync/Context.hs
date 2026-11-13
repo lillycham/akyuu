@@ -5,20 +5,22 @@ module Akyuu.Sync.Context
     ContextReport (..),
     configuredContext,
     configuredAt,
+    configuredUnchecked,
     resolutionGuard,
     reportJSON,
     renderReport,
   )
 where
 
+import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memBody))
 import Akyuu.Refs (Name, nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
-import Akyuu.Sync.Logs (LogPage, LogPageOptions (pageCheckpoint), pageAt, pageJSON, renderPage, validatePageOptions)
+import Akyuu.Sync.Logs (LogPage, LogPageOptions (pageToken), pageJSON, pageUnchecked, pagesToken, renderPage, validatePageOptions, validatePageRange)
 import Akyuu.Sync.Repository (Snapshot, snapshotId, snapshotState)
 import Akyuu.Sync.State (version)
-import Akyuu.Sync.Topics (LocalReplica, ResolutionGuard, TopicError (ConfigurationChanged, InvalidInput), TopicHead (headMemory), TopicStatus (Conflicted, LogTopic, Missing, Resolved, TypeConflicted), TopicView (viewHeads, viewName, viewStatus), captureSnapshot, describeError, renderView, topicNames, topicViewAt, viewJSON)
+import Akyuu.Sync.Topics (LocalReplica, ResolutionGuard, TopicError (InvalidInput, LogChanged),TopicHead (headMemory), TopicStatus (Conflicted, LogTopic, Missing, Resolved, TypeConflicted), TopicView (viewHeads, viewName, viewStatus), captureSnapshot, describeError, renderView, topicNames, topicViewAt, viewJSON)
 import Akyuu.Sync.Types (Resource (RefResource))
 import Akyuu.Tier (Place, parseManifest, placeRefs, tierNames, tierRefs)
 import Control.Monad (when)
@@ -47,6 +49,8 @@ data ContextReport = ContextReport
     contextIssues :: [Text],
     contextEntries :: [TopicView],
     contextLogs :: [LogPage],
+    -- | The version of the paged logs. Give it with a later log page.
+    contextLogVersion :: Id,
     contextOthers :: [Name],
     availableTiers :: [Text],
     maintenanceReady :: Bool
@@ -58,12 +62,22 @@ configuredContext local options = runExceptT $ do
   snapshot <- ExceptT (captureSnapshot local)
   ExceptT (configuredAt snapshot options)
 
+-- | A later log page must give the log version of page one. Only a change to
+-- a paged log, or to the set of paged logs, makes it stale. Writes to other
+-- topics do not.
 configuredAt :: Snapshot -> ContextOptions -> IO (Either TopicError ContextReport)
 configuredAt snapshot options = runExceptT $ do
   ExceptT (pure (validatePageOptions (logOptions options)))
-  let CheckpointId captured = snapshotId snapshot
-  when (maybe False (/= captured) (pageCheckpoint (logOptions options))) (throwE ConfigurationChanged)
-  policy <- ExceptT (topicViewAt snapshot (policyRef options))
+  report <- ExceptT (configuredUnchecked snapshot options)
+  when (maybe False (/= contextLogVersion report) (pageToken (logOptions options))) (throwE LogChanged)
+  pure report
+
+-- | 'configuredAt' without the log version rule. A caller that binds the
+-- whole read to one checkpoint, such as the browser, uses this.
+configuredUnchecked :: Snapshot -> ContextOptions -> IO (Either TopicError ContextReport)
+configuredUnchecked snapshot options = runExceptT $ do
+  ExceptT (pure (validatePageRange (logOptions options)))
+  policy <-ExceptT (topicViewAt snapshot (policyRef options))
   manifest <- ExceptT (topicViewAt snapshot (manifestRef options))
   let controlIssues = issues "Policy" policy <> issues "Tier manifest" manifest
       parsed = resolvedBody manifest >>= either (const Nothing) Just . parseManifest
@@ -80,7 +94,7 @@ configuredAt snapshot options = runExceptT $ do
         _ -> []
       wanted = nub ([policyRef options, manifestRef options] <> expanded <> extraRefs options)
   entries <- traverse (ExceptT . topicViewAt snapshot) wanted
-  logs <- liftIO (traverse (\view -> do result <- pageAt snapshot (viewName view) (logOptions options); pure (viewName view, result)) (filter ((== LogTopic) . viewStatus) entries))
+  logs <- liftIO (traverse (\view -> do result <- pageUnchecked snapshot (viewName view) (logOptions options); pure (viewName view, result)) (filter ((== LogTopic) . viewStatus) entries))
   let entryIssues = concatMap (\view -> if viewStatus view == LogTopic then [] else issues "Context" view) (filter (\view -> viewName view `notElem` [policyRef options, manifestRef options]) entries)
       logIssues = ["Context log " <> nameText name <> ": " <> describeError err | (name, Left err) <- logs]
   pure
@@ -91,6 +105,7 @@ configuredAt snapshot options = runExceptT $ do
         contextIssues = diagnostics <> entryIssues <> logIssues,
         contextEntries = entries,
         contextLogs = [report | (_, Right report) <- logs],
+        contextLogVersion = pagesToken logs,
         contextOthers = filter (`notElem` wanted) (topicNames snapshot),
         availableTiers = maybe [] tierNames parsed,
         maintenanceReady =
@@ -133,6 +148,7 @@ reportJSON report =
       "issues" .= contextIssues report,
       "topics" .= map viewJSON (contextEntries report),
       "logs" .= map pageJSON (contextLogs report),
+      "log_version" .= Id.render (contextLogVersion report),
       "other_refs" .= map nameText (contextOthers report),
       "available_tiers" .= availableTiers report
     ]
@@ -140,6 +156,6 @@ reportJSON report =
 renderReport :: ContextReport -> Text
 renderReport report =
   T.unlines
-    (["context: " <> contextTier report, "checkpoint: " <> let CheckpointId digest = contextCheckpoint report in Id.render digest, "ready: " <> if contextReady report then "yes" else "no"] <> contextIssues report)
+    (["context: " <> contextTier report, "checkpoint: " <> let CheckpointId digest = contextCheckpoint report in Id.render digest, "log version: " <> Id.render (contextLogVersion report), "ready: " <> if contextReady report then "yes" else "no"] <> contextIssues report)
     <> T.concat (map renderView (filter ((/= LogTopic) . viewStatus) (contextEntries report)))
     <> T.concat (map renderPage (contextLogs report))

@@ -8,7 +8,10 @@ module Akyuu.Sync.Logs
     LogPage (..),
     defaultPageOptions,
     validatePageOptions,
+    validatePageRange,
     pageAt,
+    pageUnchecked,
+    pagesToken,
     pageJSON,
     renderPage,
     levelsAtBounded,
@@ -43,7 +46,7 @@ import Akyuu.Refs (Name, nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Repository (RepositoryError, Snapshot, readMemory)
 import Akyuu.Sync.State (Version, versionText)
-import Akyuu.Sync.Topics (LocalReplica, TopicError (ConfigurationChanged, InvalidInput, MissingTopic, NeedsResolution, StorageError), TopicHead (headMemoryId), TopicStatus (LogTopic, Missing), TopicView (viewCheckpoint, viewHeads, viewName, viewStatus, viewVersion), appendLogChecked, captureSnapshot, describeError, topicViewAt, viewJSON)
+import Akyuu.Sync.Topics (LocalReplica, TopicError (InvalidInput, LogChanged, MissingTopic, NeedsResolution, StorageError), TopicHead (headMemoryId), TopicStatus (LogTopic, Missing), TopicView (viewCheckpoint, viewHeads, viewName, viewStatus, viewVersion), appendLogChecked, captureSnapshot, describeError, topicViewAt, viewJSON)
 import Akyuu.Sync.Types (Resource (RefResource))
 import Control.Monad (unless, when)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE)
@@ -88,7 +91,10 @@ data LogPageOptions = LogPageOptions
   { pageNumber :: Int,
     pageSize :: Int,
     recentWhole :: Int,
-    pageCheckpoint :: Maybe Id
+    -- | The log version of page one. A later page must give it. It names
+    -- the log and its summary levels, not the whole repository, so a write
+    -- to another topic does not end a paged read.
+    pageToken :: Maybe Id
   }
   deriving (Eq, Show)
 
@@ -107,22 +113,44 @@ data LogPage = LogPage
 
 validatePageOptions :: LogPageOptions -> Either TopicError ()
 validatePageOptions options = do
+  validatePageRange options
+  when
+    (pageNumber options > 1 && pageToken options == Nothing)
+    (Left (InvalidInput "Further log pages require the log version from the first response."))
+
+-- | The range checks of 'validatePageOptions', without the version rule.
+validatePageRange :: LogPageOptions -> Either TopicError ()
+validatePageRange options =
   unless
     (pageNumber options >= 1 && pageNumber options <= 4096 && pageSize options >= 1 && pageSize options <= 100 && recentWhole options >= 0 && recentWhole options <= 4096)
     (Left (InvalidInput "Log page must be from 1 to 4096, log limit from 1 to 100, and log keep from 0 to 4096."))
-  when
-    (pageNumber options > 1 && pageCheckpoint options == Nothing)
-    (Left (InvalidInput "Further log pages require the checkpoint from the first response."))
 
--- | Coverage needs complete histories: do not claim a partial DAG is an ordered
--- prefix. Refuse excessive work before resolution instead of silently omitting
--- ancestors or summary alternatives. The budget is shared across all levels.
+-- | One page of one log. A later page must give the version of page one
+-- ('pageVersion'), and fails with 'LogChanged' only if this log or its
+-- summary levels changed.
 pageAt :: Snapshot -> Name -> LogPageOptions -> IO (Either TopicError LogPage)
 pageAt snapshot name options = runExceptT $ do
   ExceptT (pure (validatePageOptions options))
+  page <- ExceptT (pageUnchecked snapshot name options)
+  when (maybe False (/= pageVersion page) (pageToken options)) (throwE LogChanged)
+  pure page
+
+-- | The version of a set of paged logs: each name with its log version. A
+-- log that could not be paged counts by its name alone.
+pagesToken :: [(Name, Either TopicError LogPage)] -> Id
+pagesToken pages =
+  Id.hashBytes . encodeUtf8 . T.unlines $
+    "akyuu-log-pages-v1" : [nameText name <> " " <> either (const "-") (Id.render . pageVersion) result | (name, result) <- pages]
+
+-- | A page without the version rule. The caller checks the version, or
+-- binds the read to its own snapshot.
+-- Coverage needs complete histories: do not claim a partial DAG is an ordered
+-- prefix. Refuse excessive work before resolution instead of silently omitting
+-- ancestors or summary alternatives. The budget is shared across all levels.
+pageUnchecked :: Snapshot -> Name -> LogPageOptions -> IO (Either TopicError LogPage)
+pageUnchecked snapshot name options = runExceptT $ do
+  ExceptT (pure (validatePageRange options))
   view <- ExceptT (topicViewAt snapshot name)
-  let CheckpointId checkpoint = viewCheckpoint view
-  when (maybe False (/= checkpoint) (pageCheckpoint options)) (throwE ConfigurationChanged)
   levels <- ExceptT (levelsAtBounded snapshot name 4096)
   items <- either (throwE . InvalidInput) pure (resolution (recentWhole options) levels)
   let offset = (pageNumber options - 1) * pageSize options

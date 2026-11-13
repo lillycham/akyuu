@@ -200,12 +200,12 @@ async function main() {
   assert.equal(configuredLog.isError,false);
   assert.equal(configuredLog.structuredContent.ready,true);
   assert.equal(configuredLog.structuredContent.logs[0].entries[0].body,'recent episode c');
-  const checkpoint = configuredLog.structuredContent.checkpoint;
-  const nextLog = await tool('configured_context', { refs:['me/log'], log_keep:1, log_limit:1, log_page:2, log_checkpoint:checkpoint });
+  const logVersion = configuredLog.structuredContent.log_version;
+  const nextLog = await tool('configured_context', { refs:['me/log'], log_keep:1, log_limit:1, log_page:2, log_version:logVersion });
   assert.equal(nextLog.isError,false);
   assert.equal(nextLog.structuredContent.logs[0].entries[0].level,1);
   assert.equal(nextLog.structuredContent.logs[0].entries[0].direct_sources.length,2);
-  const cliLog = jsonCli(['replica','configured-context','--ref','me/log','--log-keep','1','--log-limit','1','--log-page','2','--checkpoint',checkpoint]);
+  const cliLog = jsonCli(['replica','configured-context','--ref','me/log','--log-keep','1','--log-limit','1','--log-page','2','--log-version',logVersion]);
   assert.deepEqual(cliLog.logs,nextLog.structuredContent.logs);
   const badPage = await rpc('tools/call',{name:'configured_context',arguments:{log_page:2}});
   assert.equal(badPage.result.isError,true);

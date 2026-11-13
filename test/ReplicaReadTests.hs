@@ -10,7 +10,7 @@ import Akyuu.Sync.Context qualified as Context
 import Akyuu.Sync.Logs qualified as Logs
 import Akyuu.Sync.Repository (snapshotId)
 import Akyuu.Sync.Search qualified as Search
-import Akyuu.Sync.Topics (TopicError (ConfigurationChanged, InvalidInput), TopicHead (headMemory, headMemoryId), TopicStatus (Conflicted, Resolved), TopicView (viewCheckpoint, viewHeads, viewName, viewStatus, viewVersion))
+import Akyuu.Sync.Topics (TopicError (ConfigurationChanged, InvalidInput, LogChanged), TopicHead (headMemory, headMemoryId), TopicStatus (Conflicted, Resolved), TopicView (viewCheckpoint, viewHeads, viewName, viewStatus, viewVersion))
 import Akyuu.Sync.Topics qualified as Topics
 import Akyuu.Sync.Web qualified as Web
 import Akyuu.Tier (Place (Place))
@@ -74,7 +74,7 @@ contextTests =
         let first = head (Context.contextLogs report)
             CheckpointId checkpoint = snapshotId snapshot
         map Logs.itemId (Logs.pageItems first) @?= reverse (drop 3 ids)
-        second <- Context.configuredAt snapshot config {Context.logOptions = Logs.LogPageOptions 2 2 1 (Just checkpoint)} >>= right
+        second <- Context.configuredAt snapshot config {Context.logOptions = Logs.LogPageOptions 2 2 1 (Just (Context.contextLogVersion report))} >>= right
         map (memBody . Logs.itemMemory) (Logs.pageItems (head (Context.contextLogs second))) @?= ["abc summary"]
         assertBool "plain context omits its checkpoint" (Id.render checkpoint `T.isInfixOf` Context.renderReport second)
         assertBool "plain context omits source evidence" (all (\digest -> Id.render digest `T.isInfixOf` Context.renderReport second) (take 3 ids))
@@ -105,13 +105,17 @@ contextTests =
         Context.contextLogs report @?= []
         assertBool "missing summary diagnostic" (not (null (Context.contextIssues report)))
         length (viewHeads (last (Context.contextEntries report))) @?= 1,
-      testCase "configured continuation refuses a changed checkpoint before expansion" $ withLocal $ \_ local -> do
+      testCase "configured continuation survives unrelated writes and refuses a changed log" $ withLocal $ \_ local -> do
         _ <- logFixture local
-        snapshot <- Topics.captureSnapshot local >>= right
-        let CheckpointId checkpoint = snapshotId snapshot
-            config = options {Context.logOptions = Logs.LogPageOptions 2 1 1 (Just checkpoint)}
+        first <- Context.configuredContext local options {Context.logOptions = Logs.LogPageOptions 1 1 1 Nothing} >>= right
+        let config = options {Context.logOptions = Logs.LogPageOptions 2 1 1 (Just (Context.contextLogVersion first))}
+        page <- Context.configuredContext local config >>= right
         void (Topics.createTopic local topicName (newTopic "changed") >>= right)
-        Context.configuredContext local config >>= (@?= Left ConfigurationChanged),
+        continued <- Context.configuredContext local config >>= right
+        map Logs.pageItems (Context.contextLogs continued) @?= map Logs.pageItems (Context.contextLogs page)
+        view <- Topics.readTopic local (name "me/log") >>= right
+        void (Logs.appendLog local (name "me/log") (viewVersion view) (newTopic "later") >>= right)
+        Context.configuredContext local config >>= (@?= Left LogChanged),
       testCase "tier, place and extra refs retain order and deduplicate" $ withLocal $ \_ local -> do
         controls local "always: me/profile me/shared\nat ~/code: me/project me/shared\nbackground: me/other"
         mapM_ (\ref -> void (Topics.createTopic local (name ref) (newTopic ref) >>= right)) ["me/profile", "me/shared", "me/project", "me/extra"]

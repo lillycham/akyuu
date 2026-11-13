@@ -138,8 +138,9 @@ all writers and GC jobs together; old processes do not use this protocol.
 	*--log-limit* sets entries per log page, from 1 to 100; the default is 20.
 	*--log-keep* keeps recent episodes whole, from 0 to 4096; the default is 10.
 	*--log-page* selects a page, from 1 to 4096; the default is 1.
-	For later pages, give *--checkpoint* with the checkpoint from page one.
-	A changed checkpoint rejects continuation. Restart at page one.
+	For later pages, give *--log-version* with the log version from page one.
+	A change to a paged log rejects continuation. Restart at page one.
+	Writes to other topics do not stop a paged read.
 	Each log permits at most 4096 memories across at most 32 levels.
 	An excessive or incomplete history gives an explicit diagnostic.
 	Summary entries include direct source IDs and covered episode IDs.
@@ -305,7 +306,7 @@ include the same JSON in structured content and text. The set includes
 *configured_context* and *topic_search*. Unresolved or invalid control refs
 block unrelated resolution, but permit repairs to the controls themselves.
 *configured_context* accepts *log_page*, *log_limit* and *log_keep*. Later
-pages also require *log_checkpoint*, copied from the first response.
+pages also require *log_version*, copied from the first response.
 Use *log_unfold* to inspect exact summary evidence.
 Missing controls permit initial setup. The log tools are *log_read*,
 *log_append*, *log_levels*, *log_summarise*, *log_resolution*, *log_todo* and

@@ -8,14 +8,15 @@ import Akyuu.Levels qualified as Levels
 import Akyuu.Memory (Memory (memBody, memCreated))
 import Akyuu.Refs (nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
-import Akyuu.Sync.Context (ContextOptions (logOptions), configuredAt, reportJSON)
-import Akyuu.Sync.Logs (LogPageOptions (LogPageOptions, pageCheckpoint, pageNumber, pageSize, recentWhole), pageAt, pageJSON)
+import Akyuu.Sync.Context (ContextOptions (logOptions), configuredUnchecked, reportJSON)
+import Akyuu.Sync.Logs (LogPageOptions (LogPageOptions, pageNumber, pageSize, recentWhole), pageJSON, pageUnchecked)
 import Akyuu.Sync.Repository (readMemory, snapshotId)
 import Akyuu.Sync.Search (searchAt, searchJSON)
 import Akyuu.Sync.Topics (LocalReplica, TopicError (ConfigurationChanged, InvalidInput, StorageError), TopicStatus (LogTopic), TopicView (viewName, viewStatus), captureSnapshot, errorJSON, topicNames, topicViewAt, viewJSON)
 import Akyuu.Web.Api (securityHeaders)
 import Akyuu.Web.Page (dataPage, withFonts)
 import Akyuu.Web.Server (hostAllowed, serveApplication)
+import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE)
 import Data.Aeson (Value, object, (.=))
@@ -45,9 +46,11 @@ readViewChecked local options expected query limit = runExceptT $ do
   case expected of
     Just previous | previous /= Id.render checkpoint -> throwE ConfigurationChanged
     _ -> pure ()
+  -- The browser binds every page to one checkpoint (above), which is stricter
+  -- than the log version rule, so it reads pages without that rule.
   topics <- traverse (ExceptT . topicViewAt snapshot) (topicNames snapshot)
-  logs <- liftIO (traverse (\topic -> do result <- pageAt snapshot (viewName topic) (logOptions options); pure (either (\err -> object ["ref" .= nameText (viewName topic), "error" .= errorJSON err]) pageJSON result)) (filter ((== LogTopic) . viewStatus) topics))
-  context <- ExceptT (configuredAt snapshot options)
+  logs <- liftIO (traverse (\topic -> do result <- pageUnchecked snapshot (viewName topic) (logOptions options); pure (either (\err -> object ["ref" .= nameText (viewName topic), "error" .= errorJSON err]) pageJSON result)) (filter ((== LogTopic) . viewStatus) topics))
+  context <- ExceptT (configuredUnchecked snapshot options)
   search <- traverse (\text -> ExceptT (searchAt snapshot text limit)) query
   pure (object ["checkpoint" .= Id.render checkpoint, "topics" .= map viewJSON topics, "logs" .= logs, "context" .= reportJSON context, "search" .= fmap searchJSON search])
 
@@ -114,9 +117,10 @@ application port local options request respond
           size <- numeric "log_limit" (pageSize (logOptions options)) 1 100
           keep <- numeric "log_keep" (recentWhole (logOptions options)) 0 4096
           expected <- case lookup "checkpoint" pairs of
-            Nothing -> Right (Id.render <$> pageCheckpoint (logOptions options))
+            Nothing -> Right Nothing
             Just (Just text) | either (const False) (const True) (Id.parse text) -> Right (Just text)
             _ -> Left "checkpoint needs a complete checkpoint ID."
+          when (number > 1 && expected == Nothing) (Left "Further log pages require the checkpoint from the first response.")
           Right (query, limit, LogPageOptions number size keep (expected >>= either (const Nothing) Just . Id.parse), expected)
     numeric key fallback lower upper = case lookup key pairs of
       Nothing -> Right fallback
