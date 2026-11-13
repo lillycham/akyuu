@@ -221,23 +221,26 @@ logAtWithin snapshot name limit budget = runExceptT $ do
   when (viewStatus view == Missing) (throwE (MissingTopic name))
   unless (viewStatus view == LogTopic) (throwE (NeedsResolution view))
   let heads = Set.fromList (map headMemoryId (viewHeads view))
-  (memories, failures) <- ExceptT (collect Map.empty [] heads)
+  (memories, failures) <- ExceptT (collect Map.empty [] Set.empty heads)
   ordered <- either (throwE . InvalidInput) pure (orderEntries (Map.toList memories))
   let entries = take limit ordered
       emitted = Set.fromList (map fst entries)
       frontier = (heads <> Set.unions (map (predecessors . snd) entries)) `Set.difference` emitted
   pure (LogRead view entries frontier failures, Map.size memories + length failures)
   where
-    collect found failures pending = case Set.minView pending of
+    -- The failures stay in the order of the walk. The set beside them makes
+    -- the membership test and the count cheap, so many failures cost no more
+    -- than many memories.
+    collect found failures failed pending = case Set.minView pending of
       Nothing -> pure (Right (found, reverse failures))
       Just (i, rest)
-        | Map.member i found || i `elem` map fst failures -> collect found failures rest
-        | Map.size found + length failures >= budget -> pure (Left (InvalidInput "The log traversal budget was exceeded. No partial summary coverage was selected."))
+        | Map.member i found || Set.member i failed -> collect found failures failed rest
+        | Map.size found + Set.size failed >= budget -> pure (Left (InvalidInput "The log traversal budget was exceeded. No partial summary coverage was selected."))
         | otherwise -> do
             result <- readMemory snapshot i
             case result of
-              Left err -> collect found ((i, err) : failures) rest
-              Right memory -> collect (Map.insert i memory found) failures (rest <> predecessors memory)
+              Left err -> collect found ((i, err) : failures) (Set.insert i failed) rest
+              Right memory -> collect (Map.insert i memory found) failures failed (rest <> predecessors memory)
 
 appendLog :: LocalReplica -> Name -> Version -> NewMemory -> IO (Either TopicError TopicView)
 appendLog local name expected input = appendLogChecked local name expected input []
