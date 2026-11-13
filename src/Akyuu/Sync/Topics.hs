@@ -44,7 +44,7 @@ import Akyuu.Ops (NewMemory (newAboutRefs, newBody, newEdges), buildMemory)
 import Akyuu.Refs (Name, nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Event (describeEventError, eventAction, eventReplica, eventTime, mkEvent)
-import Akyuu.Sync.Repository (Repository, RepositoryError (ArchiveNotAccepted, CollectionIncomplete, CorruptData, IdentityMismatch, InvalidCheckpoint, InvalidMemory, InvalidPointer, InvalidResidency, InvalidRetentionDepth, InvalidState, MissingCheckpoint, MissingCurrent, MissingLogPredecessor, MissingPayload, MissingRetainedTarget, NotRepository, OversizedData, PublicationUncertain, RepositoryBusy, RepositoryIO, StaleCheckpoint, UnacceptedObject), Snapshot, commitLocal, initialise, loadSnapshot, openRepository, readMemory, readStoreIdentity, snapshotId, snapshotState)
+import Akyuu.Sync.Repository (Repository, RepositoryError (ArchiveNotAccepted, CollectionIncomplete, CorruptData, IdentityMismatch, InvalidCheckpoint, InvalidMemory, InvalidPointer, InvalidResidency, InvalidRetentionDepth, InvalidState, MissingCheckpoint, MissingCurrent, MissingLogPredecessor, MissingPayload, MissingRetainedTarget, NotRepository, OversizedData, PublicationUncertain, RepositoryBusy, RepositoryIO, StaleCheckpoint, UnacceptedObject), Snapshot, commitLocal, initialise, loadSnapshot, readMemory, readStoreIdentity, snapshotId, snapshotState)
 import Akyuu.Sync.Repository qualified as Repository
 import Akyuu.Sync.State (RefKind (LogKind, TopicKind), ResourceState (Absent, LogHeads, RefTypeConflict, Registered, TopicHeads), StateError (StaleVersion), Version, events, interpret, resourceHeads, storeId, version, versionText)
 import Akyuu.Sync.State qualified as State
@@ -160,11 +160,11 @@ initialiseLocal path label = fmap join $ tryWith TopicIO $ runExceptT $ do
 
 openLocal :: FilePath -> IO (Either TopicError LocalReplica)
 openLocal path = fmap join $ tryWith TopicIO $ runExceptT $ do
-  repo <- storage (openRepository path)
+  -- The snapshot that the open checked also answers the registration check.
+  (repo, snapshot) <- storage (Repository.openSnapshot path)
   saved <- liftIO (ifMissing Nothing (Just <$> readLocalBytes path))
   bytes <- maybe (throwE (InvalidInput "No local replica identity exists. Run replica init to complete initialisation.")) pure saved
   replica <- either throwE pure (parseLocal bytes)
-  snapshot <- storage (loadSnapshot repo)
   case interpret (snapshotState snapshot) RegistryResource of
     Registered entries | Map.member replica entries -> pure (LocalReplica repo replica)
     _ -> throwE (UnregisteredReplica replica)
