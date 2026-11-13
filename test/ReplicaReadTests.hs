@@ -195,15 +195,23 @@ searchTests :: TestTree
 searchTests =
   testGroup
     "current-head search"
-    [ testCase "one matching branch returns every alternative" $ withLocal $ \root local -> do
+    [ testCase "an unreadable head is reported and does not hide other matches" $ withLocal $ \root local -> do
+        -- Different bodies: the same body in the same second is one memory.
+        broken <- Topics.createTopic local (name "me/broken") (newTopic "shared word, damaged copy") >>= right >>= onlyHead
+        _ <- Topics.createTopic local (name "me/fine") (newTopic "shared word, intact copy") >>= right
+        BS.writeFile (root </> "objects" </> T.unpack (Id.render (headMemoryId broken))) "damaged"
+        Search.SearchReport _ _ hits unreadable <- Search.searchTopics local "shared" 10 >>= right
+        map (viewName . Search.hitTopic) hits @?= [name "me/fine"]
+        map fst unreadable @?= [name "me/broken"],
+      testCase "one matching branch returns every alternative" $ withLocal $ \root local -> do
         void (forkTopic False root local)
-        Search.SearchReport _ _ hits <- Search.searchTopics local "local" 10 >>= right
+        Search.SearchReport _ _ hits _ <- Search.searchTopics local "local" 10 >>= right
         length hits @?= 1
         length (viewHeads (Search.hitTopic (head hits))) @?= 2
         Set.size (Search.matchedHeads (head hits)) @?= 1,
       testCase "words in different branches do not create a fabricated match" $ withLocal $ \root local -> do
         void (forkTopic False root local)
-        Search.SearchReport _ _ hits <- Search.searchTopics local "local remote" 10 >>= right
+        Search.SearchReport _ _ hits _ <- Search.searchTopics local "local remote" 10 >>= right
         hits @?= [],
       testCase "explicit selection removes the other branch from current search" $ withLocal $ \root local -> do
         forked <- forkTopic False root local
@@ -211,20 +219,20 @@ searchTests =
           entry : _ -> pure entry
           _ -> assertFailure "No remote branch."
         void (Topics.selectTopic local topicName (viewVersion forked) (headMemoryId selected) >>= right)
-        Search.SearchReport _ _ old <- Search.searchTopics local "local" 10 >>= right
-        Search.SearchReport _ _ current <- Search.searchTopics local "remote" 10 >>= right
+        Search.SearchReport _ _ old _ <- Search.searchTopics local "local" 10 >>= right
+        Search.SearchReport _ _ current _ <- Search.searchTopics local "remote" 10 >>= right
         old @?= []
         length current @?= 1,
       testCase "superseded content is absent and FTS retains stemming" $ withLocal $ \_ local -> do
         created <- Topics.createTopic local topicName (newTopic "archived-only") >>= right
         void (Topics.replaceTopic local topicName (viewVersion created) (newTopic "garden flowers") >>= right)
-        Search.SearchReport _ _ old <- Search.searchTopics local "archived" 10 >>= right
+        Search.SearchReport _ _ old _ <- Search.searchTopics local "archived" 10 >>= right
         old @?= []
-        Search.SearchReport _ _ current <- Search.searchTopics local "flower" 10 >>= right
+        Search.SearchReport _ _ current _ <- Search.searchTopics local "flower" 10 >>= right
         length current @?= 1,
       testCase "limit applies to topics after branch grouping" $ withLocal $ \root local -> do
         void (forkTopic False root local)
-        Search.SearchReport _ _ hits <- Search.searchTopics local "branch" 1 >>= right
+        Search.SearchReport _ _ hits _ <- Search.searchTopics local "branch" 1 >>= right
         length hits @?= 1
         Set.size (Search.matchedHeads (head hits)) @?= 2,
       testCase "invalid limits and blank queries fail explicitly" $ withLocal $ \_ local -> do
@@ -235,8 +243,8 @@ searchTests =
         created <- Topics.createTopic local topicName (newTopic "earlier") >>= right
         snapshot <- Topics.captureSnapshot local >>= right
         void (Topics.replaceTopic local topicName (viewVersion created) (newTopic "later") >>= right)
-        Search.SearchReport _ _ old <- Search.searchAt snapshot "earlier" 10 >>= right
-        Search.SearchReport _ _ current <- Search.searchTopics local "earlier" 10 >>= right
+        Search.SearchReport _ _ old _ <- Search.searchAt snapshot "earlier" 10 >>= right
+        Search.SearchReport _ _ current _ <- Search.searchTopics local "earlier" 10 >>= right
         length old @?= 1
         current @?= []
     ]
