@@ -6,6 +6,7 @@ module Akyuu.Sync.Context
     configuredContext,
     configuredAt,
     configuredUnchecked,
+    configuredWith,
     resolutionGuard,
     reportJSON,
     renderReport,
@@ -75,7 +76,13 @@ configuredAt snapshot options = runExceptT $ do
 -- | 'configuredAt' without the log version rule. A caller that binds the
 -- whole read to one checkpoint, such as the browser, uses this.
 configuredUnchecked :: Snapshot -> ContextOptions -> IO (Either TopicError ContextReport)
-configuredUnchecked snapshot options = runExceptT $ do
+configuredUnchecked snapshot options = configuredWith (\name -> pageUnchecked snapshot name (logOptions options)) snapshot options
+
+-- | 'configuredUnchecked' with the pages from the given function. A caller
+-- that has already paged the logs of this snapshot, with these log options,
+-- passes them and saves a second traversal of each log.
+configuredWith :: (Name -> IO (Either TopicError LogPage)) -> Snapshot -> ContextOptions -> IO (Either TopicError ContextReport)
+configuredWith pageOf snapshot options = runExceptT $ do
   ExceptT (pure (validatePageRange (logOptions options)))
   policy <-ExceptT (topicViewAt snapshot (policyRef options))
   manifest <- ExceptT (topicViewAt snapshot (manifestRef options))
@@ -94,7 +101,7 @@ configuredUnchecked snapshot options = runExceptT $ do
         _ -> []
       wanted = nub ([policyRef options, manifestRef options] <> expanded <> extraRefs options)
   entries <- traverse (ExceptT . topicViewAt snapshot) wanted
-  logs <- liftIO (traverse (\view -> do result <- pageUnchecked snapshot (viewName view) (logOptions options); pure (viewName view, result)) (filter ((== LogTopic) . viewStatus) entries))
+  logs <- liftIO (traverse (\view -> do result <- pageOf (viewName view); pure (viewName view, result)) (filter ((== LogTopic) . viewStatus) entries))
   let entryIssues = concatMap (\view -> if viewStatus view == LogTopic then [] else issues "Context" view) (filter (\view -> viewName view `notElem` [policyRef options, manifestRef options]) entries)
       logIssues = ["Context log " <> nameText name <> ": " <> describeError err | (name, Left err) <- logs]
   pure
