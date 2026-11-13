@@ -2,6 +2,11 @@
 -- checks out files into a live store. Imported bytes pass strict validation.
 module Akyuu.Sync.Git
   ( Bundle (..),
+    Inventory (..),
+    within,
+    bundleInventory,
+    listInventory,
+    bundleFor,
     GitError (..),
     prepare,
     fetch,
@@ -35,6 +40,7 @@ import Data.ByteString.Char8 qualified as BC
 import Data.Char (isHexDigit)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -83,6 +89,27 @@ ancestor end root older newer = do
   pure $ case outcome of Right _ -> Right True; Left (GitCommand _ (GitFailed 1 _)) -> Right False; Left err -> Left err
 
 data Entry = Entry ByteString Int FilePath deriving (Eq, Show)
+
+-- | The IDs that a protocol tree names.
+data Inventory = Inventory {inventoryEvents :: Set EventId, inventoryObjects :: Set Id} deriving (Eq, Show)
+
+within :: Inventory -> Inventory -> Bool
+within part whole = inventoryEvents part `Set.isSubsetOf` inventoryEvents whole && inventoryObjects part `Set.isSubsetOf` inventoryObjects whole
+
+bundleInventory :: Bundle -> Inventory
+bundleInventory bundle = Inventory (Map.keysSet (events (bundleState bundle))) (Map.keysSet (bundlePayloads bundle))
+
+-- | Read the inventory of a commit from its tree listing, with the total size
+-- of its files. This reads no file content. The path of a file gives its ID,
+-- so the result is only as good as the commit: use it for a commit that
+-- 'readBundle' has verified, or that this replica wrote.
+listInventory :: Deadline -> FilePath -> Text -> IO (Either GitError (Inventory, Integer))
+listInventory end root tip = runExceptT $ do
+  listing <- git end root ["ls-tree", "-r", "-t", "-z", "--full-tree", "--long", T.unpack tip] "" (16 * 1024 * 1024)
+  entries <- either throwE pure (parseTree listing)
+  let paths = [path | Entry _ _ path <- entries]
+      inventory = Inventory (Set.fromList [EventId digest | Just digest <- map eventPathId paths]) (Set.fromList [digest | Just digest <- map objectPathId paths])
+  pure (inventory, sum [toInteger size | Entry _ size _ <- entries])
 
 readBundle :: Deadline -> FilePath -> Text -> IO (Either GitError Bundle)
 readBundle end root tip = runExceptT $ do
@@ -153,22 +180,41 @@ parseBlobs ((hash, size, path) : more) bytes = do
 parseBlobs _ _ = Left (InvalidArchive "Unexpected Git blob response.")
 
 bundleAt :: Snapshot -> IO (Either GitError Bundle)
-bundleAt snapshot = runExceptT $ do
-  payloads <- traverse (\i -> (i,) . renderMemory <$> ExceptT (first ArchiveStorage <$> readMemory snapshot i)) (Set.toAscList (checkpointObjects (snapshotCheckpoint snapshot)))
+bundleAt snapshot = bundleFor snapshot (checkpointObjects (snapshotCheckpoint snapshot))
+
+-- | The state of a snapshot with only the given payloads.
+bundleFor :: Snapshot -> Set Id -> IO (Either GitError Bundle)
+bundleFor snapshot wanted = runExceptT $ do
+  payloads <- traverse (\i -> (i,) . renderMemory <$> ExceptT (first ArchiveStorage <$> readMemory snapshot i)) (Set.toAscList wanted)
   pure (Bundle (snapshotState snapshot) (Map.fromList payloads))
 
-writeBundle :: Deadline -> FilePath -> Maybe Text -> Bundle -> IO (Either GitError Text)
-writeBundle end root parent bundle = runExceptT $ do
+-- | Write a commit for the bundle. Without a base, the tree holds exactly the
+-- files of the bundle. With a base, the commit adds to the tree of the parent
+-- only the files that the base does not name. The base is the verified
+-- inventory of the parent and the total size of its files. The caller makes
+-- sure that the bundle holds the state and every payload that the base lacks,
+-- and that the bundle names everything in the base. The two forms then give
+-- the same tree. The protocol tree only grows, so the second form sends Git
+-- the new files and not the whole inventory.
+writeBundle :: Deadline -> FilePath -> Maybe Text -> Maybe (Inventory, Integer) -> Bundle -> IO (Either GitError Text)
+writeBundle end root parent base bundle = runExceptT $ do
   let state = bundleState bundle
       StoreId identity = storeId state
+      known = case (parent, base) of
+        (Just _, Just (inventory, _)) -> Just inventory
+        _ -> Nothing
+      absent member = maybe True (not . member) known
       files =
         Map.fromList
-          ( [("protocol", "akyuu-sync-v1\n"), ("store-id", encodeUtf8 (renderIdentifier identity <> "\n"))]
-              <> [(eventPath key (eventAction event), renderEvent event) | (key, event) <- Map.toList (events state)]
-              <> [(objectPath digest, bytes) | (digest, bytes) <- Map.toList (bundlePayloads bundle)]
+          ( [file | file <- [("protocol", "akyuu-sync-v1\n"), ("store-id", encodeUtf8 (renderIdentifier identity <> "\n"))], known == Nothing]
+              <> [(eventPath key (eventAction event), renderEvent event) | (key, event) <- Map.toList (events state), absent (Set.member key . inventoryEvents)]
+              <> [(objectPath digest, bytes) | (digest, bytes) <- Map.toList (bundlePayloads bundle), absent (Set.member digest . inventoryObjects)]
           )
-  when (sum (map (toInteger . BS.length) (Map.elems files)) > toInteger maxArchiveBytes) (throwE (InvalidArchive "The archive exceeds 256 MiB."))
-  when (Map.size files > 100000) (throwE (InvalidArchive "The archive has too many entries."))
+      (baseBytes, baseEntries) = case (known, base) of
+        (Just inventory, Just (_, bytes)) -> (bytes, Set.size (inventoryEvents inventory) + Set.size (inventoryObjects inventory) + 2)
+        _ -> (0, 0)
+  when (baseBytes + sum (map (toInteger . BS.length) (Map.elems files)) > toInteger maxArchiveBytes) (throwE (InvalidArchive "The archive exceeds 256 MiB."))
+  when (baseEntries + Map.size files > 100000) (throwE (InvalidArchive "The archive has too many entries."))
   now <- lift getPOSIXTime
   let numbered = zip [1 :: Int ..] (Map.toAscList files)
       number = BC.pack . show
@@ -178,7 +224,7 @@ writeBundle end root parent bundle = runExceptT $ do
           ( ["blob\nmark :" <> number n <> "\ndata " <> number (BS.length bytes) <> "\n" <> bytes <> "\n" | (n, (_, bytes)) <- numbered]
               <> ["reset refs/akyuu/prepared\n\ncommit refs/akyuu/prepared\ncommitter Akyuu sync <sync@localhost> " <> number (floor now :: Int) <> " +0000\ndata " <> number (BS.length message) <> "\n" <> message]
               <> maybe [] (\p -> ["from " <> encodeUtf8 p <> "\n"]) parent
-              <> ["deleteall\n"]
+              <> ["deleteall\n" | known == Nothing]
               <> ["M 100644 :" <> number n <> " " <> BC.pack path <> "\n" | (n, (path, _)) <- numbered]
               <> ["\ndone\n"]
           )

@@ -7,7 +7,7 @@ import Akyuu.Id qualified as Id
 import Akyuu.Mutation (withLockFile)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointEvents, checkpointObjects, pendingEvents, pendingObjects)
 import Akyuu.Sync.Event (eventAction)
-import Akyuu.Sync.Git (Bundle (bundlePayloads, bundleState), GitError, ancestor, bundleAt, describeGitError, fetch, prepare, push, readBundle, writeBundle)
+import Akyuu.Sync.Git (Bundle (bundlePayloads, bundleState), GitError, Inventory (Inventory, inventoryObjects), ancestor, bundleAt, bundleFor, bundleInventory, describeGitError, fetch, listInventory, prepare, push, readBundle, within, writeBundle)
 import Akyuu.Sync.Process (Deadline, deadline)
 import Akyuu.Sync.Repository (RepositoryError, acknowledgePublished, archiveIncoming, archiveSnapshot, importState, initialise, loadSnapshot, openRepository, snapshotCheckpoint, snapshotId, snapshotState)
 import Akyuu.Sync.State (ResourceState (RefTypeConflict, TopicHeads), State, events, interpret, merge, storeId)
@@ -111,8 +111,10 @@ readCursor path = do
       Right tip | T.length tip == 40 && T.all (\c -> c `elem` ['0' .. '9'] || c `elem` ['a' .. 'f']) tip -> pure (Just tip)
       _ -> throwE (SyncInvalid "The saved remote cursor is invalid.")
 
-verifiedFetch :: Deadline -> FilePath -> Settings -> Work (Maybe Text, Maybe Bundle)
-verifiedFetch end root (Settings remote branch) = do
+-- | Fetch the remote tip. Return the saved cursor and the tip. A tip that
+-- does not descend from the cursor is a rewritten remote.
+fetchTip :: Deadline -> FilePath -> Settings -> Work (Maybe Text, Maybe Text)
+fetchTip end root (Settings remote branch) = do
   let gitRoot = root </> "transport.git"
   old <- readTip root
   tip <- transport (fetch end gitRoot remote branch)
@@ -122,20 +124,21 @@ verifiedFetch end root (Settings remote branch) = do
       follows <- transport (ancestor end gitRoot previous current)
       unless follows (throwE RemoteRewritten)
     _ -> pure ()
-  bundle <- traverse (transport . readBundle end gitRoot) tip
-  case (old, bundle) of
-    (Just previous, Just incoming) | Just previous /= tip -> do
-      accepted <- transport (readBundle end gitRoot previous)
-      unless (contains incoming accepted) (throwE RemoteRewritten)
-    _ -> pure ()
-  remember root tip
-  pure (tip, bundle)
+  pure (old, tip)
 
-contains :: Bundle -> Bundle -> Bool
-contains whole part =
-  storeId (bundleState whole) == storeId (bundleState part)
-    && Map.keysSet (events (bundleState part)) `Set.isSubsetOf` Map.keysSet (events (bundleState whole))
-    && Map.keysSet (bundlePayloads part) `Set.isSubsetOf` Map.keysSet (bundlePayloads whole)
+-- | Read and verify the complete bundle of a fetched tip, then save the tip as
+-- the cursor. The cursor therefore always names a verified commit. The tree
+-- of the earlier cursor must be a part of the new one: its listing is enough,
+-- because that commit was verified when it became the cursor.
+verifyTip :: Deadline -> FilePath -> Maybe Text -> Text -> Work Bundle
+verifyTip end root old tip = do
+  let gitRoot = root </> "transport.git"
+  bundle <- transport (readBundle end gitRoot tip)
+  forM_ old $ \previous -> when (previous /= tip) $ do
+    (accepted, _) <- transport (listInventory end gitRoot previous)
+    unless (accepted `within` bundleInventory bundle) (throwE RemoteRewritten)
+  remember root (Just tip)
+  pure bundle
 
 runSync :: FilePath -> Bool -> IO (Either SyncError Value)
 runSync = runSyncWith (const (pure ())) 60
@@ -154,9 +157,17 @@ runSyncWith hook seconds root preview = withSync root $ do
   either throwE pure result
   where
     attempt end repo config@(Settings remote branch) tries = do
-      (tip, incoming) <- verifiedFetch end root config
+      let gitRoot = root </> "transport.git"
+          inventoryOf checkpoint = Inventory (checkpointEvents checkpoint) (checkpointObjects checkpoint)
+      (old, tip) <- fetchTip end root config
       liftIO (hook AfterFetch)
       before <- storage (loadSnapshot repo)
+      listed <- traverse (transport . listInventory end gitRoot) tip
+      -- The cursor names a commit that an earlier sync verified completely.
+      -- If the tip is still that commit and the local checkpoint holds all
+      -- that its tree names, there is nothing to read or import.
+      let current = old == tip && maybe True ((`within` inventoryOf (snapshotCheckpoint before)) . fst) listed
+      incoming <- if current then pure Nothing else traverse (verifyTip end root old) tip
       forM_ incoming $ \bundle -> unless (storeId (bundleState bundle) == storeId (snapshotState before)) (throwE (SyncInvalid "The remote belongs to a different memory store."))
       if preview
         then do
@@ -171,33 +182,52 @@ runSyncWith hook seconds root preview = withSync root $ do
                 ]
             )
         else do
-          forM_ incoming $ \bundle -> do
-            -- The fetched bundle and local checkpoint were both fully verified.
-            -- Accepted inventories only grow, so a subset needs no import even
-            -- if another writer advances CURRENT after this comparison.
-            let known =
-                  Map.keysSet (events (bundleState bundle)) `Set.isSubsetOf` checkpointEvents (snapshotCheckpoint before)
-                    && Map.keysSet (bundlePayloads bundle) `Set.isSubsetOf` checkpointObjects (snapshotCheckpoint before)
-            unless known (void (storage (importState repo (bundleState bundle) (Map.toList (bundlePayloads bundle)))))
+          forM_ incoming $ \bundle ->
+            -- The fetched bundle was fully verified. Accepted inventories only
+            -- grow, so a subset needs no import even if another writer
+            -- advances CURRENT after this comparison.
+            unless (bundleInventory bundle `within` inventoryOf (snapshotCheckpoint before)) (void (storage (importState repo (bundleState bundle) (Map.toList (bundlePayloads bundle)))))
           captured <- storage (loadSnapshot repo)
-          key <- storage (archiveSnapshot repo captured)
-          outgoing <- transport (bundleAt captured)
-          if maybe False (`contains` outgoing) incoming
-            then finish repo key tip False
+          let checkpoint = snapshotCheckpoint captured
+              mine = inventoryOf checkpoint
+              theirs = maybe (Inventory Set.empty Set.empty) fst listed
+              idle = Set.null (pendingEvents checkpoint) && Set.null (pendingObjects checkpoint)
+          if mine `within` theirs
+            then
+              if idle
+                then report (snapshotId captured) tip False captured
+                else do
+                  key <- storage (archiveSnapshot repo captured)
+                  finish repo key tip False
             else do
-              commit <- transport (writeBundle end (root </> "transport.git") tip outgoing)
+              key <- storage (archiveSnapshot repo captured)
+              -- After the import, the local inventory names all of the remote
+              -- tree. The commit then adds only the files that the tree lacks.
+              let base = if theirs `within` mine then listed else Nothing
+              outgoing <- transport (maybe (bundleAt captured) (\(inventory, _) -> bundleFor captured (inventoryObjects mine `Set.difference` inventoryObjects inventory)) base)
+              commit <- transport (writeBundle end gitRoot tip base outgoing)
               liftIO (hook BeforePush)
-              result <- liftIO (push end (root </> "transport.git") remote branch commit)
+              result <- liftIO (push end gitRoot remote branch commit)
               case result of
                 Left _ | tries > 1 -> attempt end repo config (tries - 1)
                 Left failure -> throwE (SyncGit failure)
                 Right () -> do
                   liftIO (hook AfterPush)
-                  (published, receipt) <- verifiedFetch end root config
-                  unless (maybe False (`contains` outgoing) receipt) (throwE PublicationUnconfirmed)
-                  finish repo key published (maybe False (\bundle -> not (outgoing `contains` bundle)) receipt)
+                  (cursor, published) <- fetchTip end root config
+                  if published == Just commit
+                    then do
+                      -- The remote tip is the commit that this sync wrote, so
+                      -- its content is known without a read.
+                      remember root published
+                      finish repo key published False
+                    else do
+                      receipt <- traverse (verifyTip end root cursor) published
+                      unless (maybe False ((mine `within`) . bundleInventory) receipt) (throwE PublicationUnconfirmed)
+                      finish repo key published (maybe False (not . (`within` mine) . bundleInventory) receipt)
     finish repo key tip more = do
       accepted <- storage (acknowledgePublished repo key)
+      report key tip more accepted
+    report key tip more accepted = do
       saved <- liftIO (tryWith SyncIO (atomicWrite (root </> "SYNC-PUBLISHED") (BL.toStrict (encode (checkpointText key)))))
       pure
         ( object
@@ -293,7 +323,7 @@ joinReplicaWith hook root remote branch label = do
         forM_ prior $ \previous -> do
           follows <- transport (ancestor end mirror previous tip)
           old <- transport (readBundle end mirror previous)
-          unless (follows && bundle `contains` old) (throwE RemoteRewritten)
+          unless (follows && storeId (bundleState old) == storeId (bundleState bundle) && bundleInventory old `within` bundleInventory bundle) (throwE RemoteRewritten)
         liftIO (atomicWrite (root </> ".tmp.join-tip") (BL.toStrict (encode tip)))
         repo <- storage (initialise root (storeId (bundleState bundle)))
         _ <- storage (importState repo (bundleState bundle) (Map.toList (bundlePayloads bundle)))
