@@ -39,6 +39,7 @@ where
 import Akyuu.Amend qualified as Amend
 import Akyuu.Check (CheckOptions (CheckOptions, hubDegree, longLog, minWords, nearThreshold), Finding (findingSeverity), FindingKind, Severity (Problem), defaultCheckOptions, filterFindings, kindName, severityName)
 import Akyuu.Config qualified as Config
+import Akyuu.Disabled qualified as Disabled
 import Akyuu.Embed qualified as Embed
 import Akyuu.Episode (Walk (walkEnd), WalkEnd (Interrupted))
 import Akyuu.Error (AkyuuError (BadConfig, BadInput, BadName), describe)
@@ -245,6 +246,10 @@ data Command i
   | Search SearchMode SearchOptions Text
   | -- | A short report of the setup.
     Status
+  | -- | Turn memory off: the file @disabled@ in the root.
+    Disable
+  | -- | Turn memory on again: remove the file.
+    Enable
   | -- | Make the root if it is missing, and write a policy and a manifest.
     Init
   | -- | Give a vector to each memory that has none.
@@ -386,6 +391,8 @@ commandParser =
       <> cmd "search" searchP "Search the memories for words, and show the memories near each hit."
       <> cmd "init" (pure Init) "Start a store: make the root, and write a short policy for agents and a manifest of the tiers. Existing refs are kept."
       <> cmd "status" (pure Status) "Show the setup: the counts, the manifest, the policy, search by meaning and versioning."
+      <> cmd "disable" (pure Disable) "Turn memory off: the start-of-session context and the MCP tools give nothing, until 'akyuu enable'. AKYUU_DISABLED=1 does the same for one shell."
+      <> cmd "enable" (pure Enable) "Turn memory on again (remove the file that 'akyuu disable' wrote)."
       <> cmd "config" (pure ShowConfig) "Show the settings in effect (the config file, the environment, the defaults), and where each came from."
       <> cmd "embed" (Embed <$> switch (long "prune" <> help "Also remove the vectors of other models and of memories that GC deleted.")) "Give a vector to each memory that has none, with the command in AKYUU_EMBED_COMMAND (search by meaning)."
       <> cmd "search-eval" searchEvalP "Run a set of searches in each mode, and show which ones find the expected memories."
@@ -833,12 +840,14 @@ runCommand env c = runExceptT $ case c of
           }
       )
   Context tier extra given cwd budget page -> do
-    manifest <- liftIO (resolveTiersRef given)
-    place <- liftIO (placeFor cwd)
-    r <- ExceptT (either (pure . Left) (\mr -> contextFor env mr (maybe "always" id tier) (Just place) extra) manifest)
-    pure . ok $ case (budget, page) of
-      (Nothing, Nothing) -> tierLinesWithin Nothing r
-      _ -> tierPage (fromMaybe 9500 budget) (fromMaybe 1 page) r
+    off <- liftIO (Disabled.isDisabled (Just (Store.storeRoot (envStore env))))
+    if off then pure (ok []) else do
+      manifest <- liftIO (resolveTiersRef given)
+      place <- liftIO (placeFor cwd)
+      r <- ExceptT (either (pure . Left) (\mr -> contextFor env mr (maybe "always" id tier) (Just place) extra) manifest)
+      pure . ok $ case (budget, page) of
+        (Nothing, Nothing) -> tierLinesWithin Nothing r
+        _ -> tierPage (fromMaybe 9500 budget) (fromMaybe 1 page) r
   Note cwd kind agent given about text -> do
     mr <- ExceptT (liftIO (resolveTiersRef given))
     place <- liftIO (placeFor cwd)
@@ -846,6 +855,12 @@ runCommand env c = runExceptT $ case c of
     let who = fromMaybe (Config.sValue (Config.cfgAgent cfg)) agent
     (n, i) <- ExceptT (noteEpisode env mr place NewMemory {newKind = kind, newAgent = who, newEdges = Set.empty, newBody = text, newAboutRefs = Set.fromList about})
     pure (ok ["noted in " <> nameText n <> " " <> Id.render i])
+  Disable -> do
+    liftIO (Disabled.setDisabled (Store.storeRoot (envStore env)) True)
+    pure (ok ["akyuu is off. Run 'akyuu enable' to turn it on."])
+  Enable -> do
+    liftIO (Disabled.setDisabled (Store.storeRoot (envStore env)) False)
+    pure (ok ["akyuu is on."])
   Init -> do
     mr <- ExceptT (liftIO (resolveTiersRef Nothing))
     pr <- ExceptT (liftIO (resolvePolicyRef Nothing))
@@ -905,7 +920,7 @@ runCommand env c = runExceptT $ case c of
     let source
           | Config.sValue (Config.cfgSourceMcp cfg) = Just (Config.sValue (Config.cfgSourceRoots cfg))
           | otherwise = Nothing
-    mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place) toolSet related source) <$> policy <*> tiers))
+    mcpConfig <- ExceptT (pure ((\p t -> MCP.McpConfig (nameText p) (nameText t) agent (Just place) toolSet related source (Just (Store.storeRoot (envStore env)))) <$> policy <*> tiers))
     liftIO (MCP.serve mcpConfig env)
     pure (Output BS.empty True False)
   Serve port -> do

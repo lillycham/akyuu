@@ -99,3 +99,18 @@ transcript: let the agent write notes during the work.
 
 Akyuu does not change the settings file. Add the lines yourself if you want
 them, or use the plugin.
+
+## Turn memory off
+
+Sometimes a session should start with no memories. The switch of the app for
+the MCP server does not stop the hook above, because the hook runs the command
+line. The switch of akyuu stops both.
+
+- `AKYUU_DISABLED=1` turns memory off for one shell or one session. `0`, `false`,
+  `no`, `off` and an empty value mean on. The variable wins over the file.
+- `akyuu disable` writes the file `disabled` in the root. Memory stays off for
+  every session until `akyuu enable` removes the file.
+
+While memory is off, `akyuu context` prints nothing (so the hook adds nothing),
+and each MCP tool call returns an error that says memory is off. The other
+commands still work, so you can read and write memories by hand.

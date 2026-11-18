@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A switch that turns memory off. `akyuu disable` writes the file `disabled`
+  in the root, and `akyuu enable` removes it. `AKYUU_DISABLED=1` does the same
+  for one shell or session, and `AKYUU_DISABLED=0` turns memory on again when
+  the file is there. While memory is off, `context` prints nothing and the MCP
+  tools refuse with a message. The other commands still work.
+
 ## 0.5.0.0 (2026-11-13)
 
 ### Compatibility
