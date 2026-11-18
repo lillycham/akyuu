@@ -65,6 +65,7 @@ library
                    , Akyuu.Store
                    , Akyuu.Refs
                    , Akyuu.Cache
+                   , Akyuu.Disabled
                    , Akyuu.Amend
                    , Akyuu.Check
                    , Akyuu.Compare

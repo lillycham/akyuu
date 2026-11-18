@@ -52,6 +52,7 @@ where
 
 import Akyuu.Amend qualified as Amend
 import Akyuu.Check (CheckOptions (hubDegree, longLog, nearThreshold), FindingKind, Severity, defaultCheckOptions, filterFindings, kindName, severityName)
+import Akyuu.Disabled qualified as Disabled
 import Akyuu.Episode (Walk (walkEnd), WalkEnd (Interrupted))
 import Akyuu.Error (AkyuuError (BadId, BadInput, BadName), describe)
 import Akyuu.Fuzzy qualified as Fuzzy
@@ -1233,7 +1234,11 @@ data McpConfig = McpConfig
     -- find sessions under. 'Nothing': do not offer it. It is off unless the
     -- person sets @[source] mcp = true@, because it hands text from the
     -- transcripts of one agent to another.
-    mcpSource :: Maybe [Source.Root]
+    mcpSource :: Maybe [Source.Root],
+    -- | The root of the store. The server looks for the file @disabled@ in it
+    -- (see "Akyuu.Disabled"), for each call of a tool. 'Nothing': only the
+    -- variable @AKYUU_DISABLED@ turns the tools off.
+    mcpRoot :: Maybe FilePath
   }
   deriving (Eq, Show)
 
@@ -1241,7 +1246,7 @@ data McpConfig = McpConfig
 -- one agent. A store that uses another name sets it with @--policy-ref@ or
 -- @AKYUU_POLICY_REF@.
 defaultMcpConfig :: McpConfig
-defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing Ordinary Nothing Nothing
+defaultMcpConfig = McpConfig defaultPolicyRef defaultTiersRef "agent" Nothing Ordinary Nothing Nothing Nothing
 
 runReplicaTool :: McpConfig -> Topics.LocalReplica -> ToolCall -> IO ToolResult
 runReplicaTool cfg local call = case call of
@@ -1459,6 +1464,9 @@ serveUsing cfg expand run = do
         mapM_ (\v -> BL.hPut stdout (A.encode v <> "\n") >> hFlush stdout) answer
         loop cfgRef
     safeRun now tc = do
+      off <- Disabled.isDisabled (mcpRoot now)
+      if off then pure (ToolResult (T.pack Disabled.disabledMessage) True) else safeRun' now tc
+    safeRun' now tc = do
       r <- tryJust notAsync (run now tc)
       case r of
         Right x -> pure x
