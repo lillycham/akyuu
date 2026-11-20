@@ -94,7 +94,7 @@ idLine :: Id -> Text
 idLine i = "id: " <> render i
 
 -- | The name of a kind of edge, as in the file format: @supersedes@,
--- @about@, @derived-from@ or @refines@.
+-- @about@, @derived-from@, @refines@ or @follows@.
 edgeName :: EdgeType -> Text
 edgeName = edgeToHeader
 
@@ -248,7 +248,7 @@ changedWarning key =
     <> " were made by another command, other arguments or other prefixes. If the model changed, give the profile a new key, then run akyuu embed."
 
 -- | The result of a set of searches: one line for each case with the mark
--- of each mode (@ found, @ not), then the number of passes of each mode
+-- of each mode (@+@ found, @-@ not), then the number of passes of each mode
 -- for each category.
 evalLines :: Int -> [EvalRow] -> [Text]
 evalLines k rows = concatMap one rows <> [""] <> concatMap summary cats
@@ -472,7 +472,7 @@ compareLines (CompareReport a b c) =
         <> "  agent: "
         <> memAgent m
         <> "  created: "
-        <> T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (memCreated m))
+        <> stamp (memCreated m)
     only tag xs =
       ("only in " <> tag <> " (" <> T.pack (show (length xs)) <> "):") : ["  - " <> x | x <- xs]
     drop' from to ok
@@ -498,7 +498,7 @@ compareJSON (CompareReport a b c) =
           "refs" .= map nameText rs,
           "kind" .= memKind m,
           "agent" .= memAgent m,
-          "created" .= formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (memCreated m)
+          "created" .= stamp (memCreated m)
         ]
 
 -- Reviews --------------------------------------------------------------
@@ -510,7 +510,7 @@ reviewLines = concatMap one
   where
     one ((a, b), r) =
       (render a <> " " <> render b)
-        : ("  by " <> reviewAgent r <> " at " <> T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (reviewAt r)))
+        : ("  by " <> reviewAgent r <> " at " <> stamp (reviewAt r))
         : ["  " <> reviewNote r | not (T.null (reviewNote r))]
 
 -- Context --------------------------------------------------------------

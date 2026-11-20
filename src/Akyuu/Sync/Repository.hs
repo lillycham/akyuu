@@ -23,6 +23,7 @@ module Akyuu.Sync.Repository
     snapshotState,
     snapshotCheckpoint,
     readMemory,
+    readMemoryBytes,
     archiveSnapshot,
     archiveSnapshotWith,
     acknowledgePublished,
@@ -532,6 +533,13 @@ readMemory snapshot digest = fmap join $ tryWith RepositoryIO $ runExceptT $ do
   bytes <- readObjectBytes repo digest
   either (throwE . InvalidMemory digest) pure (parseMemory bytes)
 
+-- | Hash-checked raw bytes of an accepted memory in the snapshot.
+readMemoryBytes :: Snapshot -> Id -> IO (Either RepositoryError ByteString)
+readMemoryBytes snapshot digest = fmap join $ tryWith RepositoryIO $ runExceptT $ do
+  unless (digest `Set.member` checkpointObjects (snapshotCheckpoint snapshot)) (throwE (UnacceptedObject digest))
+  let repo = Repository (snapshotRoot snapshot) (checkpointStore (snapshotCheckpoint snapshot))
+  readObjectBytes repo digest
+
 -- Missing active copies fall back to the durable archive. An existing corrupt
 -- copy is an error, never a reason to hide corruption behind another file.
 readObjectBytes :: Repository -> Id -> ExceptT RepositoryError IO ByteString
@@ -632,26 +640,6 @@ loadArchive repo@(Repository _ store) key@(CheckpointId digest) current = do
   unless (checkpointStore checkpoint == store) (throwE IdentityMismatch)
   traverse_ (\eventId@(EventId hash) -> readChecked maxEventBytes (archiveEventPath repo eventId) hash) (Set.toAscList (checkpointEvents checkpoint `Set.intersection` pendingEvents current))
   traverse_ (\i -> readChecked maxPayloadBytes (archiveObjectPath repo i) i) (Set.toAscList (checkpointObjects checkpoint `Set.intersection` pendingObjects current))
-  pure checkpoint
-
--- The complete check of one archive: every event, every payload and their links.
-_verifyArchive :: Repository -> CheckpointId -> ExceptT RepositoryError IO Checkpoint
-_verifyArchive repo@(Repository _ store) key@(CheckpointId digest) = do
-  bytes <- readChecked maxCheckpointBytes (archiveCheckpointPath repo key) digest
-  checkpoint <- either (throwE . InvalidCheckpoint) pure (parseCheckpoint bytes)
-  unless (checkpointStore checkpoint == store) (throwE IdentityMismatch)
-  entries <- traverse (\eventId@(EventId hash) -> (eventId,) <$> readChecked maxEventBytes (archiveEventPath repo eventId) hash) (Set.toAscList (checkpointEvents checkpoint))
-  state <- either (throwE . InvalidState) pure (State.fromBytes store entries)
-  memories <-
-    Map.fromList
-      <$> traverse
-        ( \i -> do
-            payload <- readChecked maxPayloadBytes (archiveObjectPath repo i) i
-            memory <- either (throwE . InvalidMemory i) pure (parseMemory payload)
-            pure (i, memory)
-        )
-        (Set.toAscList (checkpointObjects checkpoint))
-  validatePayloads state memories
   pure checkpoint
 
 -- | Internal transport boundary. The caller MUST already have verified that
@@ -819,15 +807,16 @@ boundedRead limit path = withBinaryFile path ReadMode $ \handle -> do
 
 ensureDirectory :: FaultHook -> FilePath -> IO ()
 ensureDirectory hook path = do
-  let parent = takeDirectory path
-  when (parent /= path) (ensureDirectory hook parent)
   exists <- doesDirectoryExist path
   unless exists $ do
+    let parent = takeDirectory path
+    when (parent /= path) (ensureDirectory hook parent)
     result <- tryWith id (createDirectory path)
     case result of
       Left err | not (isAlreadyExistsError err) -> ioError err
-      _ -> pure ()
+      Left err -> do
+        nowDir <- doesDirectoryExist path
+        unless nowDir (ioError err)
+      Right () -> pure ()
     hook (DirectoryCreated path)
-  -- Also flush existing parents: an earlier initialiser can die immediately
-  -- after mkdir, before it saves the new directory entry in its parent.
-  when (parent /= path) (syncDir parent)
+    when (parent /= path) (syncDir parent)

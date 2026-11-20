@@ -9,12 +9,12 @@ import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId), checkpointEvents, che
 import Akyuu.Sync.Event (eventAction)
 import Akyuu.Sync.Git (Bundle (bundlePayloads, bundleState), GitError, Inventory (Inventory, inventoryObjects), ancestor, bundleAt, bundleFor, bundleInventory, describeGitError, fetch, listInventory, prepare, push, readBundle, within, writeBundle)
 import Akyuu.Sync.Process (Deadline, deadline)
-import Akyuu.Sync.Repository (RepositoryError, acknowledgePublished, archiveIncoming, archiveSnapshot, importState, initialise, loadSnapshot, openRepository, snapshotCheckpoint, snapshotId, snapshotState)
+import Akyuu.Sync.Repository (RepositoryError, acknowledgePublished, archiveIncoming, archiveSnapshot, importState, initialise, loadSnapshot, openRepository, openSnapshot, snapshotCheckpoint, snapshotId, snapshotState)
 import Akyuu.Sync.State (ResourceState (RefTypeConflict, TopicHeads), State, events, interpret, merge, storeId)
 import Akyuu.Sync.Topics (TopicError (StorageError), describeError, initialiseLocal)
 import Akyuu.Sync.Types (resourceOf)
 import Control.Exception (IOException, displayException)
-import Control.Monad (forM_, unless, void, when)
+import Control.Monad (forM_, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE)
 import Data.Aeson (Value, eitherDecodeStrict', encode, object, (.:), (.=))
@@ -59,7 +59,7 @@ settings remote branch = runExceptT $ do
         && not ("-" `T.isPrefixOf` remote)
     )
     (throwE (SyncInvalid "Give a nonblank remote path or URL."))
-  when (("https://" `T.isPrefixOf` remote || "http://" `T.isPrefixOf` remote) && "@" `T.isInfixOf` remote) (throwE (SyncInvalid "Do not put credentials in a remote URL."))
+  when (hasHttpCredentials remote) (throwE (SyncInvalid "Do not put credentials in a remote URL."))
   unless
     ( T.length full <= 200
         && T.all allowed full
@@ -69,6 +69,16 @@ settings remote branch = runExceptT $ do
     (throwE (SyncInvalid "Give a valid branch below refs/heads/."))
   url <- if ":" `T.isInfixOf` remote then pure remote else liftIO (T.pack <$> makeAbsolute (T.unpack remote))
   pure (Settings url full)
+  where
+    hasHttpCredentials u =
+      let lower = T.toLower u
+          afterScheme =
+            case T.stripPrefix "https://" lower of
+              Just rest -> Just rest
+              Nothing -> T.stripPrefix "http://" lower
+       in case afterScheme of
+            Nothing -> False
+            Just rest -> "@" `T.isInfixOf` T.takeWhile (`notElem` ['/', '?', '#']) rest
 
 settingsJSON :: Settings -> Value
 settingsJSON (Settings remote branch) = object ["remote" .= remote, "branch" .= branch]
@@ -182,12 +192,12 @@ runSyncWith hook seconds root preview = withSync root $ do
                 ]
             )
         else do
-          forM_ incoming $ \bundle ->
-            -- The fetched bundle was fully verified. Accepted inventories only
-            -- grow, so a subset needs no import even if another writer
-            -- advances CURRENT after this comparison.
-            unless (bundleInventory bundle `within` inventoryOf (snapshotCheckpoint before)) (void (storage (importState repo (bundleState bundle) (Map.toList (bundlePayloads bundle)))))
-          captured <- storage (loadSnapshot repo)
+          imported <- case incoming of
+            Just bundle
+              | not (bundleInventory bundle `within` inventoryOf (snapshotCheckpoint before)) ->
+                  Just <$> storage (importState repo (bundleState bundle) (Map.toList (bundlePayloads bundle)))
+            _ -> pure Nothing
+          captured <- maybe (pure before) pure imported
           let checkpoint = snapshotCheckpoint captured
               mine = inventoryOf checkpoint
               theirs = maybe (Inventory Set.empty Set.empty) fst listed
@@ -245,21 +255,18 @@ runSyncWith hook seconds root preview = withSync root $ do
 
 status :: FilePath -> IO (Either SyncError Value)
 status root = runExceptT $ do
-  repo <- storage (openRepository root)
-  snapshot <- storage (loadSnapshot repo)
+  (_, snapshot) <- storage (openSnapshot root)
   tip <- readTip root
   published <-
-    liftIO
-      ( ifMissing Nothing $ do
-          bytes <- BS.readFile (root </> "SYNC-PUBLISHED")
-          pure (either (const Nothing) (Just :: Text -> Maybe Text) (eitherDecodeStrict' bytes))
-      )
+    ExceptT . tryWith SyncIO $
+      ifMissing Nothing $ do
+        bytes <- BS.readFile (root </> "SYNC-PUBLISHED")
+        pure (either (const Nothing) (Just :: Text -> Maybe Text) (eitherDecodeStrict' bytes))
   failure <-
-    liftIO
-      ( ifMissing Nothing $ do
-          bytes <- BS.readFile (root </> "SYNC-ERROR")
-          pure (either (const Nothing) id (eitherDecodeStrict' bytes :: Either String (Maybe Text)))
-      )
+    ExceptT . tryWith SyncIO $
+      ifMissing Nothing $ do
+        bytes <- BS.readFile (root </> "SYNC-ERROR")
+        pure (either (const Nothing) id (eitherDecodeStrict' bytes :: Either String (Maybe Text)))
   pure
     ( object
         [ "checkpoint" .= checkpointText (snapshotId snapshot),
@@ -293,8 +300,11 @@ joinReplica :: FilePath -> Text -> Text -> Text -> IO (Either SyncError Value)
 joinReplica = joinReplicaWith (const (pure ()))
 
 joinReplicaWith :: (SyncPoint -> IO ()) -> FilePath -> Text -> Text -> Text -> IO (Either SyncError Value)
-joinReplicaWith hook root remote branch label = do
-  createDirectoryIfMissing True root
+joinReplicaWith hook root remote branch label =
+  tryWith SyncIO (createDirectoryIfMissing True root) >>= either (pure . Left) (\() -> joinReplicaLocked hook root remote branch label)
+
+joinReplicaLocked :: (SyncPoint -> IO ()) -> FilePath -> Text -> Text -> Text -> IO (Either SyncError Value)
+joinReplicaLocked hook root remote branch label =
   withSync root $ do
     config <- ExceptT (settings remote branch)
     configured <- liftIO (doesFileExist (root </> "SYNC"))

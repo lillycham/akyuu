@@ -165,7 +165,16 @@ parseVector bs = case A.eitherDecodeStrict bs of
 -- appears once, with the best of them.
 rankBySimilarity :: Vector -> [(Id, Vector)] -> [(Id, Double)]
 rankBySimilarity q vs =
-  sortOn (\(i, s) -> (Down s, i)) (Map.toList (Map.fromListWith max [(i, cosine q v) | (i, v) <- vs, length v == length q]))
+  sortOn (\(i, s) -> (Down s, i)) (Map.toList (Map.fromListWith max [(i, sim v) | (i, v) <- vs, length v == lq]))
+  where
+    lq = length q
+    nq = sqrt (foldl' (\s x -> s + realToFrac x * realToFrac x) (0 :: Double) q)
+    sim v
+      | nq == 0 || nv == 0 = 0
+      | otherwise = dot / (nq * sqrt nv)
+      where
+        dot = foldl' (+) 0 (zipWith (\x y -> realToFrac x * realToFrac y) q v)
+        nv = foldl' (\s x -> s + realToFrac x * realToFrac x) (0 :: Double) v
 
 -- | The most chunks of one memory that get a vector. A longer memory is
 -- embedded from its start: that is its first 'maxChunks' chunks.
@@ -180,16 +189,18 @@ maxChunks = 8
 chunkText :: Int -> Text -> [Text]
 chunkText n t
   | T.length t <= n = [t]
-  | otherwise = pack' [] (concatMap hard (T.splitOn "\n\n" t))
+  | otherwise = pack' 0 [] (concatMap hard (T.splitOn "\n\n" t))
   where
     hard p
       | T.length p <= n = [p]
       | otherwise = T.chunksOf n p
-    pack' acc [] = [T.intercalate "\n\n" (reverse acc) | not (null acc)]
-    pack' acc (p : ps)
-      | null acc = pack' [p] ps
-      | T.length (T.intercalate "\n\n" (reverse (p : acc))) <= n = pack' (p : acc) ps
-      | otherwise = T.intercalate "\n\n" (reverse acc) : pack' [p] ps
+    pack' _ acc [] = [T.intercalate "\n\n" (reverse acc) | not (null acc)]
+    pack' accLen acc (p : ps)
+      | null acc = pack' lp [p] ps
+      | accLen + 2 + lp <= n = pack' (accLen + 2 + lp) (p : acc) ps
+      | otherwise = T.intercalate "\n\n" (reverse acc) : pack' lp [p] ps
+      where
+        lp = T.length p
 
 -- | Reciprocal rank fusion of ranked lists: a memory scores @1 / (60 + r)@
 -- in each list (r from 1), and the scores add. The order is by score, and
@@ -452,7 +463,9 @@ loadVectors (VectorStore c) model = do
 
 -- | The memories that have a vector of this model.
 storedIds :: VectorStore -> Text -> IO (Set Id)
-storedIds s model = Set.fromList . map fst <$> loadVectors s model
+storedIds (VectorStore c) model = do
+  rows <- query c "SELECT DISTINCT id FROM chunks WHERE model = ? AND length(vec) % 4 = 0" (Only model) :: IO [Only Text]
+  pure (Set.fromList (mapMaybe (\(Only i) -> either (const Nothing) Just (Id.parse i)) rows))
 
 -- | Stop the shell and its children, even if they ignore TERM. Keep the group
 -- id captured at spawn: 'getPid' loses it once the shell has been reaped.

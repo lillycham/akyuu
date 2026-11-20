@@ -110,8 +110,8 @@ application port local options request respond
       | otherwise = do
           limit <- case lookup "limit" pairs of
             Nothing -> Right 20
-            Just (Just text) -> case TR.decimal text of
-              Right (number, "") | number >= 1 && number <= 100 -> Right number
+            Just (Just text) -> case TR.decimal text :: Either String (Integer, Text) of
+              Right (number, "") | number >= 1 && number <= 100 -> Right (fromInteger number)
               _ -> Left "limit must be from 1 to 100."
             _ -> Left "limit needs a value."
           query <- case lookup "q" pairs of
@@ -127,10 +127,11 @@ application port local options request respond
             _ -> Left "checkpoint needs a complete checkpoint ID."
           when (number > 1 && expected == Nothing) (Left "Further log pages require the checkpoint from the first response.")
           Right (query, limit, LogPageOptions number size keep (expected >>= either (const Nothing) Just . Id.parse), expected)
+    numeric :: Text -> Int -> Int -> Int -> Either Text Int
     numeric key fallback lower upper = case lookup key pairs of
       Nothing -> Right fallback
-      Just (Just text) -> case TR.decimal text of
-        Right (number, "") | number >= lower && number <= upper -> Right number
+      Just (Just text) -> case TR.decimal text :: Either String (Integer, Text) of
+        Right (number, "") | number >= toInteger lower && number <= toInteger upper -> Right (fromInteger number)
         _ -> Left (key <> " is outside the supported range.")
       _ -> Left (key <> " needs a value.")
     unique [] = []

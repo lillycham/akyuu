@@ -38,7 +38,21 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 
-data State = State StoreId (Map EventId Event) deriving (Eq, Show)
+data State = State StoreId (Map EventId Event) (Map Resource (Map EventId Event))
+
+instance Eq State where
+  State s1 e1 _ == State s2 e2 _ = s1 == s2 && e1 == e2
+
+instance Show State where
+  showsPrec d (State s e _) = showParen (d > 10) (showString "State " . showsPrec 11 s . showChar ' ' . showsPrec 11 e)
+
+mkState :: StoreId -> Map EventId Event -> State
+mkState store table = State store table byResource
+  where
+    byResource =
+      Map.fromListWith
+        Map.union
+        [(normaliseResource (resourceOf (eventAction event)), Map.singleton key event) | (key, event) <- Map.toList table]
 
 data StateError
   = InvalidEvent EventError
@@ -80,13 +94,13 @@ parseVersion :: Text -> Either IdParseError Version
 parseVersion = fmap Version . Id.parse
 
 empty :: StoreId -> State
-empty store = State store Map.empty
+empty store = mkState store Map.empty
 
 events :: State -> Map EventId Event
-events (State _ es) = es
+events (State _ es _) = es
 
 storeId :: State -> StoreId
-storeId (State store _) = store
+storeId (State store _ _) = store
 
 fromEvents :: StoreId -> [Event] -> Either StateError State
 fromEvents store es = do
@@ -104,7 +118,7 @@ assemble :: StoreId -> Map EventId Event -> [(EventId, Event)] -> Either StateEr
 assemble store old pairs = do
   table <- foldM insert old pairs
   validate store table
-  pure (State store table)
+  pure (mkState store table)
   where
     insert table (key, event) = case Map.lookup key table of
       Just previous | previous /= event -> Left (DifferentEventBytes key)
@@ -117,7 +131,7 @@ fromBytes store = extendBytes (empty store)
 -- | Add wire events to validated state. Old events retain their validation;
 -- new bytes and the entire combined causal graph are checked before return.
 extendBytes :: State -> [(EventId, ByteString)] -> Either StateError State
-extendBytes (State store table) entries = traverse decode entries >>= assemble store table
+extendBytes (State store table _) entries = traverse decode entries >>= assemble store table
   where
     decode (expected, bytes) = do
       event <- first InvalidEvent (parseEvent bytes)
@@ -126,7 +140,7 @@ extendBytes (State store table) entries = traverse decode entries >>= assemble s
       pure (expected, event)
 
 merge :: State -> State -> Either StateError State
-merge (State a left) (State b right)
+merge (State a left _) (State b right _)
   | a /= b = Left IncompatibleStores
   | otherwise = assemble a left (Map.toAscList right)
 
@@ -184,13 +198,13 @@ normaliseResource (ReviewResource a b) = ReviewResource (min a b) (max a b)
 normaliseResource resource = resource
 
 resourceHeads :: State -> Resource -> Map EventId Event
-resourceHeads (State _ table) resource = Map.withoutKeys relevant consumed
+resourceHeads (State _ _ byResource) resource = Map.withoutKeys relevant consumed
   where
-    relevant = Map.filter ((== normaliseResource resource) . resourceOf . eventAction) table
+    relevant = Map.findWithDefault Map.empty (normaliseResource resource) byResource
     consumed = Set.unions (map eventParents (Map.elems relevant))
 
 interpret :: State -> Resource -> ResourceState
-interpret state resource
+interpret state@(State _ _ byResource) resource
   | Map.null heads = Absent
   | otherwise = case resource of
       RefResource _ ->
@@ -203,7 +217,12 @@ interpret state resource
                   else RefTypeConflict refs
       PinResource _ -> PinState (any isSetPin (Map.elems heads))
       ReviewResource _ _ -> ReviewState (Map.mapMaybe (reviewValue . eventAction) heads)
-      RegistryResource -> Registered (Map.fromListWith Set.union [(replica, Set.singleton label) | event <- Map.elems (events state), RegisterReplica replica label <- [eventAction event]])
+      RegistryResource ->
+        Registered
+          ( Map.fromListWith
+              Set.union
+              [(replica, Set.singleton label) | event <- Map.elems (Map.findWithDefault Map.empty RegistryResource byResource), RegisterReplica replica label <- [eventAction event]]
+          )
   where
     heads = resourceHeads state resource
     refValue action = case action of
@@ -216,7 +235,7 @@ interpret state resource
     reviewValue action = case action of SetReview _ _ value -> Just value; _ -> Nothing
 
 version :: State -> Resource -> Version
-version state@(State (StoreId store) _) resource = Version (Id.hashBytes bytes)
+version state@(State (StoreId store) _ _) resource = Version (Id.hashBytes bytes)
   where
     bytes = "akyuu-sync-version-v1\n" <> BL.toStrict (encode fields)
     fields = [renderIdentifier store] <> resourceFields (normaliseResource resource) <> [Id.render digest | EventId digest <- Map.keys (resourceHeads state resource)]
@@ -226,10 +245,8 @@ version state@(State (StoreId store) _) resource = Version (Id.hashBytes bytes)
       ReviewResource a b -> ["review", Id.render a, Id.render b]
       RegistryResource -> ["registry"]
 
--- | The future writer calls this under the mutation lock. Remote merge does
--- not require an up-to-date token: unseen concurrent events are legitimate.
 applyLocal :: Version -> Event -> State -> Either StateError State
-applyLocal expected event state@(State store table) = do
+applyLocal expected event state@(State store table _) = do
   let resource = resourceOf (eventAction event)
       heads = resourceHeads state resource
   unless (version state resource == expected) (Left StaleVersion)

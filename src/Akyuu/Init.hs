@@ -13,8 +13,7 @@ where
 import Data.Text (Text)
 import Data.Text qualified as T
 
--- | A short, general policy for any agent. The name of the policy ref is
--- part of the text, because the manifest names it.
+-- | A short, general policy for any agent.
 defaultPolicy :: Text
 defaultPolicy =
   T.unlines

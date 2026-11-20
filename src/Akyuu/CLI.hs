@@ -482,11 +482,14 @@ commandParser =
         <$> argument nameReader (metavar "NAME")
         <*> optional (option idReader (long "expect" <> metavar "ID" <> help "Fail if the ref does not point to ID now."))
         <*> optional (option (via (checkField "agent")) (long "agent" <> metavar "TEXT" <> help "The agent of the new memory. The default is the agent of the old one."))
-        <*> optional (strOption (long "from" <> metavar "TEXT" <> help "Text to replace. It must occur once."))
-        <*> optional (strOption (long "to" <> metavar "TEXT" <> help "The text to put in its place."))
+        <*> optional
+          ( (,)
+              <$> strOption (long "from" <> metavar "TEXT" <> help "Text to replace. It must occur once.")
+              <*> optional (strOption (long "to" <> metavar "TEXT" <> help "The text to put in its place."))
+          )
         <*> optional (strOption (long "append" <> metavar "TEXT" <> help "Text to add after the body."))
-    amendArgs n e a from to app =
-      Amend n e a (maybe [] (\f -> [Amend.Replace f (maybe "" id to)]) from <> maybe [] (pure . Amend.Append) app)
+    amendArgs n e a rep app =
+      Amend n e a (maybe [] (\(f, t) -> [Amend.Replace f (fromMaybe "" t)]) rep <> maybe [] (pure . Amend.Append) app)
     sourceP =
       hsubparser $
         cmd "add" sourceAddP "Make a pointer to part of an agent session, and print its id. Link a memory to it with --derived-from."
@@ -508,10 +511,11 @@ commandParser =
           <*> optional (option (via (checkField "agent")) (long "agent" <> metavar "TEXT" <> help "The agent that writes the memory. The default is $AKYUU_AGENT, then agent."))
           <*> switch (long "hash" <> help "Store the hash of the records from --from to --to, so that source verify can tell if they changed. It needs both ids, the session on this machine, and engi on the PATH.")
     sourceShowP =
-      SourceShow
-        <$> argument idReader (metavar "ID")
-        <*> option auto (long "before" <> metavar "N" <> value 6 <> showDefault <> help "How many records to show before the time.")
-        <*> option auto (long "after" <> metavar "N" <> value 2 <> showDefault <> help "How many records to show after the time.")
+      let Source.Window defBefore defAfter = Source.defaultWindow
+       in SourceShow
+            <$> argument idReader (metavar "ID")
+            <*> option (atLeast 0) (long "before" <> metavar "N" <> value defBefore <> showDefault <> help "How many records to show before the time.")
+            <*> option (atLeast 0) (long "after" <> metavar "N" <> value defAfter <> showDefault <> help "How many records to show after the time.")
     timeReader =
       eitherReader $ \s ->
         maybe (Left "expected a time like 2026-11-01T19:00:58Z") Right (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" s)
@@ -538,7 +542,7 @@ commandParser =
         <*> searchOpts
         <*> (T.unwords <$> some (strArgument (metavar "WORDS...")))
     modeOpt =
-      option modeReader (long "mode" <> metavar "MODE" <> value Fused <> showDefault <> help "fused (the default: words and meaning), text (words only) or meaning (meaning only). The last two kinds need AKYUU_EMBED_COMMAND.")
+      option modeReader (long "mode" <> metavar "MODE" <> value Fused <> showDefault <> help "fused (the default: words and meaning), text (words only) or meaning (meaning only). fused and meaning use an embedding profile or AKYUU_EMBED_COMMAND.")
     searchOpts =
       (\l h ks -> SearchOptions l h (if null ks then searchFollow defaultSearchOptions else Set.fromList ks))
         <$> option (atLeast 1) (long "limit" <> short 'n' <> metavar "N" <> value (searchLimit defaultSearchOptions) <> showDefault <> help "The most hits to show.")
@@ -558,11 +562,15 @@ commandParser =
         <*> optional (option (via parseDuration) (long "since" <> metavar "DURATION" <> help "Only the episodes of the last DURATION, for example 1d or 7d."))
         <*> logView
     logView =
-      ( \todoV resV size keep budget ->
-          if todoV then Todo size keep else if resV then Resolution keep budget else Plain
+      ( \mode size keep budget -> case mode of
+          Just True -> Todo size keep
+          Just False -> Resolution keep budget
+          Nothing -> Plain
       )
-        <$> switch (long "todo" <> help "Print the oldest stretches that need a summary, and the level of each.")
-        <*> switch (long "resolution" <> help "Print the recent episodes whole, and the older ones as their summaries.")
+        <$> optional
+          ( flag' True (long "todo" <> help "Print the oldest stretches that need a summary, and the level of each.")
+              <|> flag' False (long "resolution" <> help "Print the recent episodes whole, and the older ones as their summaries.")
+          )
         <*> option (atLeast 2) (long "size" <> metavar "N" <> value defaultSize <> showDefault <> help "With --todo, the memories that one summary covers.")
         <*> option (atLeast 0) (long "keep" <> metavar "N" <> value defaultKeep <> showDefault <> help "The newest episodes that are shown whole and get no summary yet.")
         <*> optional (option (atLeast 200) (long "budget" <> metavar "CHARS" <> help "With --resolution, show fewer episodes whole until the text fits, or fail."))
@@ -586,7 +594,7 @@ commandParser =
     noteP =
       Note
         <$> optional (strOption (long "cwd" <> metavar "DIR" <> help "The directory whose log gets the note. The default is the current directory."))
-        <*> strOption (long "kind" <> metavar "TEXT" <> value "note" <> showDefault <> help "The kind of the note.")
+        <*> option (via (checkField "kind")) (long "kind" <> metavar "TEXT" <> value "note" <> showDefault <> help "The kind of the note.")
         <*> optional (option (via (checkField "agent")) (long "agent" <> metavar "TEXT" <> help "The agent that writes the note. The default is $AKYUU_AGENT, then agent."))
         <*> optional (option nameReader (long "manifest" <> metavar "NAME" <> help "The ref of the manifest. The default is $AKYUU_TIERS_REF, then policy/tiers."))
         <*> many (option nameReader (long "about-ref" <> metavar "NAME" <> help "The note is about the ref NAME. Repeat for more."))
@@ -595,7 +603,7 @@ commandParser =
       Review
         <$> argument idReader (metavar "ID_A")
         <*> argument idReader (metavar "ID_B")
-        <*> strOption (long "agent" <> metavar "NAME" <> help "The name of the agent that judged the pair.")
+        <*> option (via (checkField "agent")) (long "agent" <> metavar "NAME" <> help "The name of the agent that judged the pair.")
         <*> strOption (long "note" <> metavar "TEXT" <> value "" <> help "A short reason.")
     compareP =
       Compare
@@ -841,13 +849,15 @@ runCommand env c = runExceptT $ case c of
       )
   Context tier extra given cwd budget page -> do
     off <- liftIO (Disabled.isDisabled (Just (Store.storeRoot (envStore env))))
-    if off then pure (ok []) else do
-      manifest <- liftIO (resolveTiersRef given)
-      place <- liftIO (placeFor cwd)
-      r <- ExceptT (either (pure . Left) (\mr -> contextFor env mr (maybe "always" id tier) (Just place) extra) manifest)
-      pure . ok $ case (budget, page) of
-        (Nothing, Nothing) -> tierLinesWithin Nothing r
-        _ -> tierPage (fromMaybe 9500 budget) (fromMaybe 1 page) r
+    if off
+      then pure (ok [])
+      else do
+        manifest <- liftIO (resolveTiersRef given)
+        place <- liftIO (placeFor cwd)
+        r <- ExceptT (either (pure . Left) (\mr -> contextFor env mr (maybe "always" id tier) (Just place) extra) manifest)
+        pure . ok $ case (budget, page) of
+          (Nothing, Nothing) -> tierLinesWithin Nothing r
+          _ -> tierPage (fromMaybe 9500 budget) (fromMaybe 1 page) r
   Note cwd kind agent given about text -> do
     mr <- ExceptT (liftIO (resolveTiersRef given))
     place <- liftIO (placeFor cwd)
@@ -1170,7 +1180,7 @@ main = do
                       Config.Sourced _ Config.Default -> ""
                       setting -> Config.sValue setting
                     Left _ -> ""
-              liftIO (MCP.serveReplica (MCP.defaultMcpConfig {MCP.mcpAgent = configured, MCP.mcpPolicyRef = nameText policy, MCP.mcpTiersRef = nameText tiers, MCP.mcpPlace = Just place, MCP.mcpToolSet = MCP.Replicated}) local)
+              liftIO (MCP.serveReplica (MCP.defaultMcpConfig {MCP.mcpAgent = configured, MCP.mcpPolicyRef = nameText policy, MCP.mcpTiersRef = nameText tiers, MCP.mcpPlace = Just place, MCP.mcpToolSet = MCP.Replicated, MCP.mcpRoot = Just root}) local)
               pure (Output BS.empty True False)
             -- seed makes the store, so it runs before withEnv.
             Seed _ -> do

@@ -54,9 +54,9 @@ where
 import Akyuu.Refs (Name, NameError, mkName)
 import Data.Bifunctor (first)
 import Data.Char (isSpace)
-import Data.List (nub)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 
@@ -118,7 +118,7 @@ parseManifest t = build . concat <$> traverse line (zip [1 ..] (T.lines t))
   where
     build ls =
       Manifest
-        { manTiers = Map.map nub (Map.fromListWith (flip (<>)) [(n, rs) | Tier n rs <- ls]),
+        { manTiers = Map.map nubOrd (Map.fromListWith (flip (<>)) [(n, rs) | Tier n rs <- ls]),
           manAt = [(d, rs) | At d rs <- ls],
           manLog = [(d, r) | Log d r <- ls]
         }
@@ -160,6 +160,15 @@ placeLines m = (length (manAt m), length (manLog m))
 tierRefs :: Text -> Manifest -> Maybe [Name]
 tierRefs n = Map.lookup n . manTiers
 
+-- | Normalise a directory path from a manifest line against the place's home.
+normaliseDir :: Place -> Text -> Text
+normaliseDir p d = T.dropWhileEnd (== '/') (expand d)
+  where
+    home = T.dropWhileEnd (== '/') (placeHome p)
+    expand x = case T.stripPrefix "~" x of
+      Just rest | T.null rest || "/" `T.isPrefixOf` rest -> home <> rest
+      _ -> x
+
 -- | Does a directory that a line names contain the place? The directory
 -- and the place are the same, or the place is below it. @*@ contains all.
 contains :: Place -> Text -> Bool
@@ -167,21 +176,18 @@ contains p d
   | d == "*" = True
   | otherwise = here == dir || (dir <> "/") `T.isPrefixOf` here
   where
-    dir = T.dropWhileEnd (== '/') (expand d)
+    dir = normaliseDir p d
     here = T.dropWhileEnd (== '/') (placeDir p)
-    expand x = case T.stripPrefix "~" x of
-      Just rest | T.null rest || "/" `T.isPrefixOf` rest -> placeHome p <> rest
-      _ -> x
 
 -- | The refs of the @at@ lines that contain the place, in the order of the
 -- manifest, with a ref once.
 placeRefs :: Place -> Manifest -> [Name]
-placeRefs p m = nub (concat [rs | (d, rs) <- manAt m, contains p d])
+placeRefs p m = nubOrd (concat [rs | (d, rs) <- manAt m, contains p d])
 
 -- | The refs that the @log@ lines name, each once, in the order of the
 -- manifest.
 logRefs :: Manifest -> [Name]
-logRefs = nub . map snd . manLog
+logRefs = nubOrd . map snd . manLog
 
 -- | The ref of the @log@ line that contains the place and names the longest
 -- directory. 'Nothing' if no line contains it.
@@ -190,4 +196,12 @@ placeLog p m = case [(specific d, r) | (d, r) <- manLog m, contains p d] of
   [] -> Nothing
   xs -> Just (snd (foldl1 (\a b -> if fst b >= fst a then b else a) xs))
   where
-    specific d = if d == "*" then 0 else T.length d + 1 :: Int
+    specific d = if d == "*" then 0 else T.length (normaliseDir p d) + 1 :: Int
+
+nubOrd :: (Ord a) => [a] -> [a]
+nubOrd = go Set.empty
+  where
+    go _ [] = []
+    go seen (x : xs)
+      | x `Set.member` seen = go seen xs
+      | otherwise = x : go (Set.insert x seen) xs

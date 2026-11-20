@@ -24,7 +24,7 @@ import Akyuu.Sync.Topics (LocalReplica, TopicError (InvalidInput), TopicHead (he
 import Akyuu.Sync.Topics qualified as Topics
 import Akyuu.Sync.Types (EventId (EventId), Resource (RefResource))
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
-import Control.Exception (displayException)
+import Control.Exception (displayException, onException)
 import Control.Monad (unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, throwE)
@@ -100,32 +100,36 @@ checkQuery text limit = do
 
 queryIndex :: Map (Text, Text) Text -> Text -> IO (Either TopicError [(Text, Text, Double)])
 queryIndex rows fts = modifyMVar sharedIndex $ \current -> do
-  outcome <- tryAs (\(err :: SQLError) -> Topics.TextIndexFailed (T.pack (displayException err))) $ do
-    state <- case current of
-      Just existing -> pure existing
-      Nothing -> do
-        db <- open ":memory:"
-        execute_ db "CREATE VIRTUAL TABLE heads USING fts5(topic UNINDEXED,event UNINDEXED,body,tokenize='porter unicode61')"
-        pure (IndexState db 1 Map.empty)
-    let db = indexConnection state
-        indexed = indexRows state
-        kept = Map.restrictKeys indexed (Map.keysSet rows)
-        gone = Map.elems (Map.withoutKeys indexed (Map.keysSet rows))
-        missing = Map.toAscList (Map.withoutKeys rows (Map.keysSet indexed))
-        numbered = zip [indexNextRow state ..] missing
-        nextRow = indexNextRow state + fromIntegral (length missing)
-        updated = kept <> Map.fromList [(key, rowId) | (rowId, (key, _)) <- numbered]
-    unless (null gone && null numbered) $
-      withTransaction db $ do
-        executeMany db "DELETE FROM heads WHERE rowid = ?" (map Only gone)
-        executeMany db "INSERT INTO heads(rowid,topic,event,body) VALUES (?,?,?,?)" [(rowId, topic, event, body) | (rowId, ((topic, event), body)) <- numbered]
-    hits <- query db "SELECT topic,event,bm25(heads) FROM heads WHERE heads MATCH ? ORDER BY bm25(heads),topic,event" (Only fts)
-    pure (IndexState db nextRow updated, hits)
-  case outcome of
-    Right (next, hits) -> pure (Just next, Right hits)
-    Left err -> do
-      maybe (pure ()) (ignoreIO . close . indexConnection) current
-      pure (Nothing, Left err)
+  opened <- case current of
+    Just existing -> pure (Right existing)
+    Nothing -> tryAs (\(err :: SQLError) -> Topics.TextIndexFailed (T.pack (displayException err))) $ do
+      db <- open ":memory:"
+      execute_ db "CREATE VIRTUAL TABLE heads USING fts5(topic UNINDEXED,event UNINDEXED,body,tokenize='porter unicode61')"
+        `onException` ignoreIO (close db)
+      pure (IndexState db 1 Map.empty)
+  case opened of
+    Left err -> pure (Nothing, Left err)
+    Right state -> do
+      let db = indexConnection state
+      outcome <- tryAs (\(err :: SQLError) -> Topics.TextIndexFailed (T.pack (displayException err))) $ do
+        let indexed = indexRows state
+            kept = Map.restrictKeys indexed (Map.keysSet rows)
+            gone = Map.elems (Map.withoutKeys indexed (Map.keysSet rows))
+            missing = Map.toAscList (Map.withoutKeys rows (Map.keysSet indexed))
+            numbered = zip [indexNextRow state ..] missing
+            nextRow = indexNextRow state + fromIntegral (length missing)
+            updated = kept <> Map.fromList [(key, rowId) | (rowId, (key, _)) <- numbered]
+        unless (null gone && null numbered) $
+          withTransaction db $ do
+            executeMany db "DELETE FROM heads WHERE rowid = ?" (map Only gone)
+            executeMany db "INSERT INTO heads(rowid,topic,event,body) VALUES (?,?,?,?)" [(rowId, topic, event, body) | (rowId, ((topic, event), body)) <- numbered]
+        hits <- query db "SELECT topic,event,bm25(heads) FROM heads WHERE heads MATCH ? ORDER BY bm25(heads),topic,event" (Only fts)
+        pure (IndexState db nextRow updated, hits)
+      case outcome of
+        Right (next, hits) -> pure (Just next, Right hits)
+        Left err -> do
+          ignoreIO (close db)
+          pure (Nothing, Left err)
 
 eventText :: EventId -> Text
 eventText (EventId digest) = Id.render digest

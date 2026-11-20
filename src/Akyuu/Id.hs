@@ -1,6 +1,3 @@
-{-# LANGUAGE ImportQualifiedPost #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module Akyuu.Id
   ( IdParseError (..),
     Id,
@@ -26,7 +23,6 @@ import Data.ByteString.Short qualified as SBS
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding (decodeUtf8)
 import Data.Text.Encoding qualified as TE
 
 -- | The identity of a stored object. An 'Id' is the SHA-256 digest of the
@@ -94,7 +90,7 @@ verify expected bytes = hashBytes bytes == expected
 -- The hex digits are lower case. 'parse' reverses this function.
 -- Use it for file names, headers and CLI output.
 render :: Id -> Text
-render = ("sha256-" <>) . decodeUtf8 . B16.encode . toBytes
+render = ("sha256-" <>) . TE.decodeUtf8 . B16.encode . toBytes
 
 -- | Read an 'Id' from text.
 --

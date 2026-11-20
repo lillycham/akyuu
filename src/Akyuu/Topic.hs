@@ -51,6 +51,7 @@ import Akyuu.Refs (Name, nameText)
 import Akyuu.Related (Related (relName, relReason), reasonText)
 import Data.Char (isDigit, isHexDigit, isSpace, toLower)
 import Data.List (sortOn)
+import Data.Maybe (fromMaybe)
 import Data.Ord (Down (Down))
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -92,11 +93,11 @@ versionToken = T.take 12 . T.drop (T.length "sha256-") . Id.render
 -- the @sha256-@ prefix are accepted.
 tokenPrefix :: Text -> Either Text Text
 tokenPrefix raw
-  | T.length t >= 8 && T.all isHexDigit t = Right ("sha256-" <> T.map toLower t)
+  | T.length t >= 8 && T.length t <= 64 && T.all isHexDigit t = Right ("sha256-" <> T.map toLower t)
   | otherwise = Left "The version must be 8 or more hex digits, as recall shows it. Call recall with the topic to get it."
   where
     s = T.strip raw
-    t = maybe s id (T.stripPrefix "sha256-" s)
+    t = fromMaybe s (T.stripPrefix "sha256-" s)
 
 -- Near topics and names ------------------------------------------------
 
@@ -116,7 +117,7 @@ closeTopics new topics =
 -- ('Akyuu.Fuzzy.editDistance'): a typo, a swapped letter, a missing part.
 suggestNames :: Name -> [Name] -> [Name]
 suggestNames wanted names =
-  take 3 (map snd (sortOn fst [(d, n) | n <- names, let d = editDistance (nameText wanted) (nameText n), d > 0, d <= limit]))
+  take 3 (map snd (sortOn id [(d, n) | n <- names, let d = editDistance (nameText wanted) (nameText n), d > 0, d <= limit]))
   where
     limit = max 2 (T.length (nameText wanted) `div` 4)
 
@@ -212,7 +213,7 @@ changedLines :: [Edit] -> Text -> [Text]
 changedLines edits body =
   take 10 (nubOrdered [l | l <- T.lines body, any (`T.isInfixOf` l) tos])
   where
-    tos = [t | Replace _ t <- edits, not (T.null (T.strip t))]
+    tos = [line | Replace _ t <- edits, line <- T.lines t, not (T.null (T.strip line))]
     nubOrdered = foldr (\x acc -> x : filter (/= x) acc) []
 
 versionLine :: Id -> Text

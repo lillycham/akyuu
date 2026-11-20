@@ -56,7 +56,6 @@ runGit end watched args input limit = do
     unless descriptors (ioError (userError "Descriptor enumeration is unavailable."))
     bracket (openBinaryTempFile tmp "akyuu-git-status") (\(path, h) -> ignoreIO (hClose h) >> ignoreIO (removeFile path)) $ \(status, h) -> do
       hClose h
-      removeFile status
       inherited <- getEnvironment
       let environment =
             [(key, value) | (key, value) <- inherited, not ("GIT_" `prefix` key), key `notElem` ["BASH_ENV", "ENV", "LC_ALL"]]
@@ -99,7 +98,7 @@ runGit end watched args input limit = do
       diagnostics <- newEmptyMVar
       errors <- forkIO (tryWith (const GitProcessIO) (drain herr 16384 False) >>= putMVar diagnostics . either (const BS.empty) id)
       let stop = do
-            (forM_ pid (\group -> ignoreIO (signalProcessGroup sigTERM group)) >> threadDelay 20000)
+            (forM_ pid (\group -> ignoreIO (signalProcessGroup sigTERM group)) >> void (timeout 20000 (waitForProcess ph)))
               `finally` (forM_ pid (\group -> ignoreIO (signalProcessGroup sigKILL group)) >> void (timeout 2000000 (waitForProcess ph)))
           clean = do
             forM_ [writer, reader, errors] killThread

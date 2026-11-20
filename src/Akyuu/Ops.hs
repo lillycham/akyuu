@@ -147,7 +147,7 @@ import Control.Monad.Trans.Except (ExceptT (ExceptT), except, runExceptT, throwE
 import Data.Bifunctor (bimap, first)
 import Data.Char (isDigit, isHexDigit)
 import Data.Either (partitionEithers)
-import Data.List (nub, sort, sortOn)
+import Data.List (sort, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Set (Set)
@@ -224,9 +224,6 @@ data NewMemory = NewMemory
 -- The value must not be empty, must have one line, and must have no white
 -- space at either end. 'Akyuu.Memory.renderMemory' needs this, and does not
 -- check it. A line feed in a kind would write a second header line.
---
--- The check is here, at the edge of the program, and not in "Akyuu.Memory".
--- The smart constructor for 'Memory' is still an open decision.
 checkField :: Text -> Text -> Either AkyuuError Text
 checkField header v
   | validField v = Right v
@@ -309,8 +306,8 @@ missing env i = do
   case t of
     Nothing -> throwE (StoreFailed (NotFound i))
     Just tomb -> do
-      snap <- liftIO (GC.snapshot (envCache env) (envStore env))
-      let successors = either (const Set.empty) (Query.resolve i . fst) snap
+      snap <- liftIO (GC.graphSnapshot (envCache env) (envStore env))
+      let successors = either (const Set.empty) (Query.resolve i) snap
       throwE (Pruned i tomb successors)
 
 -- | Read a memory, and check its hash ('Akyuu.Store.getVerified').
@@ -394,7 +391,8 @@ linkable env n = forM_ (Set.toAscList (newAboutRefs n)) $ \r -> do
   there <- liftIO (readRef env r)
   case there of
     Right _ -> pure ()
-    Left _ -> throwE (BadInput ("The ref " <> Refs.nameText r <> " does not exist. An about-ref link names a ref that exists."))
+    Left (RefFailed (Refs.NoSuchRef _)) -> throwE (BadInput ("The ref " <> Refs.nameText r <> " does not exist. An about-ref link names a ref that exists."))
+    Left e -> throwE e
 
 -- | Read a ref.
 readRef :: Env -> Name -> IO (Either AkyuuError Ref)
@@ -491,6 +489,8 @@ parseIdSpec :: Text -> Either AkyuuError IdSpec
 parseIdSpec t = case Id.parse t of
   Right i -> Right (Full i)
   Left _
+    | T.length digits == 64 && T.all isHexDigit digits ->
+        either (const (Left (BadIdSpec t))) (Right . Full) (Id.parse ("sha256-" <> digits))
     | T.length digits >= minPrefix && T.length digits < 64 && T.all isHexDigit digits ->
         Right (Prefix ("sha256-" <> digits))
     | otherwise -> Left (BadIdSpec t)
@@ -682,7 +682,7 @@ evalSearch env setRef k = runExceptT $ do
   ref <- ExceptT (readRef env setRef)
   m <- ExceptT (getMemory env (current ref))
   held <- ExceptT (listRefValues env)
-  let names = Map.fromListWith (<>) [(i, [Refs.nameText n]) | (n, i) <- held]
+  let names = Map.fromListWith (flip (<>)) [(i, [Refs.nameText n]) | (n, i) <- held]
       opts = Query.defaultSearchOptions {Query.searchLimit = 5 * k}
       self = current ref
   forM (SearchEval.parseCases (memBody m)) $ \c -> do
@@ -739,19 +739,21 @@ dryRunGC env p = runExceptT (gc (GC.dryRun (envCache env) (envStore env) (envRef
 runGC :: Env -> Policy -> IO (Either AkyuuError RunReport)
 runGC env p = runExceptT $ do
   r <- gc (GC.collect (envCache env) (envStore env) (envRefs env) p Set.empty)
-  -- A review of a memory that is gone has no use. A failure here is not a
-  -- failure of the run: the files stay and the next run tries again.
-  present <- liftIO (Store.list (envStore env))
-  _ <- liftIO (either (const (pure (Right []))) (Review.prune (envStore env) . Set.fromList) present)
+  -- A review of a memory that is gone has no use. Hold the mutation lock so
+  -- a concurrent writer cannot add and review a memory between Store.list and
+  -- Review.prune. A failure here is not a failure of the run: the files stay
+  -- and the next run tries again.
+  _ <-
+    liftIO $
+      withMutation (Store.storeRoot (envStore env)) () (const ()) $ \_ -> do
+        present <- Store.list (envStore env)
+        either (const (pure (Right ()))) (fmap (const (Right ())) . Review.prune (envStore env) . Set.fromList) present
   pure r
 
 -- | Throw the cache away and read the whole store again.
 reindexCache :: Env -> IO (Either AkyuuError SyncReport)
 reindexCache env = runExceptT (cache (Cache.reindex (envCache env) (envStore env)))
 
--- Verify ---------------------------------------------------------------
-
--- | What 'verifyStore' found. Each list is sorted.
 -- | Write the first memories of a store, if they are not there: the policy
 -- under its ref and the manifest under its ref. A ref that exists is kept as
 -- it is. Returns one line for each ref: what was done.
@@ -762,9 +764,10 @@ initStore env policyRef manifestRef = runExceptT $ do
         there <- liftIO (readRef env n)
         case there of
           Right _ -> pure ("kept " <> Refs.nameText n <> " (it exists)")
-          Left _ -> do
+          Left (RefFailed (Refs.NoSuchRef _)) -> do
             i <- ExceptT (addUnderRef env n NewMemory {newKind = kind, newAgent = "akyuu", newEdges = Set.empty, newBody = body, newAboutRefs = Set.empty})
             pure ("made " <> Refs.nameText n <> " " <> Id.render i)
+          Left e -> throwE e
   a <- one policyRef Init.defaultPolicy "instruction"
   b <- one manifestRef (Init.defaultManifest (Refs.nameText policyRef) (Refs.nameText logRef)) "instruction"
   pure [a, b]
@@ -816,13 +819,14 @@ statusOf env root manifestRef policyRef = runExceptT $ do
   manifest <- liftIO $ do
     r <- readRef env manifestRef
     case r of
-      Left _ -> pure (Left "no such ref: context has no tiers.")
+      Left (RefFailed (Refs.NoSuchRef _)) -> pure (Left "no such ref: context has no tiers.")
+      Left e -> pure (Left (describe e))
       Right ref -> do
         m <- getMemory env (current ref)
         pure $ case m of
           Left e -> Left (describe e)
           Right mem -> case parseManifest (memBody mem) of
-            Left e -> Left (T.pack (show e))
+            Left e -> Left (describeTierError e)
             Right mf -> Right (tierNames mf, placeLines mf)
   let policyThere = policyRef `elem` map fst rs
   cfg <- ExceptT (first (BadConfig . Config.describeConfigError) <$> Config.loadConfig)
@@ -848,6 +852,9 @@ statusOf env root manifestRef policyRef = runExceptT $ do
         stConfig = (Config.cfgFile cfg, length (Config.cfgNotes cfg))
       }
 
+-- Verify ---------------------------------------------------------------
+
+-- | What 'verifyStore' found. Each list is sorted.
 data VerifyReport = VerifyReport
   { -- | How many objects the store has.
     checkedObjects :: Int,
@@ -953,10 +960,10 @@ verifyStore env = runExceptT $ do
 checkStore :: Env -> CheckOptions -> IO (Either AkyuuError [Finding])
 checkStore env o = runExceptT $ do
   let s = envStore env
-  (g, _) <- gc (GC.snapshot (envCache env) s)
+  g <- gc (GC.graphSnapshot (envCache env) s)
   roots <- gc (GC.readRoots GC.defaultPolicy (envRefs env) s)
   judged <- either (const []) (map fst) <$> liftIO (Review.listReviews s)
-  ms <- liftIO (traverse (\i -> fmap ((,) i) . either (const Nothing) Just <$> Store.get s i) (Set.toAscList (Graph.nodes g)))
+  ms <- liftIO (traverse (\i -> fmap ((,) i) . either (const Nothing) Just <$> Store.get s i) (Set.toAscList (Graph.heads g)))
   values <- ExceptT (listRefValues env)
   let read' = catMaybes ms
       bodies = Map.fromList [(i, memBody m) | (i, m) <- read']
@@ -1069,17 +1076,18 @@ contextFor env manifestRef tier place extra = do
       -- No manifest yet (a new store): the extra refs, and a hint.
       all' <- ExceptT (listRefValues env)
       let held = Map.fromList all'
-      entries <- forM extra $ \n -> case Map.lookup n held of
+          wanted = nubOrd extra
+      entries <- forM wanted $ \n -> case Map.lookup n held of
         Nothing -> pure (Absent n)
         Just i -> Present n i <$> ExceptT (getMemory env i)
-      pure ContextReport {ctxTier = tier, ctxEntries = NoManifest manifestRef : entries, ctxOthers = [n | (n, _) <- all', n `notElem` extra]}
-    _ -> contextWithManifest env manifestRef tier place extra
+      pure ContextReport {ctxTier = tier, ctxEntries = NoManifest manifestRef : entries, ctxOthers = [n | (n, _) <- all', n `notElem` wanted]}
+    Left e -> pure (Left e)
+    Right mref -> contextWithManifest env manifestRef mref tier place extra
 
-contextWithManifest :: Env -> Name -> Text -> Maybe Place -> [Name] -> IO (Either AkyuuError ContextReport)
-contextWithManifest env manifestRef tier place extra = runExceptT $ do
-  mref <- ExceptT (readRef env manifestRef)
+contextWithManifest :: Env -> Name -> Ref -> Text -> Maybe Place -> [Name] -> IO (Either AkyuuError ContextReport)
+contextWithManifest env manifestRef mref tier place extra = runExceptT $ do
   m <- ExceptT (getMemory env (current mref))
-  manifest <- either (throwE . BadInput . manifestError) pure (parseManifest (memBody m))
+  manifest <- either (throwE . BadInput . describeTierError) pure (parseManifest (memBody m))
   names <- case tierRefs tier manifest of
     Just rs -> pure rs
     Nothing ->
@@ -1097,16 +1105,20 @@ contextWithManifest env manifestRef tier place extra = runExceptT $ do
   pure ContextReport {ctxTier = tier, ctxEntries = entries, ctxOthers = [n | (n, _) <- all', n `notElem` wanted, n /= manifestRef]}
   where
     quoted t = "'" <> t <> "'"
-    nubOrd = go Set.empty
-      where
-        go _ [] = []
-        go seen (x : xs)
-          | x `Set.member` seen = go seen xs
-          | otherwise = x : go (Set.insert x seen) xs
-    manifestError e = case e of
-      NoColon n l -> "The manifest has no ':' on line " <> T.pack (show n) <> ": " <> quoted l <> "."
-      BadTierName n l -> "The manifest has a bad tier name on line " <> T.pack (show n) <> ": " <> quoted l <> "."
-      BadTierRef n r _ -> "The manifest has a bad ref name on line " <> T.pack (show n) <> ": " <> quoted r <> "."
+
+describeTierError :: TierError -> Text
+describeTierError e = case e of
+  NoColon n l -> "The manifest has no ':' on line " <> T.pack (show n) <> ": '" <> l <> "'."
+  BadTierName n l -> "The manifest has a bad tier name on line " <> T.pack (show n) <> ": '" <> l <> "'."
+  BadTierRef n r _ -> "The manifest has a bad ref name on line " <> T.pack (show n) <> ": '" <> r <> "'."
+
+nubOrd :: (Ord a) => [a] -> [a]
+nubOrd = go Set.empty
+  where
+    go _ [] = []
+    go seen (x : xs)
+      | x `Set.member` seen = go seen xs
+      | otherwise = x : go (Set.insert x seen) xs
 
 -- Episodes -------------------------------------------------------------
 
@@ -1117,7 +1129,7 @@ noteEpisode :: Env -> Name -> Place -> NewMemory -> IO (Either AkyuuError (Name,
 noteEpisode env manifestRef place new = runExceptT $ do
   mref <- ExceptT (readRef env manifestRef)
   m <- ExceptT (getMemory env (current mref))
-  manifest <- either (throwE . BadInput . manifestText) pure (parseManifest (memBody m))
+  manifest <- either (throwE . BadInput . describeTierError) pure (parseManifest (memBody m))
   logRef <- case placeLog place manifest of
     Just r -> pure r
     Nothing ->
@@ -1125,11 +1137,6 @@ noteEpisode env manifestRef place new = runExceptT $ do
         "The manifest has no log line for this directory. Add a line such as 'log *: me/log' to the memory of the ref " <> Refs.nameText manifestRef <> "."
   i <- ExceptT (appendEpisode env logRef new)
   pure (logRef, i)
-  where
-    manifestText e = case e of
-      NoColon n l -> "The manifest has no ':' on line " <> T.pack (show n) <> ": '" <> l <> "'."
-      BadTierName n l -> "The manifest has a bad name on line " <> T.pack (show n) <> ": '" <> l <> "'."
-      BadTierRef n r _ -> "The manifest has a bad ref name on line " <> T.pack (show n) <> ": '" <> r <> "'."
 
 -- | Append an episode to the log that a ref names ('Akyuu.Episode.append').
 -- A ref that does not exist starts a log. The new memory gets a @follows@
@@ -1191,12 +1198,12 @@ readLog env n limit = runExceptT $ do
 -- other than absence are errors.
 readLevels :: Env -> Name -> IO (Either AkyuuError [Levels.Chain])
 readLevels env n = runExceptT $ do
-  base <- chainOf n
+  ref0 <- ExceptT (readRef env n)
+  base <- walkRef ref0
   rest <- above 1
   pure (base : rest)
   where
-    chainOf r = do
-      ref <- ExceptT (readRef env r)
+    walkRef ref = do
       w <- liftIO (Episode.walk (envStore env) maxBound (current ref))
       case Episode.walkEnd w of
         Episode.Complete -> pure (reverse (Episode.walkEntries w))
@@ -1209,7 +1216,7 @@ readLevels env n = runExceptT $ do
       case there of
         Left (RefFailed (Refs.NoSuchRef _)) -> pure []
         Left e -> throwE e
-        Right _ -> (:) <$> chainOf r <*> above (k + 1)
+        Right ref -> (:) <$> walkRef ref <*> above (k + 1)
 
 -- | The ref of a level of a log ('Akyuu.Levels.levelRef').
 levelName :: Name -> Int -> ExceptT AkyuuError IO Name
@@ -1325,9 +1332,8 @@ relatedTopics env manifestRef cfg leaveOut self = either (const []) id <$> runEx
       let held = [h | Right h@(n, _, m) <- mems, not (Topic.isLogTopic logs n m)]
           holders = Map.fromListWith (<>) [(i, Set.singleton n) | (n, i, _) <- held]
       aboutRefs <- ExceptT (aboutRefLinks env)
-      snap <- liftIO (GC.snapshot (envCache env) (envStore env))
-      let graph = either (const Nothing) (Just . fst) snap
-          -- The topics that an edge reaches: the target, or what replaced it.
+      graph <- either (const Nothing) Just <$> liftIO (Cache.loadGraph (envCache env))
+      let -- The topics that an edge reaches: the target, or what replaced it.
           reached (Edge k t)
             | k `elem` [About, DerivedFrom, Graph.Refines] = Set.unions [Map.findWithDefault Set.empty c holders | c <- Set.toList (maybe (Set.singleton t) (Query.resolve t) graph)]
             | otherwise = Set.empty
@@ -1359,13 +1365,12 @@ chunkVectors env ids = do
 -- is an entry with no topic.
 recallQuery :: Env -> Int -> Text -> IO (Either AkyuuError [Entry])
 recallQuery env limit q = runExceptT $ do
-  r <- ExceptT (searchMemories env Query.defaultSearchOptions {Query.searchLimit = limit} q)
-  snap <- liftIO (GC.snapshot (envCache env) (envStore env))
-  let graph = either (const Nothing) (Just . fst) snap
-      currentOf m
+  r <- ExceptT (searchMemories env Query.defaultSearchOptions {Query.searchLimit = limit, Query.searchHops = 0} q)
+  graph <- either (const Nothing) Just <$> liftIO (Cache.loadGraph (envCache env))
+  let currentOf m
         | Set.null (Query.matchSupersededBy m) = [Query.matchId m]
         | otherwise = maybe [] (Set.toAscList . Query.resolve (Query.matchId m)) graph
-      ids = nub (concatMap currentOf (Query.matches r))
+      ids = nubOrd (concatMap currentOf (Query.matches r))
   heads <- ExceptT (listRefValues env)
   entries <- forM (take limit ids) $ \i -> do
     m <- ExceptT (getMemory env i)

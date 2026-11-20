@@ -123,22 +123,26 @@ data Run = Run
 -- summary: a reader sees them as they are. One more level is offered when
 -- the top level has @size@ summaries.
 todo :: Int -> Int -> [Chain] -> [Run]
-todo size keep chains =
-  concat
-    [ map (run k) (chunks (candidates k below above))
-    | (k, below, above) <- zip3 [1 ..] chains (drop 1 chains <> [[]])
-    ]
+todo size keep chains
+  | size <= 0 = []
+  | otherwise =
+      concat
+        [ map (run k) (chunks (candidates k below above))
+        | (k, below, above) <- zip3 [1 ..] chains (drop 1 chains <> [[]])
+        ]
   where
+    under = episodesUnder chains
     candidates k below above =
       let open = uncovered above below
        in if k == 1 then take (length open - keep) open else open
-    chunks xs
-      | length xs >= size = take size xs : chunks (drop size xs)
-      | otherwise = []
+    chunks xs = case splitAt size xs of
+      (chunk, rest)
+        | length chunk == size -> chunk : chunks rest
+        | otherwise -> []
     -- The span is the time of the episodes under the run, also for a run of
     -- summaries, which were written later.
     run k xs =
-      let (from, to) = timeSpan (map snd xs) (concatMap (episodesUnder chains . fst) xs)
+      let (from, to) = timeSpan (map snd xs) (concatMap (under . fst) xs)
        in Run
             { runLevel = k,
               runMemories = xs,
@@ -234,10 +238,13 @@ resolution whole keep chains@(episodes : _) =
         ]
     memories :: Map Id Memory
     memories = Map.fromList (concat chains)
-    top i = case Map.lookup i coverOf of
-      Just (k, s) -> Just (fromMaybe (k, s) (top s))
-      Nothing -> Nothing
-    older (i, m) = case top i of
+    episodeIds = Set.fromList (map fst episodes)
+    top seen i
+      | i `Set.member` seen = Nothing
+      | otherwise = case Map.lookup i coverOf of
+          Just (k, s) -> Just (fromMaybe (k, s) (top (Set.insert i seen) s))
+          Nothing -> Nothing
+    older (i, m) = case top Set.empty i of
       Nothing -> Left (i, m)
       Just (k, s) -> Right (k, s)
     dedupe (Right a : rest@(Right b : _)) | a == b = dedupe rest
@@ -246,7 +253,7 @@ resolution whole keep chains@(episodes : _) =
     item (Left (i, m)) = if whole then Episode i m else Brief i m
     item (Right (k, s)) =
       let m = memories Map.! s
-          eps = episodesUnder chains s
+          eps = episodesUnderIn memories episodeIds s
           (from, to) = timeSpan [m] eps
        in Summary k s m (length eps) from to
 
@@ -264,15 +271,21 @@ timeSpan own eps = (minimum ts, maximum ts)
 -- are the levels of one log, from level 0.
 episodesUnder :: [Chain] -> Id -> [Memory]
 episodesUnder [] = const []
-episodesUnder chains@(episodes : _) = go
+episodesUnder chains@(episodes : _) = episodesUnderIn memories episodeIds
   where
     memories = Map.fromList (concat chains)
     episodeIds = Set.fromList (map fst episodes)
-    go s = case Map.lookup s memories of
-      Nothing -> []
-      Just m
-        | s `Set.member` episodeIds -> [m]
-        | otherwise -> concatMap go (sources m)
+
+episodesUnderIn :: Map Id Memory -> Set.Set Id -> Id -> [Memory]
+episodesUnderIn memories episodeIds = go Set.empty
+  where
+    go seen s
+      | s `Set.member` seen = []
+      | otherwise = case Map.lookup s memories of
+          Nothing -> []
+          Just m
+            | s `Set.member` episodeIds -> [m]
+            | otherwise -> concatMap (go (Set.insert s seen)) (sources m)
 
 -- | The resolution that fits a budget of characters, with a function that
 -- renders it. First every episode is whole. If that is too long, an older

@@ -185,18 +185,35 @@ relatedTo :: Config -> Stats -> Set Name -> Name -> [Topic] -> [Related]
 relatedTo cfg stats leaveOut self topics = case find ((== self) . rtName) topics of
   Nothing -> []
   Just me ->
-    take relatedLimit . sortOn rankKey $
-      mapMaybe (candidate (rtVector me)) (filter shown topics)
+    let names = Set.fromList (map rtName topics)
+        links = Map.fromList [(rtName t, Set.delete (rtName t) (rtLinks t) `Set.intersection` names) | t <- topics]
+        selfMentions = Set.filter (\n -> n /= self && mentions n (rtText me)) names
+        selfMentionStrength b =
+          if b `Set.member` selfMentions
+            then 1 / sqrt (fromIntegral (Set.size selfMentions))
+            else 0
+        otherMentionStrength b =
+          if mentions self (rtText b)
+            then
+              let n = Set.size (Set.filter (\k -> k /= rtName b && mentions k (rtText b)) names)
+               in if n > 0 then 1 / sqrt (fromIntegral n) else 0
+            else 0
+        evidenceFor b =
+          Evidence
+            { evLink = max (strength links self (rtName b)) (strength links (rtName b) self),
+              evMention = max (selfMentionStrength (rtName b)) (otherMentionStrength b)
+            }
+        candidate v b
+          | siblings cfg self (rtName b) && not (hasEvidence ev) = Nothing
+          | s > 0 = Just (Related (rtName b) (reason ev) s)
+          | otherwise = Nothing
+          where
+            ev = evidenceFor b
+            s = score stats (cosine <$> v <*> rtVector b) ev
+     in take relatedLimit . sortOn rankKey $
+          mapMaybe (candidate (rtVector me)) (filter shown topics)
   where
     shown t = rtName t /= self && rtName t `Set.notMember` leaveOut
-    g = graph topics
-    candidate v b
-      | siblings cfg self (rtName b) && not (hasEvidence ev) = Nothing
-      | s > 0 = Just (Related (rtName b) (reason ev) s)
-      | otherwise = Nothing
-      where
-        ev = evidenceBetween g self (rtName b)
-        s = score stats (cosine <$> v <*> rtVector b) ev
 
 -- | The best first. Scores that differ only in the last digits, because the
 -- sums ran in another order, are equal: the name decides, as the order of the
@@ -204,36 +221,11 @@ relatedTo cfg stats leaveOut self topics = case find ((== self) . rtName) topics
 rankKey :: Related -> (Down Integer, Name)
 rankKey r = (Down (round (relScore r * 1e9)), relName r)
 
--- | For each topic, the other topics that it points at: through a link, and
--- through a mention of the name. Only the names of topics count.
---
--- Every set is used, because the strength of a pointer depends on the size of
--- its source's set and a candidate is looked up in both directions. So the
--- graph costs one 'mentions' for each pair of topics.
-data Graph = Graph
-  { gLinks :: Map.Map Name (Set Name),
-    gMentions :: Map.Map Name (Set Name)
-  }
-
-graph :: [Topic] -> Graph
-graph topics =
-  Graph
-    { gLinks = Map.fromList [(rtName t, Set.delete (rtName t) (rtLinks t) `Set.intersection` names) | t <- topics],
-      gMentions = Map.fromList [(rtName t, Set.filter (\n -> n /= rtName t && mentions n (rtText t)) names) | t <- topics]
-    }
-  where
-    names = Set.fromList (map rtName topics)
-
 -- | How strongly two topics point at each other, in the stronger direction.
 data Evidence = Evidence
   { evLink :: Double,
     evMention :: Double
   }
-
-evidenceBetween :: Graph -> Name -> Name -> Evidence
-evidenceBetween g a b = Evidence (stronger (gLinks g)) (stronger (gMentions g))
-  where
-    stronger m = max (strength m a b) (strength m b a)
 
 hasEvidence :: Evidence -> Bool
 hasEvidence ev = evLink ev > 0 || evMention ev > 0

@@ -100,7 +100,11 @@ configuredWith pageOf snapshot options = runExceptT $ do
         (True, Just tiers, Just refs) -> refs <> maybe [] (`placeRefs` tiers) (wantedPlace options)
         _ -> []
       wanted = nub ([policyRef options, manifestRef options] <> expanded <> extraRefs options)
-  entries <- traverse (ExceptT . topicViewAt snapshot) wanted
+      cachedView name
+        | name == policyRef options = pure policy
+        | name == manifestRef options = pure manifest
+        | otherwise = ExceptT (topicViewAt snapshot name)
+  entries <- traverse cachedView wanted
   logs <- liftIO (traverse (\view -> do result <- pageOf (viewName view); pure (viewName view, result)) (filter ((== LogTopic) . viewStatus) entries))
   let entryIssues = concatMap (\view -> if viewStatus view == LogTopic then [] else issues "Context" view) (filter (\view -> viewName view `notElem` [policyRef options, manifestRef options]) entries)
       logIssues = ["Context log " <> nameText name <> ": " <> describeError err | (name, Left err) <- logs]

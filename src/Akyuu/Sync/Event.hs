@@ -165,12 +165,15 @@ parseEvent bytes = do
   when (BS.length bytes > maxEventBytes) (Left EventTooLarge)
   body <- maybe (Left (BadEvent "Unknown event protocol header.")) Right (BS.stripPrefix header bytes)
   value <- first (BadEvent . T.pack) (eitherDecodeStrict' body)
-  (event, canonical) <- first (BadEvent . T.pack) (parseEither parseFields value)
+  (store, replica, nonce, parentTexts, action, time) <- first (BadEvent . T.pack) (parseEither parseRawFields value)
+  when (length parentTexts > maxEventParents) (Left TooManyParents)
+  parents <- Set.fromList <$> traverse (fmap EventId . first (BadEvent . T.pack . show) . Id.parse) parentTexts
+  (event, canonical) <- construct store replica nonce parents action time
   unless (canonical == bytes) (Left NonCanonicalEvent)
   pure event
 
-parseFields :: Value -> Parser (Event, ByteString)
-parseFields value = do
+parseRawFields :: Value -> Parser (StoreId, ReplicaId, Nonce, [Text], Action, UTCTime)
+parseRawFields value = do
   fields <- parseJSON value :: Parser [Value]
   case fields of
     [storeValue, replicaValue, nonceValue, parentsValue, actionValue, timeValue] -> do
@@ -178,12 +181,10 @@ parseFields value = do
       replica <- ReplicaId <$> (parseJSON replicaValue >>= checked . parseIdentifier)
       nonce <- Nonce <$> (parseJSON nonceValue >>= checked . parseIdentifier)
       parentTexts <- parseJSON parentsValue :: Parser [Text]
-      when (length parentTexts > maxEventParents) (fail "Too many parents.")
-      parents <- Set.fromList <$> traverse (fmap EventId . checked . first (T.pack . show) . Id.parse) parentTexts
       action <- parseJSON actionValue >>= parseAction
       timeText <- parseJSON timeValue
       time <- maybe (fail "Invalid event time.") pure (parseStamp (T.unpack timeText))
-      either (fail . show) pure (construct store replica nonce parents action time)
+      pure (store, replica, nonce, parentTexts, action, time)
     _ -> fail "An event must have exactly six fields."
 
 checked :: Either Text a -> Parser a

@@ -17,7 +17,7 @@ module Akyuu.Disabled
   )
 where
 
-import Control.Exception (IOException, try)
+import Akyuu.Fs (ifMissing)
 import Data.Char (toLower)
 import System.Directory (doesFileExist, removeFile)
 import System.Environment (lookupEnv)
@@ -45,6 +45,4 @@ isDisabled root = do
 -- error.
 setDisabled :: FilePath -> Bool -> IO ()
 setDisabled root True = writeFile (markerPath root) "akyuu is turned off while this file exists. Run 'akyuu enable' to remove it.\n"
-setDisabled root False = do
-  r <- try (removeFile (markerPath root)) :: IO (Either IOException ())
-  either (const (pure ())) pure r
+setDisabled root False = ifMissing () (removeFile (markerPath root))

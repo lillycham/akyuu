@@ -74,30 +74,41 @@ maxEdits w
 -- number of memories that hold them, the most first. At most @k@ terms are
 -- returned.
 nearTerms :: Int -> Text -> [(Text, Int)] -> [Text]
-nearTerms k w vocab =
-  map fst . take k . sortOn (\(t, (d, c)) -> (d, Down c, t)) $
-    [ (t, (d, c))
-    | (t, c) <- vocab,
-      t /= w,
-      -- A term of another length is far, unless it can be the start of the word.
-      abs (T.length t - T.length w) <= limit || T.length w > T.length t,
-      let d = distance t,
-      d <= limit
-    ]
+nearTerms k w vocab
+  | limit == 0 = []
+  | otherwise =
+      map fst . take k . sortOn (\(t, (d, c)) -> (d, Down c, t)) $
+        [ (t, (d, c))
+        | (t, c) <- vocab,
+          t /= w,
+          let lt = T.length t,
+          -- A term of another length is far, unless it can be the start of the word.
+          abs (lt - lw) <= limit || lw > lt,
+          let d = distance lt t,
+          d <= limit
+        ]
   where
+    lw = T.length w
     limit = maxEdits w
-    distance t = min (minimum [editDistance f t | f <- forms]) (prefixDistance t)
+    distance lt t =
+      let formDists = [editDistance f t | (lf, f) <- forms, abs (lt - lf) <= limit]
+          bestForm = case formDists of
+            [] -> maxBound
+            ds -> minimum ds
+       in min bestForm (prefixDistance lt t)
     -- The index holds stems (porter), so a plural or another ending of the
     -- word is cut too: "emcas" is one edit from the stem "emac" once the
     -- "s" is gone. Each form must stay at 4 characters or more. The endings
     -- are a rough copy of what the Porter stemmer cuts, not the stemmer.
-    forms = w : [x | suf <- ["ing", "es", "ed", "s", "e", "y"], Just x <- [T.stripSuffix suf w], T.length x >= 4]
+    forms =
+      (lw, w)
+        : [(T.length x, x) | suf <- ["ing", "es", "ed", "s", "e", "y"], Just x <- [T.stripSuffix suf w], T.length x >= 4]
     -- The term may be the stem of the word. Only a term of 5 characters or
     -- more that starts like the word is compared this way: a shorter one
     -- would be near too many long words.
-    prefixDistance t
-      | T.length w > T.length t,
-        T.length t >= 5,
+    prefixDistance lt t
+      | lw > lt,
+        lt >= 5,
         T.take 3 t == T.take 3 w =
-          editDistance (T.take (T.length t) w) t + 1
+          editDistance (T.take lt w) t + 1
       | otherwise = maxBound

@@ -84,8 +84,8 @@ listReviews s = tryWith id $ do
   rs <- forM names $ \n -> case parseName n of
     Nothing -> pure Nothing
     Just p -> do
-      bytes <- ifMissing BS.empty (BS.readFile (reviewedDir s </> n))
-      pure (Just (p, either (const emptyReview) parse (decodeUtf8' bytes)))
+      mbytes <- ifMissing Nothing (Just <$> BS.readFile (reviewedDir s </> n))
+      pure ((\bytes -> (p, either (const emptyReview) parse (decodeUtf8' bytes))) <$> mbytes)
   pure (Map.toAscList (Map.fromList (catMaybes rs)))
 
 -- | Remove the review of each pair that names a memory that is not in the set.

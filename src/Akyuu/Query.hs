@@ -209,7 +209,7 @@ noBoost = Boost {boostNow = Nothing, boostHeld = Set.empty}
 
 -- | Reorder the hits of the text index. This function is pure.
 --
--- Each hit gets the score @1 / (3 + r)@, where @ is its place in the
+-- Each hit gets the score @1 / (3 + r)@, where @r@ is its place in the
 -- text index order (best first), so the text match stays the main signal.
 -- The score is multiplied by 1.3 if a ref holds the memory, and by a factor
 -- from 1.3 (a new memory) down to 1 (an old one) that loses half of its gain
@@ -235,10 +235,15 @@ rankHits b created hits = map snd (sortOn (Down . fst) (zip scores hits))
 searchWith :: Cache -> Tuning -> SearchOptions -> Text -> IO (Either CacheError SearchResult)
 searchWith c t o q = runExceptT $ do
   let n = fetchCount (searchLimit o)
+      semOnly = maybe False semOnly' (tuneSemantic t)
+      semOnly' (Semantic _ only) = only
   (hits, notes) <-
-    if tuneFuzzy t
-      then ExceptT (Cache.searchFuzzy c q n)
-      else (\h -> (h, [])) <$> ExceptT (Cache.search c q n)
+    if semOnly
+      then pure ([], [])
+      else
+        if tuneFuzzy t
+          then ExceptT (Cache.searchFuzzy c q n)
+          else (\h -> (h, [])) <$> ExceptT (Cache.search c q n)
   g <- ExceptT (Cache.loadGraph c)
   created <-
     if tuneBoost t == noBoost || null hits
@@ -249,9 +254,13 @@ searchWith c t o q = runExceptT $ do
     Nothing -> pure (textRanked, 0)
     Just (Semantic ids only) -> do
       let textIds = map hitId textRanked
+          textIdSet = Set.fromList textIds
           order = if only then ids else fuse [textIds, ids]
-          absent = [i | i <- order, i `notElem` textIds]
-      firsts <- if null absent then pure Map.empty else Map.fromList . map (\s -> (Cache.sumId s, Cache.sumFirstLine s)) <$> ExceptT (Cache.summaries c)
+          absent = [i | i <- order, i `Set.notMember` textIdSet]
+      firsts <-
+        if null absent
+          then pure Map.empty
+          else Map.map Cache.sumFirstLine <$> ExceptT (Cache.summariesFor c absent)
       let known = Map.fromList [(hitId h, h) | h <- textRanked]
           make i = case Map.lookup i known of
             Just h -> Just h
@@ -260,7 +269,8 @@ searchWith c t o q = runExceptT $ do
       pure (found, length [h | h <- found, hitId h `Map.notMember` known])
   let ranked = headsFirst g joined
       shown = take (searchLimit o) ranked
-      added = length [h | h <- shown, hitId h `notElem` map hitId hits]
+      hitIdSet = Set.fromList (map hitId hits)
+      added = length [h | h <- shown, hitId h `Set.notMember` hitIdSet]
   pure (searchResult o g shown) {corrections = notes <> [AddedByMeaning added | byMeaning > 0, added > 0]}
 
 -- Neighbours -----------------------------------------------------------

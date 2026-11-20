@@ -86,6 +86,7 @@ module Akyuu.GC
     -- * Inputs from disk
     storedTimes,
     extendGraph,
+    graphSnapshot,
     snapshot,
     recheck,
 
@@ -534,6 +535,10 @@ timesOf s ids = tryIO $ Map.fromList . catMaybes <$> traverse age (toList ids)
 extendGraph :: Store -> Graph -> IO (Either GCError Graph)
 extendGraph s g = runExceptT $ do
   ids <- withExceptT GCStore (ExceptT (Store.list s))
+  ExceptT (extendGraphWith s ids g)
+
+extendGraphWith :: Store -> [Id] -> Graph -> IO (Either GCError Graph)
+extendGraphWith s ids g = runExceptT $ do
   new <- catMaybes <$> traverse (ExceptT . fetch) (filter (`Set.notMember` nodes g) ids)
   pure (g <> foldMap (\(i, m) -> singleton i (Set.toList (memEdges m))) new)
   where
@@ -543,6 +548,12 @@ extendGraph s g = runExceptT $ do
         Left (NotFound _) -> Right Nothing
         Left e -> Left (GCStore e)
         Right m -> Right (Just (i, m))
+
+-- | Read the graph without stating every object file for its modification time.
+graphSnapshot :: Cache -> Store -> IO (Either GCError Graph)
+graphSnapshot c s = runExceptT $ do
+  cached <- withExceptT GCCache (ExceptT (Cache.loadGraph c))
+  ExceptT (extendGraph s cached)
 
 -- | Read the graph and the ages that 'plan' needs. This function writes
 -- nothing: not the store, and not the cache.
@@ -558,8 +569,9 @@ extendGraph s g = runExceptT $ do
 snapshot :: Cache -> Store -> IO (Either GCError (Graph, Map Id UTCTime))
 snapshot c s = runExceptT $ do
   cached <- withExceptT GCCache (ExceptT (Cache.loadGraph c))
-  g <- ExceptT (extendGraph s cached)
-  ages <- ExceptT (storedTimes s)
+  ids <- withExceptT GCStore (ExceptT (Store.list s))
+  g <- ExceptT (extendGraphWith s ids cached)
+  ages <- ExceptT (timesOf s ids)
   pure (g, ages)
 
 -- | Plan again, just before a sweep, with what changed since the snapshot.
@@ -654,12 +666,15 @@ sweep s p t doomed = withGCLock s $ \held -> runExceptT $ do
 -- | A caller may have made its candidate set before another mutation.
 -- Rebuild liveness under the lock, without trusting that earlier plan.
 validateSweep :: Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError (Set Id))
-validateSweep s p t doomed = runExceptT $ do
-  rs <- withExceptT GCRefs (ExceptT (openRefs (storeRoot s)))
-  g <- ExceptT (extendGraph s mempty)
-  ages <- ExceptT (storedTimes s)
-  roots <- ExceptT (readRoots p rs s)
-  pure (doomed `Set.intersection` plan p (Observed t ages) roots g)
+validateSweep s p t doomed
+  | Set.null doomed = pure (Right Set.empty)
+  | otherwise = runExceptT $ do
+      rs <- withExceptT GCRefs (ExceptT (openRefs (storeRoot s)))
+      ids <- withExceptT GCStore (ExceptT (Store.list s))
+      g <- ExceptT (extendGraphWith s ids mempty)
+      ages <- ExceptT (timesOf s ids)
+      roots <- ExceptT (readRoots p rs s)
+      pure (doomed `Set.intersection` plan p (Observed t ages) roots g)
 
 -- | 'sweep' without the lock. The caller holds it.
 sweepUnlocked :: Mutation -> Store -> Policy -> UTCTime -> Set Id -> IO (Either GCError SweepReport)

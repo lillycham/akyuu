@@ -338,13 +338,13 @@ resolution keep levels = do
       select (covered, chosen) item
         | Set.null (Set.intersection (covered <> recent) (itemSources item)) = (covered <> itemSources item, item : chosen)
         | otherwise = (covered, chosen)
-      (_, selected) = foldl select (Set.empty, []) ranked
+      (_, selected) = foldl' select (Set.empty, []) ranked
       owners = Map.fromList [(s, item) | item <- selected, s <- Set.toList (itemSources item)]
       emit (seen, items) (i, memory) = case Map.lookup i owners of
         Nothing -> (seen, LogItem i memory 0 (Set.singleton i) : items)
         Just item | itemId item `Set.member` seen -> (seen, items)
         Just item -> (Set.insert (itemId item) seen, item : items)
-  pure (reverse (snd (foldl emit (Set.empty, []) episodes)))
+  pure (reverse (snd (foldl' emit (Set.empty, []) episodes)))
 
 -- | Deterministic oldest-first batches. Coverage is the union of all summaries
 -- at the next level, even when a view chooses a different disjoint cover.
@@ -359,8 +359,10 @@ todo size keep levels
           eligible = if k == 1 then drop keep below else below
           open = reverse [i | (i, _) <- eligible, i `Set.notMember` covered]
        in map (k,) (chunks open)
-    chunks xs | length xs >= size = take size xs : chunks (drop size xs)
-    chunks _ = []
+    chunks xs = case splitAt size xs of
+      (chunk, rest)
+        | length chunk == size -> chunk : chunks rest
+        | otherwise -> []
 
 entriesJSON :: [(Id, Memory)] -> Value
 entriesJSON entries = itemsJSON [LogItem i memory 0 (Set.singleton i) | (i, memory) <- entries]

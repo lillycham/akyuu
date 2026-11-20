@@ -125,24 +125,29 @@ data WalkEnd
 --
 -- An unreadable memory interrupts the walk without discarding its prefix.
 walk :: Store -> Int -> Id -> IO Walk
-walk st limit = go [] limit
+walk st limit start = go Set.empty [] limit start Nothing
   where
-    go acc k i
+    hasFollows = any ((== Follows) . kind)
+    go seen acc k i prefetched
       | k <= 0 = pure (Walk (reverse acc) (Limited i))
+      | i `Set.member` seen = pure (Walk (reverse acc) Complete)
       | otherwise = do
-          r <- Store.getVerified st i
+          r <- maybe (Store.getVerified st i) pure prefetched
           case r of
             Left e -> pure (Walk (reverse acc) (Interrupted i e))
             Right m -> do
               let es = Set.toAscList (memEdges m)
-              -- An unreadable target is left to the next step, which reports it.
-              target' <- case previous es of
-                Just p -> do
-                  t <- Store.getVerified st p
-                  pure $ case t of
-                    Right tm -> previousChecked es (const (Set.toAscList (memEdges tm)))
-                    Left _ -> Just p
-                Nothing -> pure Nothing
-              case target' of
-                Nothing -> pure (Walk (reverse ((i, m) : acc)) Complete)
-                Just next -> go ((i, m) : acc) (k - 1) next
+                  seen' = Set.insert i seen
+                  acc' = (i, m) : acc
+              case previous es of
+                Nothing -> pure (Walk (reverse acc') Complete)
+                Just p
+                  | hasFollows es -> go seen' acc' (k - 1) p Nothing
+                  | otherwise -> do
+                      t <- Store.getVerified st p
+                      let target' = case t of
+                            Right tm -> previousChecked es (const (Set.toAscList (memEdges tm)))
+                            Left _ -> Just p
+                      case target' of
+                        Nothing -> pure (Walk (reverse acc') Complete)
+                        Just next -> go seen' acc' (k - 1) next (if next == p then Just t else Nothing)

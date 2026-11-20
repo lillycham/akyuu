@@ -20,13 +20,13 @@ module Akyuu.Sync.Git
   )
 where
 
+import Akyuu.Fs (tryWith)
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
-import Akyuu.Memory (renderMemory)
 import Akyuu.Sync.Checkpoint (checkpointObjects)
 import Akyuu.Sync.Event (eventAction, renderEvent)
-import Akyuu.Sync.Process (Deadline, ProcessError (GitFailed), describeProcessError, runGit)
-import Akyuu.Sync.Repository (RepositoryError, Snapshot, readMemory, snapshotCheckpoint, snapshotState, verifyIncoming)
+import Akyuu.Sync.Process (Deadline, ProcessError (GitFailed, GitProcessIO), describeProcessError, runGit)
+import Akyuu.Sync.Repository (RepositoryError, Snapshot, readMemoryBytes, snapshotCheckpoint, snapshotState, verifyIncoming)
 import Akyuu.Sync.State (State, events, storeId)
 import Akyuu.Sync.Topics (TopicError (StorageError), describeError)
 import Akyuu.Sync.Types (Action (RegisterReplica), EventId (EventId), StoreId (StoreId), parseIdentifier, renderIdentifier)
@@ -46,7 +46,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import System.Directory (createDirectory, doesDirectoryExist)
+import System.Directory (createDirectory, doesDirectoryExist, doesFileExist)
+import System.FilePath ((</>))
 
 data Bundle = Bundle {bundleState :: State, bundlePayloads :: Map Id ByteString} deriving (Eq, Show)
 
@@ -61,8 +62,9 @@ git end root args input cap = ExceptT (first (GitCommand (T.pack (case args of c
 prepare :: Deadline -> FilePath -> IO (Either GitError ())
 prepare end path = runExceptT $ do
   exists <- lift (doesDirectoryExist path)
-  unless exists $ do
-    lift (createDirectory path)
+  hasHead <- if exists then lift (doesFileExist (path </> "HEAD")) else pure False
+  unless (exists && hasHead) $ do
+    unless exists (ExceptT (tryWith (const (GitCommand "init" GitProcessIO)) (createDirectory path)))
     _ <- ExceptT (first (GitCommand "init") <$> runGit end Nothing ["init", "--bare", "--quiet", path] "" 16384)
     pure ()
   bare <- git end path ["rev-parse", "--is-bare-repository"] "" 32
@@ -141,9 +143,10 @@ readBundle end root tip = runExceptT $ do
 parseTree :: ByteString -> Either GitError [Entry]
 parseTree bytes = do
   let records = filter (not . BS.null) (BC.split '\0' bytes)
-  when (length records > 100000) (Left (InvalidArchive "The archive has too many entries."))
+  when (length records > 100500) (Left (InvalidArchive "The archive has too many entries."))
   entries <- traverse entry records
   let blobs = concat entries
+  when (length blobs > 100000) (Left (InvalidArchive "The archive has too many entries."))
   unless (sum [toInteger size | Entry _ size _ <- blobs] <= toInteger maxArchiveBytes) (Left (InvalidArchive "The archive exceeds 256 MiB."))
   unless (Set.size (Set.fromList [path | Entry _ _ path <- blobs]) == length blobs) (Left (InvalidArchive "Duplicate archive paths."))
   pure blobs
@@ -185,7 +188,7 @@ bundleAt snapshot = bundleFor snapshot (checkpointObjects (snapshotCheckpoint sn
 -- | The state of a snapshot with only the given payloads.
 bundleFor :: Snapshot -> Set Id -> IO (Either GitError Bundle)
 bundleFor snapshot wanted = runExceptT $ do
-  payloads <- traverse (\i -> (i,) . renderMemory <$> ExceptT (first ArchiveStorage <$> readMemory snapshot i)) (Set.toAscList wanted)
+  payloads <- traverse (\i -> (i,) <$> ExceptT (first ArchiveStorage <$> readMemoryBytes snapshot i)) (Set.toAscList wanted)
   pure (Bundle (snapshotState snapshot) (Map.fromList payloads))
 
 -- | Write a commit for the bundle. Without a base, the tree holds exactly the

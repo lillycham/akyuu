@@ -656,7 +656,14 @@ sourceShowTool =
 -- | The tools that a server offers: those of its tool set, and
 -- 'sourceShowTool' if the config turns it on.
 toolsForConfig :: McpConfig -> [Value]
-toolsForConfig cfg = toolsFor (mcpToolSet cfg) <> [sourceShowTool | Just _ <- [mcpSource cfg]]
+toolsForConfig cfg = toolsFor (mcpToolSet cfg) <> [sourceShowTool | mcpToolSet cfg /= Replicated, Just _ <- [mcpSource cfg]]
+
+-- | Is a key present in the JSON object with a non-null value?
+hasPresent :: K.Key -> Args -> Bool
+hasPresent k args = case KM.lookup k args of
+  Just Null -> False
+  Just _ -> True
+  Nothing -> False
 
 -- | Enforce the selected set at dispatch as well as in tools/list.
 parseToolCallFor :: McpConfig -> Text -> Args -> Either CallError ToolCall
@@ -667,9 +674,9 @@ parseToolCallFor cfg n args
       if mcpToolSet cfg == Ordinary && n == "add" then () <$ refArg args else pure ()
       let args' =
             if ( (mcpToolSet cfg == Ordinary && n `elem` ["add", "supersede"])
-                   || (mcpToolSet cfg == Replicated && n `elem` ["topic_create", "topic_replace", "topic_resolve", "log_append", "log_summarise", "review_set"] && not (KM.member "select" args))
+                   || (mcpToolSet cfg == Replicated && n `elem` ["topic_create", "topic_replace", "topic_resolve", "log_append", "log_summarise", "review_set"] && not (hasPresent "select" args))
                )
-              && not (KM.member "agent" args)
+              && not (hasPresent "agent" args)
               then KM.insert "agent" (String author) args
               else args
       if mcpToolSet cfg == Topic then parseTopicArgs n args else parseArgs n args'
@@ -785,7 +792,7 @@ parseArgs n args = case n of
   "pin_set" -> CallReplica <$> (ResourceWrite <$> versionArg args <*> (SetPin <$> idArg args "id"))
   "pin_clear" -> CallReplica <$> (ResourceWrite <$> versionArg args <*> (ClearPin <$> idArg args "id"))
   "review_state" -> CallReplica . ResourceRead <$> (ReviewResource <$> idArg args "a" <*> idArg args "b")
-  "review_set" -> CallReplica <$> (ResourceWrite <$> versionArg args <*> (SetReview <$> idArg args "a" <*> idArg args "b" <*> (ReviewValue <$> required args "agent" asText "a string" <*> required args "reason" asText "a string")))
+  "review_set" -> CallReplica <$> (ResourceWrite <$> versionArg args <*> (SetReview <$> idArg args "a" <*> idArg args "b" <*> (ReviewValue <$> (required args "agent" asText "a string" >>= check . checkField "agent") <*> required args "reason" asText "a string")))
   "review_clear" -> CallReplica <$> (ResourceWrite <$> versionArg args <*> (ClearReview <$> idArg args "a" <*> idArg args "b"))
   "log_read" -> CallReplica <$> (LogRead <$> refArg args <*> countArg "limit" 100 0)
   "log_append" -> CallReplica <$> (LogAppend <$> refArg args <*> versionArg args <*> memoryArg args plainEdges)
@@ -813,7 +820,7 @@ parseArgs n args = case n of
       Nothing -> Right <$> memoryArg args plainEdges
       Just digest -> do
         unless
-          (all (\(key, _) -> not (KM.member (K.fromText key) args)) memoryProps)
+          (all (\(key, _) -> not (hasPresent (K.fromText key) args)) memoryProps)
           (Left (BadArguments "Give select or new memory fields, not both."))
         pure (Left digest)
     pure (CallReplica (case content of Right new | asLog -> TopicResolveLog ref expected new; _ -> TopicResolve ref expected content))
@@ -921,9 +928,10 @@ parseArgs n args = case n of
     pure (CallSummarise r level ss NewMemory {newKind = k, newAgent = a, newEdges = Set.empty, newBody = b, newAboutRefs = Set.empty})
   "unfold" -> CallUnfold <$> idArg args "id"
   "source_show" -> do
+    let Source.Window defBefore defAfter = Source.defaultWindow
     i <- idArg args "id"
-    before <- optional' args "before" asInt "a whole number" >>= atLeast "before" 0 . fromMaybe 6
-    after <- optional' args "after" asInt "a whole number" >>= atLeast "after" 0 . fromMaybe 2
+    before <- optional' args "before" asInt "a whole number" >>= atLeast "before" 0 . fromMaybe defBefore
+    after <- optional' args "after" asInt "a whole number" >>= atLeast "after" 0 . fromMaybe defAfter
     pure (CallSourceShow i before after)
   "context" -> do
     t <- optional' args "tier" asText "a string"
@@ -1014,7 +1022,7 @@ parseTopicArgs n args = case n of
     x <- required args "text" asText "a string"
     ts <- fromMaybe Set.empty <$> aboutTopicsKey "topics"
     pure (CallNote c Nothing NewMemory {newKind = k, newAgent = "", newEdges = Set.empty, newBody = x, newAboutRefs = ts})
-  "log" -> parseArgs n (if KM.member "full" args then args else KM.insert "full" (Bool True) args)
+  "log" -> parseArgs n (if hasPresent "full" args then args else KM.insert "full" (Bool True) args)
   _ -> parseArgs n args
   where
     topicArg = required args "topic" asText "a string" >>= parseName
@@ -1042,11 +1050,14 @@ minIdDigits = 8
 -- 'minIdDigits' hex digits or more is left as it is, so that the normal check
 -- of the arguments gives the error. The first error stops the call.
 expandIds :: (Monad m) => (Text -> m (Either Text Text)) -> Args -> m (Either Text Args)
-expandIds res args = runExceptT (KM.traverseWithKey one args)
+expandIds = expandIdsWith idListKeys
+
+expandIdsWith :: (Monad m) => [Text] -> (Text -> m (Either Text Text)) -> Args -> m (Either Text Args)
+expandIdsWith listKeys res args = runExceptT (KM.traverseWithKey one args)
   where
     one k v
       | K.toText k `elem` idKeys, String t <- v = String <$> ExceptT (res t)
-      | K.toText k `elem` idListKeys, Array xs <- v = Array <$> traverse each xs
+      | K.toText k `elem` listKeys, Array xs <- v = Array <$> traverse each xs
       | otherwise = pure v
     each (String t) = String <$> ExceptT (res t)
     each x = lift (pure x)
@@ -1067,14 +1078,20 @@ resolvePrefix env t
 -- does not name one memory, the result is 'Left' with the answer, a tool
 -- result with an error. Any other line is returned as it is.
 expandCall :: (Monad m) => (Text -> m (Either Text Text)) -> BS.ByteString -> m (Either Value BS.ByteString)
-expandCall res line = case A.decodeStrict line of
+expandCall = expandCallFor Ordinary
+
+-- | Like 'expandCall', but aware of the active 'ToolSet': in 'Topic' mode,
+-- @about@ holds topic ref names rather than memory IDs.
+expandCallFor :: (Monad m) => ToolSet -> (Text -> m (Either Text Text)) -> BS.ByteString -> m (Either Value BS.ByteString)
+expandCallFor toolSet res line = case A.decodeStrict line of
   Just (Object o)
     | Just (String "tools/call") <- KM.lookup "method" o,
       Just (Object p) <- KM.lookup "params" o,
       Just (Object a) <- KM.lookup "arguments" p,
       -- A notification gets no answer, also not an error: leave it as it is.
       KM.member "id" o -> do
-        r <- expandIds res a
+        let listKeys = if toolSet == Topic then filter (/= "about") idListKeys else idListKeys
+        r <- expandIdsWith listKeys res a
         pure $ case r of
           Left why -> Left (response (fromMaybe Null (KM.lookup "id" o)) (toolResultValue (ToolResult why True)))
           Right a' -> Right (BL.toStrict (A.encode (Object (KM.insert "params" (Object (KM.insert "arguments" (Object a') p)) o))))
@@ -1434,7 +1451,7 @@ clientAgent line = case A.decodeStrict line of
 -- each one. A tool that throws an exception (a bug) gives an error result,
 -- and the server goes on. Logs go to stderr.
 serve :: McpConfig -> Env -> IO ()
-serve cfg env = serveUsing cfg (expandCall (resolvePrefix env)) (\now -> runTool now env)
+serve cfg env = serveUsing cfg (expandCallFor (mcpToolSet cfg) (resolvePrefix env)) (\now -> runTool now env)
 
 serveReplica :: McpConfig -> Topics.LocalReplica -> IO ()
 serveReplica cfg local = serveUsing cfg (pure . Right) (\now -> runReplicaTool now local)

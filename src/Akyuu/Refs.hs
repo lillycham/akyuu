@@ -72,8 +72,7 @@ where
 
 import Akyuu.Fs (atomicWrite, tryWith)
 import Akyuu.Id (Id, IdParseError, parse, render)
-import Akyuu.Mutation (Mutation, checkMutation, withMutation)
-import Control.Concurrent (threadDelay)
+import Akyuu.Mutation (Mutation, checkMutation, withLockFile, withMutation)
 import Control.Exception (IOException)
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
@@ -92,7 +91,6 @@ import System.Directory
     doesFileExist,
     listDirectory,
   )
-import System.FileLock (SharedExclusive (Exclusive), withTryFileLock)
 import System.FilePath (joinPath, takeDirectory, (</>))
 import System.IO.Error
   ( ioeGetErrorType,
@@ -337,16 +335,7 @@ getRef r n = do
 -- returns 'Left' or throws. An 'IOException' from the lock, or from the
 -- action, becomes 'RefIO'.
 withLock :: Refs -> (RefError -> e) -> IO (Either e a) -> IO (Either e a)
-withLock r wrap act = go (100 :: Int)
-  where
-    lock = refsRoot r </> "refs" </> ".lock"
-    go 0 = pure (Left (wrap Locked))
-    go k = do
-      got <- tryWith (wrap . RefIO) (withTryFileLock lock Exclusive (const act))
-      case got of
-        Left e -> pure (Left e)
-        Right Nothing -> threadDelay 10000 >> go (k - 1)
-        Right (Just v) -> pure v
+withLock r wrap = withLockFile (refsRoot r </> "refs" </> ".lock") (wrap Locked) (wrap . RefIO)
 
 -- | Compare the current value of a ref with what the caller 'Expected'.
 -- This function is pure.
@@ -430,9 +419,10 @@ updateRef held rs n ex wrap produce = withLock rs wrap $ do
     -- producer that may fail. Only publication creates parent directories.
     parentConflict dir = do
       file <- doesFileExist dir
-      if file || dir == refsRoot rs </> "refs"
+      let parent = takeDirectory dir
+      if file || dir == refsRoot rs </> "refs" || parent == dir
         then pure file
-        else parentConflict (takeDirectory dir)
+        else parentConflict parent
 
 -- | The names of all the refs.
 --

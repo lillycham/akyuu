@@ -33,7 +33,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding (decodeUtf8, encodeUtf8)
+import Data.Text.Encoding (decodeUtf8, decodeUtf8', encodeUtf8)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, pathIsSymbolicLink, removeFile)
@@ -96,8 +96,9 @@ planMigration root classification = do
         (throwE (SyncInvalid "A legacy review is malformed. Repair it before migration."))
       forM_ reviews $ \((a, b), review) -> do
         raw <- liftIO (BS.readFile (Review.reviewPath store a b))
+        text <- either (const (throwE (SyncInvalid "A legacy review is not valid UTF-8. Repair it before migration."))) pure (decodeUtf8' raw)
         let expectedHeaders = ["agent: " <> reviewAgent review, "reviewed: " <> T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (reviewAt review)), "verdict: distinct"]
-        unless (takeWhile (not . T.null) (T.lines (decodeUtf8 raw)) == expectedHeaders) (throwE (SyncInvalid "A legacy review has invalid headers. Repair it before migration."))
+        unless (takeWhile (not . T.null) (T.lines text) == expectedHeaders) (throwE (SyncInvalid "A legacy review has invalid headers. Repair it before migration."))
       -- Legacy GC keeps a review record after it collects a reviewed memory.
       -- Such a record has no pair left to describe: report it, do not import it.
       let (liveReviews, orphanReviews) = partition (\((a, b), _) -> Map.member a payloads && Map.member b payloads) reviews
@@ -130,7 +131,6 @@ planMigration root classification = do
       refEvents <- fmap concat $ forM values $ \(name, ref) -> do
         let kind = classification Map.! nameText name
             available = reverse (filter (`Map.member` payloads) (current ref : history ref))
-            build [] _ [] = Right []
             build acc previous (i : rest) = do
               event <- make ("topic:" <> encodeUtf8 (nameText name) <> BS.pack [0] <> Id.toBytes i <> encodeUtf8 (T.pack (show (length acc)))) previous (SetTopic name i)
               build (event : acc) [event] rest

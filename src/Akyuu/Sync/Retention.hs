@@ -50,15 +50,10 @@ retained depth checkpoint state memories = closure roots Set.empty
     table = events state
     resources = Set.fromList (map (resourceOf . eventAction) (Map.elems table))
     refs = [resource | resource@(RefResource _) <- Set.toList resources]
-    current = Set.unions [Map.keysSet (resourceHeads state resource) | resource <- refs]
-    generations = ancestry (max 1 depth) current
+    generations = Map.keysSet (generationDistances (max 1 depth) state refs)
     pinRoots = Set.fromList [digest | resource@(PinResource digest) <- Set.toList resources, interpret state resource == PinState True]
     eventRoots ids = Set.fromList [digest | key <- Set.toList ids, Just event <- [Map.lookup key table], digest <- actionPayloads (eventAction event)]
     roots = pinRoots <> pendingObjects checkpoint <> eventRoots (pendingEvents checkpoint <> generations)
-    ancestry :: Int -> Set EventId -> Set EventId
-    ancestry k frontier
-      | k <= 0 = Set.empty
-      | otherwise = frontier <> ancestry (k - 1) (Set.unions [eventParents event | key <- Set.toList frontier, Just event <- [Map.lookup key table]])
     closure pending seen = case Set.minView pending of
       Nothing -> seen
       Just (i, rest)

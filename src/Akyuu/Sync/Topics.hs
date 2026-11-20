@@ -212,11 +212,9 @@ viewAt snapshot name = do
       (kind, digest) <- case eventAction event of
         SetTopic _ value -> pure (TopicKind, value)
         ResolveTopic _ value -> pure (TopicKind, value)
-        -- Log actions can appear through imports before log writing is exposed.
-        action -> case action of
-          AppendLog _ value -> pure (LogKind, value)
-          ResolveLog _ value -> pure (LogKind, value)
-          _ -> throwE (InvalidInput "Invalid ref action.")
+        AppendLog _ value -> pure (LogKind, value)
+        ResolveLog _ value -> pure (LogKind, value)
+        _ -> throwE (InvalidInput "Invalid ref action.")
       memory <- storage (readMemory snapshot digest)
       pure (TopicHead key digest kind memory (eventReplica event) (eventTime event))
 
@@ -229,9 +227,13 @@ conflicts :: LocalReplica -> IO (Either TopicError TopicContext)
 conflicts (LocalReplica repo _) = runExceptT $ do
   snapshot <- storage (loadSnapshot repo)
   let state = snapshotState snapshot
-      names = Set.fromList [name | event <- Map.elems (events state), RefResource name <- [resourceOf (eventAction event)]]
-  views <- traverse (viewAt snapshot) (Set.toAscList names)
-  pure (TopicContext (snapshotId snapshot) (filter (\view -> viewStatus view `elem` [Conflicted, TypeConflicted]) views))
+      isConflict name = case interpret state (RefResource name) of
+        TopicHeads values -> Map.size values > 1
+        RefTypeConflict _ -> True
+        _ -> False
+      conflicted = filter isConflict (topicNames snapshot)
+  views <- traverse (viewAt snapshot) conflicted
+  pure (TopicContext (snapshotId snapshot) views)
 
 createTopic :: LocalReplica -> Name -> NewMemory -> IO (Either TopicError TopicView)
 createTopic local name new = writeTopic local name (CreateWrite new)

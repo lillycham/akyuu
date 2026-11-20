@@ -32,7 +32,7 @@
 -- of that form. 'parseMemory' accepts only that form: a file with the headers
 -- in another order, a repeated edge line, or any other change of the bytes is
 -- 'NotCanonical'. So for every file that 'parseMemory' accepts,
---  m == bytes@, and the 'Id' of the memory is the hash of the file.
+-- @renderMemory m == bytes@, and the 'Id' of the memory is the hash of the file.
 --
 -- A 'Memory' is made with 'mkMemory', which checks the rules of its fields.
 -- The constructor is not exported.
@@ -62,8 +62,8 @@ import Data.Bifunctor (Bifunctor (first))
 import Data.ByteString (ByteString)
 import Data.Char (isSpace)
 import Data.Foldable (traverse_)
-import Data.Map (Map)
-import Data.Map qualified as Map
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text, pack)
@@ -220,7 +220,7 @@ renderMemory m =
     headerLines =
       fixedHeaders
         <> map edgeLine (Set.toAscList $ memEdges m)
-        <> map (("about-ref: " <>) . nameText) (Set.toAscList $ memAboutRefs m)
+        <> map (((aboutRefHeader <> ": ") <>) . nameText) (Set.toAscList $ memAboutRefs m)
     edgeHeader x = (edgeToHeader $ kind x, Id.render $ target x)
     edgeLine x =
       let (e, i) = edgeHeader x
@@ -268,7 +268,7 @@ checkKnown n
 groupHeaders :: [(Text, Text)] -> Either MemoryParseError (Map Text [Text])
 groupHeaders pairs = do
   traverse_ checkKnown (map fst pairs)
-  pure (Map.fromListWith (flip (++)) [(k, [v]) | (k, v) <- pairs])
+  pure (Map.map reverse (Map.fromListWith (++) [(k, [v]) | (k, v) <- pairs]))
 
 -- | The value of a header that must appear exactly once.
 --

@@ -75,6 +75,7 @@ module Akyuu.Cache
     loadAboutRefs,
     Summary (..),
     summaries,
+    summariesFor,
     firstLine,
     Hit (..),
     search,
@@ -102,6 +103,7 @@ import Control.Exception (IOException, bracketOnError, onException, tryJust)
 import Control.Monad (forM_, guard, when)
 import Control.Monad.Trans.Except (ExceptT (ExceptT), runExceptT, withExceptT)
 import Data.Bifunctor (first)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes)
@@ -251,12 +253,13 @@ openCache :: FilePath -> IO (Either CacheError Cache)
 openCache root = withOpenLock root $ tryAs CacheSQL $ do
   let path = cachePath root
   conn <- maybe (fresh path) pure =<< tryExisting path
-  (createSchema conn) `onException` close conn
   pure (Cache conn)
   where
     fresh path = do
       mapM_ (ignoreIO . removeFile) [path, path ++ "-wal", path ++ "-shm"]
-      openConn path
+      conn <- openConn path
+      createSchema conn `onException` close conn
+      pure conn
 
 -- | Run an action with the lock of 'openCache'.
 --
@@ -305,22 +308,23 @@ index (Cache c) i m = tryAs CacheSQL $ withImmediateTransaction c $ insertMemory
 -- one, so that several memories can share one transaction.
 insertMemory :: Connection -> Id -> Memory -> IO ()
 insertMemory c i m = do
-  present <- query c "SELECT 1 FROM memories WHERE id = ?" (Only (render i)) :: IO [Only Int]
+  let iText = render i
+  present <- query c "SELECT 1 FROM memories WHERE id = ?" (Only iText) :: IO [Only Int]
   when (null present) $ do
     execute
       c
       "INSERT INTO memories (id, kind, created, agent) VALUES (?,?,?,?)"
-      (render i, memKind m, memCreated m, memAgent m)
+      (iText, memKind m, memCreated m, memAgent m)
     -- The body goes in the row with the same rowid as the @memories@ row.
     rowid <- lastInsertRowId c
     forM_ (Set.toList (memEdges m)) $ \e ->
       execute
         c
         "INSERT INTO edges (src, kind, dst) VALUES (?,?,?)"
-        (render i, edgeToHeader (kind e), render (target e))
+        (iText, edgeToHeader (kind e), render (target e))
     execute c "INSERT INTO bodies (rowid, body) VALUES (?,?)" (rowid, indexedBody (memBody m))
     forM_ (Set.toList (memAboutRefs m)) $ \r ->
-      execute c "INSERT INTO about_refs (src, ref) VALUES (?,?)" (render i, nameText r)
+      execute c "INSERT INTO about_refs (src, ref) VALUES (?,?)" (iText, nameText r)
 
 -- | The text that goes in the full-text index: the body, with U+FFFD in place
 -- of the two characters that mark a snippet. Then a mark in a snippet always
@@ -393,13 +397,14 @@ diff tgt cur =
 -- that the store does not have. It does not open an object that the cache
 -- already has, so a call on a cache that is up to date reads only file names.
 --
--- All of this is one transaction. If the store cannot be read, or an object
--- is not a valid memory, the result is 'CacheStore' and the cache does not
--- change. Call it again after the problem is fixed.
+-- All of this is one transaction. If the store cannot be read, the result is
+-- 'CacheStore' and the cache does not change. Call it again after the problem
+-- is fixed.
 --
 -- GC can sweep an object after 'Akyuu.Store.list' and before the read. Then
 -- the read gives 'NotFound'. The function skips that object, and it is not in
--- 'added'. Every other store error stops the function.
+-- 'added'. Invalid memory files ('BadMemory') are also skipped so one bad file
+-- does not stop every search. Every other store error stops the function.
 sync :: Cache -> Store -> IO (Either CacheError SyncReport)
 sync cache@(Cache c) st = runExceptT $ do
   ids <- withExceptT CacheStore (ExceptT (Store.list st))
@@ -426,7 +431,7 @@ fetchAll st ids = withExceptT CacheStore $ catMaybes <$> traverse (ExceptT . fet
         Left (BadMemory _ _) -> Right Nothing
         _ -> (\m -> Just (i, m)) <$> r
 
--- | Delete every row of the three tables. The tables stay.
+-- | Delete every row of the four tables. The tables stay.
 --
 -- This function does not start a transaction. 'reindex' puts it in the same
 -- one as the new rows.
@@ -570,9 +575,38 @@ summaries (Cache c) = do
           \FROM memories JOIN bodies ON bodies.rowid = memories.rowid \
           \ORDER BY memories.id"
   pure (rows >>= traverse toSummary)
+
+-- | A 'Summary' for each of the given 'Id's that is present in the cache.
+summariesFor :: Cache -> [Id] -> IO (Either CacheError (Map Id Summary))
+summariesFor _ [] = pure (Right Map.empty)
+summariesFor (Cache c) is = do
+  rows <-
+    tryAs CacheSQL $
+      withTransaction c $
+        concat <$> traverse queryBatch (chunksOf 500 is)
+  pure (rows >>= fmap (Map.fromList . map (\s -> (sumId s, s))) . traverse toSummary)
   where
-    toSummary :: (Text, Text, Text, UTCTime, Text) -> Either CacheError Summary
-    toSummary (i, k, a, t, b) = (\x -> Summary x k a t (firstLine b)) <$> parseCached i
+    queryBatch batch =
+      query
+        c
+        ( Query
+            ( "SELECT memories.id, memories.kind, memories.agent, memories.created, \
+              \substr(bodies.body, 1, 400) \
+              \FROM memories JOIN bodies ON bodies.rowid = memories.rowid \
+              \WHERE memories.id IN ("
+                <> T.intercalate "," (map (const "?") batch)
+                <> ")"
+            )
+        )
+        (map render batch) ::
+        IO [(Text, Text, Text, UTCTime, Text)]
+
+toSummary :: (Text, Text, Text, UTCTime, Text) -> Either CacheError Summary
+toSummary (i, k, a, t, b) = (\x -> Summary x k a t (firstLine b)) <$> parseCached i
+
+chunksOf :: Int -> [a] -> [[a]]
+chunksOf _ [] = []
+chunksOf n xs = let (a, b) = splitAt n xs in a : chunksOf n b
 
 -- | A memory that matched a search.
 data Hit = Hit
@@ -628,8 +662,18 @@ runFts (Cache c) fq n
 createdTimes :: Cache -> [Id] -> IO (Either CacheError (Map Id UTCTime))
 createdTimes _ [] = pure (Right Map.empty)
 createdTimes (Cache c) is = do
-  rows <- tryAs CacheSQL (query c (Query ("SELECT id, created FROM memories WHERE id IN (" <> T.intercalate "," (map (const "?") is) <> ")")) (map render is) :: IO [(Text, UTCTime)])
+  rows <-
+    tryAs CacheSQL $
+      withTransaction c $
+        concat <$> traverse queryBatch (chunksOf 500 is)
   pure (rows >>= fmap Map.fromList . traverse (\(i, t) -> (\x -> (x, t)) <$> parseCached i))
+  where
+    queryBatch batch =
+      query
+        c
+        (Query ("SELECT id, created FROM memories WHERE id IN (" <> T.intercalate "," (map (const "?") batch) <> ")"))
+        (map render batch) ::
+        IO [(Text, UTCTime)]
 
 -- | What 'searchFuzzy' did to a word that the index does not have.
 data Correction
@@ -651,9 +695,9 @@ data Correction
 -- A word that is a term of the index is searched as it is, so a query of
 -- words that exist gives the same hits as 'search'. For each other word:
 --
--- 1. If it is the start of a term, it is a prefix (@ finds @).
+-- 1. If it is the start of a term, it is a prefix.
 -- 2. Else, if some terms are within a few edits ('Akyuu.Fuzzy.nearTerms'),
---    it is any of them (@ finds @).
+--    it is any of them.
 -- 3. Else it is searched as it is, and the memory does not match.
 --
 -- The second part of the result lists each change, so a caller can show it.
@@ -662,19 +706,30 @@ data Correction
 searchFuzzy :: Cache -> Text -> Int -> IO (Either CacheError ([Hit], [Correction]))
 searchFuzzy cache@(Cache c) q n
   | n <= 0 || null ws = pure (Right ([], []))
-  | otherwise = runExceptT $ do
-      planned <- traverse (ExceptT . plan) ws
-      -- A group in parentheses needs an explicit AND: the space between two
-      -- phrases is an AND, but between a group and a phrase it is a syntax error.
-      hits <- ExceptT (runFts cache (T.intercalate " AND " (map fst planned)) n)
-      pure (hits, concatMap snd planned)
+  | otherwise = do
+      vocabRef <- newIORef Nothing
+      runExceptT $ do
+        planned <- traverse (ExceptT . plan vocabRef) ws
+        -- A group in parentheses needs an explicit AND: the space between two
+        -- phrases is an AND, but between a group and a phrase it is a syntax error.
+        hits <- ExceptT (runFts cache (T.intercalate " AND " (map fst planned)) n)
+        pure (hits, concatMap snd planned)
   where
     ws = T.words (T.map (\ch -> if ch == '\0' then ' ' else ch) q)
     quote w = "\"" <> T.replace "\"" "\"\"" w <> "\""
     has fq = do
       rows <- tryAs CacheSQL (query c "SELECT 1 FROM bodies WHERE bodies MATCH ? LIMIT 1" (Only fq) :: IO [Only Int])
       pure (not . null <$> rows)
-    plan w = do
+    loadVocab vocabRef = do
+      cached <- readIORef vocabRef
+      case cached of
+        Just v -> pure (Right v)
+        Nothing -> do
+          r <- tryAs CacheSQL (query_ c "SELECT term, doc FROM bodies_vocab" :: IO [(Text, Int)])
+          case r of
+            Left e -> pure (Left e)
+            Right v -> writeIORef vocabRef (Just v) >> pure (Right v)
+    plan vocabRef w = do
       exact <- has (quote w)
       case exact of
         Left e -> pure (Left e)
@@ -685,7 +740,7 @@ searchFuzzy cache@(Cache c) q n
             Left e -> pure (Left e)
             Right True -> pure (Right (quote w <> "*", [PrefixOf w]))
             Right False -> do
-              vocab <- tryAs CacheSQL (query_ c "SELECT term, doc FROM bodies_vocab" :: IO [(Text, Int)])
+              vocab <- loadVocab vocabRef
               pure $ case vocab of
                 Left e -> Left e
                 Right v -> case Fuzzy.nearTerms 4 (T.toLower w) v of

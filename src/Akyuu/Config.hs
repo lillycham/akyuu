@@ -68,11 +68,12 @@ import Akyuu.Tier (defaultPolicyRef, defaultTiersRef, policyRefVar, tiersRefVar)
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, try)
 import Data.ByteString qualified as BS
-import Data.Char (isAlphaNum, toLower, toUpper)
+import Data.Char (isAlphaNum, isSpace, toLower, toUpper)
 import Data.List (isPrefixOf, isSuffixOf)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8')
@@ -307,7 +308,7 @@ parseConfigText t = case decode t of
     check (n, p) =
       [ "embed.profiles." <> n <> ".min must be from -1 to 1"
       | Just m <- [prMin p],
-        m < -1 || m > 1
+        not (m >= -1 && m <= 1)
       ]
         <> ["embed.profiles." <> n <> ".timeout must be at least 1" | Just s <- [prTimeout p], s < 1]
         <> ["embed.profiles." <> n <> ".max-chars must be at least 1" | Just s <- [prMaxChars p], s < 1]
@@ -347,12 +348,17 @@ data Found = Found
     foundNotes :: [Text]
   }
 
+nonEmpty :: [(String, String)] -> String -> Maybe String
+nonEmpty env k = case lookup k env of
+  Just v | not (null v) -> Just v
+  _ -> Nothing
+
 -- | Find the config file. @$AKYUU_CONFIG@ names one file: TOML if its name
 -- ends in @.toml@, else the older format. Without it, the directory is
 -- @$XDG_CONFIG_HOME/akyuu@ or @~/.config/akyuu@, and @config.toml@ goes
 -- before @embed.env@. A file that is missing is no file.
 findFiles :: [(String, String)] -> IO (Either ConfigError Found)
-findFiles env = case nonEmpty "AKYUU_CONFIG" of
+findFiles env = case nonEmpty env "AKYUU_CONFIG" of
   Just p
     | ".toml" `isSuffixOf` p -> fmap (\t -> Found ((,) p <$> t) Nothing []) <$> readText p
     | otherwise -> fmap (\t -> Found Nothing ((,) p <$> t) (maybe [] (const [old p]) t)) <$> readText p
@@ -372,12 +378,9 @@ findFiles env = case nonEmpty "AKYUU_CONFIG" of
           (Nothing, Just lt) -> Found Nothing (Just (envPath, lt)) [old envPath]
           (Nothing, Nothing) -> Found Nothing Nothing []
   where
-    nonEmpty k = case lookup k env of
-      Just v | not (null v) -> Just v
-      _ -> Nothing
     dir =
-      ((</> "akyuu") <$> nonEmpty "XDG_CONFIG_HOME")
-        <|> ((\h -> h </> ".config" </> "akyuu") <$> nonEmpty "HOME")
+      ((</> "akyuu") <$> nonEmpty env "XDG_CONFIG_HOME")
+        <|> ((\h -> h </> ".config" </> "akyuu") <$> nonEmpty env "HOME")
     old p = T.pack p <> " is the older format. Move its settings to config.toml (see akyuu(1)), and remove it."
     -- A file that is not there is no file. A file that is there but cannot be
     -- read is an error: its settings must not vanish without a word.
@@ -419,8 +422,8 @@ resolve env file legacy = do
     Config
       { cfgFile = (fst <$> file) <|> (fst <$> legacy),
         cfgRoot =
-          (sourced "AKYUU_ROOT" <$> nonEmpty "AKYUU_ROOT")
-            <|> (file >>= \(p, fc) -> (\r -> Sourced (expandHome home (T.unpack r)) (FromFile p)) <$> fcRoot fc),
+          (sourced "AKYUU_ROOT" <$> nonEmpty env "AKYUU_ROOT")
+            <|> (file >>= \(p, fc) -> (\r -> Sourced (expandHome home (T.unpack (T.strip r))) (FromFile p)) <$> nonBlank (fcRoot fc)),
         cfgPolicyRef = textSetting policyRefVar fcPolicyRef defaultPolicyRef,
         cfgTiersRef = textSetting tiersRefVar fcTiersRef defaultTiersRef,
         cfgAgent = textSetting "AKYUU_AGENT" fcAgent "agent",
@@ -432,20 +435,17 @@ resolve env file legacy = do
         cfgNotes = numberNotes <> relatedNotes
       }
   where
-    home = nonEmpty "HOME"
-    nonEmpty k = case lookup k env of
-      Just v | not (null v) -> Just v
-      _ -> Nothing
+    home = nonEmpty env "HOME"
     sourced k v = Sourced v (FromEnv k)
     fileValue get = file >>= \(p, fc) -> (\v -> Sourced v (FromFile p)) <$> nonBlank (get fc)
     nonBlank m = m >>= \v -> if T.null (T.strip v) then Nothing else Just v
     textSetting var get def =
       fromMaybe (Sourced def Default) $
-        (sourced var . T.pack <$> nonEmpty var) <|> fileValue get
+        (sourced var . T.pack <$> nonEmpty env var) <|> fileValue get
 
     -- The settings of related topics. A value of the environment that is not
     -- a truth value is left out, and the notes say so.
-    relatedVar = nonEmpty "AKYUU_TOPIC_RELATED"
+    relatedVar = nonEmpty env "AKYUU_TOPIC_RELATED"
     relatedSetting =
       fromMaybe (Sourced True Default) $
         ((\b -> Sourced b (FromEnv "AKYUU_TOPIC_RELATED")) <$> (relatedVar >>= truth))
@@ -461,7 +461,7 @@ resolve env file legacy = do
       _ -> Nothing
     parallelSetting =
       fromMaybe (Sourced [] Default) $
-        ((\v -> Sourced (namespaces (T.splitOn "," (T.pack v))) (FromEnv "AKYUU_TOPIC_PARALLEL")) <$> nonEmpty "AKYUU_TOPIC_PARALLEL")
+        ((\v -> Sourced (namespaces (T.splitOn "," (T.pack v))) (FromEnv "AKYUU_TOPIC_PARALLEL")) <$> nonEmpty env "AKYUU_TOPIC_PARALLEL")
           <|> (file >>= \(p, fc) -> (\v -> Sourced (namespaces v) (FromFile p)) <$> fcParallel fc)
     namespaces = filter (not . T.null) . map (T.dropWhileEnd (== '/') . T.strip)
 
@@ -478,7 +478,8 @@ resolve env file legacy = do
 
     -- The variables of the older way: the environment, with embed.env under
     -- it. A variable of the environment wins.
-    legacyVars = maybe [] (\(p, kvs) -> [(k, (v, FromFile p)) | (k, v) <- kvs, k `notElem` map fst env]) legacy
+    envKeys = Set.fromList (map fst env)
+    legacyVars = maybe [] (\(p, kvs) -> [(k, (v, FromFile p)) | (k, v) <- kvs, k `Set.notMember` envKeys]) legacy
     embedVars = [(k, (v, FromEnv k)) | (k, v) <- env] <> legacyVars
     embedVar k = case lookup k embedVars of
       Just (v, s) | not (null v) -> Just (v, s)
@@ -502,12 +503,12 @@ resolve env file legacy = do
     similarity v = readMaybe v >>= \m -> if m >= -1 && m <= 1 then Just (m :: Double) else Nothing
 
     embedFrom = case embedVar "AKYUU_EMBED_COMMAND" of
-      Just (cmd, src) | not (all (== ' ') cmd) -> Right (Just (environmentProfile cmd src embedVars positive minVar))
+      Just (cmd, src) | not (all isSpace cmd) -> Right (Just (environmentProfile cmd src embedVars positive minVar))
       _ -> fromProfiles
     fromProfiles =
       let profiles = maybe Map.empty (fcProfiles . snd) file
           wanted =
-            ((\v -> (T.pack v, FromEnv "AKYUU_EMBED_PROFILE")) <$> nonEmpty "AKYUU_EMBED_PROFILE")
+            ((\v -> (T.pack v, FromEnv "AKYUU_EMBED_PROFILE")) <$> nonEmpty env "AKYUU_EMBED_PROFILE")
               <|> (file >>= \(p, fc) -> (\n -> (n, FromFile p)) <$> nonBlank (fcProfile fc))
               <|> case (file, Map.toList profiles) of
                 (Just (p, _), [(n, _)]) -> Just (n, FromFile p)
@@ -531,10 +532,11 @@ resolve env file legacy = do
           esTimeout = min 3600 (fromMaybe 10 (positive "AKYUU_EMBED_TIMEOUT" <|> prTimeout pr)),
           esMaxChars = fromMaybe 4000 (positive "AKYUU_EMBED_MAX_CHARS" <|> prMaxChars pr),
           esArgs = Map.toList (prArgs pr),
-          esCommandEnv = [(k, v) | (k, v) <- env, k `notElem` map fst argVars] <> argVars
+          esCommandEnv = [(k, v) | (k, v) <- env, k `Set.notMember` argVarKeys] <> argVars
         }
       where
         argVars = [(argVar k, T.unpack v) | (k, v) <- Map.toList (prArgs pr)]
+        argVarKeys = Set.fromList (map fst argVars)
 
 -- | The profile of the older variables: @AKYUU_EMBED_COMMAND@ and the rest,
 -- from the environment and @embed.env@. The command gets them all, as before.

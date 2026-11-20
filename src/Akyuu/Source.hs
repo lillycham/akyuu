@@ -69,8 +69,8 @@ module Akyuu.Source
 where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent (forkIO)
-import Control.Exception (IOException, try)
+import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (IOException, finally, try)
 import Control.Monad (guard)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson (Value (Array, Number, Object, String), decodeStrict)
@@ -283,8 +283,8 @@ locate roots p = do
           ( \f -> case classify (pointerFormat p) (pointerSession p) (takeFileName f) of
               Nothing -> pure []
               Just w -> do
-                size <- getFileSize f
-                pure [Located f w size]
+                msize <- try (getFileSize f) :: IO (Either IOException Integer)
+                pure (either (const []) (\size -> [Located f w size]) msize)
           )
           files
     rank (Located _ Live size) = (0 :: Int, 0 :: Int, Down size)
@@ -293,20 +293,26 @@ locate roots p = do
 -- | Every file below a folder, without following links.
 walk :: FilePath -> IO [FilePath]
 walk root = do
-  there <- doesDirectoryExist root
+  there <- either (const False) id <$> (try (doesDirectoryExist root) :: IO (Either IOException Bool))
   if there then go root else pure []
   where
     go dir = do
-      names <- listDirectory dir
-      concat <$> mapM (visit dir) names
+      r <- try (listDirectory dir) :: IO (Either IOException [FilePath])
+      case r of
+        Left _ -> pure []
+        Right names -> concat <$> mapM (visit dir) names
     visit dir n = do
       let p = dir </> n
-      link <- pathIsSymbolicLink p
-      if link
-        then pure []
-        else do
-          isDir <- doesDirectoryExist p
-          if isDir then go p else pure [p]
+      r <- try (pathIsSymbolicLink p) :: IO (Either IOException Bool)
+      case r of
+        Left _ -> pure []
+        Right True -> pure []
+        Right False -> do
+          d <- try (doesDirectoryExist p) :: IO (Either IOException Bool)
+          case d of
+            Left _ -> pure []
+            Right True -> go p
+            Right False -> pure [p]
 
 -- Reading it -------------------------------------------------------------------
 
@@ -568,12 +574,16 @@ loadBytes (Located path (Archived _) _) = do
   where
     run = do
       (_, Just out, Just err, ph) <- createProcess (proc "zstd" ["-d", "-c", "-q", "--", path]) {std_out = CreatePipe, std_err = CreatePipe}
-      bytes <- B.hGetContents out
-      msg <- B.hGetContents err
-      hClose out
-      hClose err
-      code <- waitForProcess ph
-      pure (code, bytes, msg)
+      ( do
+          errVar <- newEmptyMVar
+          _ <- forkIO (B.hGetContents err >>= putMVar errVar)
+          bytes <- B.hGetContents out
+          msg <- takeMVar errVar
+          code <- waitForProcess ph
+          pure (code, bytes, msg)
+        )
+        `finally` (ignoring (hClose out) >> ignoring (hClose err))
+    ignoring act = () <$ (try act :: IO (Either IOException ()))
 
 -- Hash of a span ---------------------------------------------------------------
 
@@ -598,13 +608,18 @@ engiStrip bytes = do
     run = do
       (Just hin, Just out, Just err, ph) <-
         createProcess (proc "engi" ["strip"]) {std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe}
-      -- The input goes in from another thread: a span can be longer than a pipe
-      -- holds, and the output must be read at the same time.
-      _ <- forkIO (ignoring (B.hPut hin bytes) >> ignoring (hClose hin))
-      o <- B.hGetContents out
-      e <- B.hGetContents err
-      code <- waitForProcess ph
-      pure (code, o, e)
+      ( do
+          -- The input goes in from another thread: a span can be longer than a pipe
+          -- holds, and the output and stderr must be read at the same time.
+          _ <- forkIO (ignoring (B.hPut hin bytes) >> ignoring (hClose hin))
+          errVar <- newEmptyMVar
+          _ <- forkIO (B.hGetContents err >>= putMVar errVar)
+          o <- B.hGetContents out
+          e <- takeMVar errVar
+          code <- waitForProcess ph
+          pure (code, o, e)
+        )
+        `finally` (ignoring (hClose hin) >> ignoring (hClose out) >> ignoring (hClose err))
     ignoring act = () <$ (try act :: IO (Either IOException ()))
 
 -- | The id of the record on a line: the @uuid@ of Claude Code, the @ordinal@ of

@@ -158,7 +158,7 @@ check o i =
     g = inGraph i
     hs = Graph.heads g
     bodies = inBodies i
-    heldBy = Map.fromListWith (<>) [(v, [n]) | (n, v) <- Map.toAscList (inRefValues i)]
+    heldBy = Map.fromListWith (flip (<>)) [(v, [n]) | (n, v) <- Map.toAscList (inRefValues i)]
     logs = logChains g (rootRefs (inRoots i))
     -- An episode records what was true when it was written, so an edge to an
     -- old version is right there, and an episode is never superseded.
@@ -282,11 +282,10 @@ nearDuplicates o g hs bodies =
   where
     texts = Map.fromList [(i, b) | i <- Set.toAscList hs, Just b <- [Map.lookup i bodies]]
     norm = Map.map normalise texts
-    long = Map.filter ((>= minWords o) . length . T.words) texts
-    sets = Map.map (shingles . normalise) long
+    sets = Map.mapMaybe (\t -> if length (T.words t) >= minWords o then Just (shingles t) else Nothing) norm
     -- An inverted index. A triple in more than a tenth of the memories says
     -- nothing, so it makes no pairs.
-    index = Map.fromListWith (<>) [(s, [i]) | (i, ss) <- Map.toAscList sets, s <- Set.toList ss]
+    index = Map.fromListWith (flip (<>)) [(s, [i]) | (i, ss) <- Map.toAscList sets, s <- Set.toList ss]
     cap = max 5 (Map.size sets `div` 10)
     candidates =
       Map.fromList

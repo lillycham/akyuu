@@ -20,7 +20,7 @@ where
 import Akyuu.Cache (CacheError (CacheIO, CacheLocked, CacheSQL, CacheStore, CorruptCache))
 import Akyuu.GC (GCError (CorruptTombstone, GCCache, GCIO, GCLocked, GCRefs, GCStore), Tombstone (prunedAt), TombstoneParseError (BadTombstone, TombstoneNotUtf8))
 import Akyuu.Id (Id, IdParseError (BadHex, BadLength, BadPrefix), render)
-import Akyuu.Memory (MemoryParseError (BadEncoding, BadHeaderValue, BadLink, BadRefName, DuplicateHeader, MalformedHeader, MissingBlankLine, MissingHeader, NotCanonical, UnknownHeader))
+import Akyuu.Memory (MemoryParseError (BadEncoding, BadHeaderValue, BadLink, BadRefName, DuplicateHeader, MalformedHeader, MissingBlankLine, MissingHeader, NotCanonical, UnknownHeader), timeFormat)
 import Akyuu.Refs (Name, NameError (BadSegment, EmptyName), RefError (CorruptRef, Locked, NameConflict, NoSuchRef, RefIO, Stale), RefParseError (BadRefLine, EmptyRef, NotUtf8), nameText)
 import Akyuu.Store (StoreError (BadMemory, Corrupt, NotFound, StoreIO, StoreLocked))
 import Akyuu.Supersede (SupersedeError (SupersedeRef, SupersedeStore))
@@ -121,7 +121,7 @@ describe err = case err of
       <> T.intercalate ", " (map render is)
       <> "."
   where
-    time = T.pack . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" . prunedAt
+    time = T.pack . formatTime defaultTimeLocale timeFormat . prunedAt
 
 describeStore :: StoreError -> Text
 describeStore e = case e of

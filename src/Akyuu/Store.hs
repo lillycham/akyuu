@@ -52,7 +52,7 @@ module Akyuu.Store
   )
 where
 
-import Akyuu.Fs (atomicWrite, tryWith)
+import Akyuu.Fs (atomicWrite, ifMissing, tryWith)
 import Akyuu.Id (Id, hashBytes, hashFile, parse, render, toBytes)
 import Akyuu.Memory (Memory, MemoryParseError, parseMemory, renderMemory)
 import Akyuu.Mutation (Mutation, checkMutation, withMutation)
@@ -211,7 +211,6 @@ list s = tryIO $ do
   pure $ mapMaybe toId names
   where
     base = storeRoot s </> "store"
-    ifMissing d act = either (const d) id <$> tryJust (guard . isDoesNotExistError) act
 
 -- | Is this the name of a shard directory: two hex digits, lower case? This
 -- is the form that 'shard' makes.
