@@ -16,7 +16,7 @@
 :root {
   --ai: #f4f2ec; --ai-raised: #ebe7dd; --ink: #0f1a3a; --ink-muted: #4c5878; --ink-dim: #7d88a6;
   --wire: #5b6b8f; --sora: #2a62bd; --fuji: #6a52c9; --on-accent: #f4f2ec;
-  --rule: #dde2ec; --rule-page: #e8e8ea; --rule-strong: #c9d1e2; --rule-label: #a9b3c9; --line: #cdd3e0; --control: #727d9c;
+  --rule-page: #e8e8ea; --rule-strong: #c9d1e2; --rule-label: #a9b3c9; --line: #cdd3e0; --control: #727d9c;
   --shu: #b3361f; --matsu: #2a7451; --kin: #f2d67e;
   --glow-accent: none; --glow-ink: none; --glow-filter: none;
   --kind-s: 46%; --kind-l: 44%; --kind-mix: 11%;
@@ -27,14 +27,14 @@
   --bg: var(--ai); --fg: var(--ink); --muted: var(--ink-muted); --card: var(--ai-raised);
   --accent: var(--sora); --warn: var(--shu); --ok: var(--matsu); --grey: #e1e3ea; --grey-fg: var(--ink-muted);
   --sup: var(--wire); --about: var(--sora); --derived: var(--matsu); --refines: var(--fuji); --follows: var(--matsu);
-  --hit: var(--kin); --planned: var(--shu); --sel: var(--ink);
+  --hit: var(--kin); --planned: var(--shu);
   font: 13px/1.45 var(--font-mono);
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --ai: #0a1226; --ai-raised: #101c3c; --ink: #e9eef8; --ink-muted: #9aa8c8; --ink-dim: #56648a;
     --wire: #aebcd8; --sora: #8fc0ff; --fuji: #b3a3f2; --on-accent: #0a1226;
-    --rule: #131f3d; --rule-page: #0f1932; --rule-strong: #1a2a52; --rule-label: #2e3f6e; --line: #24345e; --control: #63729a;
+    --rule-page: #0f1932; --rule-strong: #1a2a52; --rule-label: #2e3f6e; --line: #24345e; --control: #63729a;
     --shu: #ff8a70; --matsu: #86d4a8; --kin: #e8c66a;
     --glow-accent: 0 0 14px rgba(143,192,255,.40); --glow-ink: 0 0 18px rgba(210,225,255,.22); --glow-filter: drop-shadow(0 0 4px rgba(143,192,255,.55));
     --grey: #17244a;
@@ -236,7 +236,6 @@ ol.timeline li:first-child::before { border-color: var(--sora); box-shadow: var(
 ol.timeline li.notkept::before { border-color: var(--ink-dim); border-style: dashed; background: var(--bg); box-shadow: none; }
 ul.plain, ol.plain { list-style: none; margin: 4px 0; padding: 0; }
 ul.plain li, ol.plain li { margin: 2px 0; word-break: break-word; }
-.hits li { margin: 0 0 10px; }
 mark { background: var(--hit); color: #0a1226; border-radius: 0; padding: 0 1px; }
 .muted { color: var(--muted); }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 12px; padding: 12px 16px; }
@@ -1772,14 +1771,15 @@ const Akyuu = (function () {
     }
     const marks = opts.marks || new Map();
     const chosen = chooseLayout(graph, marks, container.clientWidth, container.clientHeight, state.compact);
-    const { lay, plan, geo, routed } = chosen;
+    const { lay, geo, routed } = chosen;
     const { colX, width, tagsOf } = geo;
     const rowY = routed.rowY;
     const height = routed.height + 30;
     const root = svg('svg', { class: 'graph', width: width, height: height, viewBox: '0 0 ' + width + ' ' + height, 'data-overview': '0' });
     const defs = svg('defs');
+    const markerPrefix = (container.id || 'graph') + '-arrow-';
     for (const k of Object.keys(EDGE_VAR)) {
-      const m = svg('marker', { id: 'arrow-' + k, viewBox: '0 0 10 10', refX: '9', refY: '5', markerUnits: 'userSpaceOnUse', markerWidth: '9', markerHeight: '9', orient: 'auto' });
+      const m = svg('marker', { id: markerPrefix + k, viewBox: '0 0 10 10', refX: '9', refY: '5', markerUnits: 'userSpaceOnUse', markerWidth: '9', markerHeight: '9', orient: 'auto' });
       m.appendChild(svg('path', { d: 'M1,1 L9,5 L1,9', style: 'stroke: var(--' + EDGE_VAR[k] + ')' }));
       defs.appendChild(m);
     }
@@ -1814,7 +1814,7 @@ const Akyuu = (function () {
       const e = r.edge;
       const dim = dimmed(byId.get(e.src)) && dimmed(byId.get(e.dst));
       const base = 'edge ' + e.kind + (dim ? ' dim' : '');
-      const p = svg('path', { d: roundedPath(r.points, CORNER), class: base, 'marker-end': 'url(#arrow-' + e.kind + ')' });
+      const p = svg('path', { d: roundedPath(r.points, CORNER), class: base, 'marker-end': 'url(#' + markerPrefix + e.kind + ')' });
       p.appendChild(svg('title', { text: e.kind + ': ' + shortId(e.src) + ' → ' + shortId(e.dst) }));
       edgeLayer.appendChild(p);
       const o = { el: p, base: base, src: e.src, dst: e.dst };
@@ -2261,8 +2261,9 @@ const Akyuu = (function () {
 
   // ---- the side panel ---------------------------------------------------------
 
+  let panelSeq = 0;
   function panel() { const p = $('panel'); p.hidden = false; p.replaceChildren(); return p; }
-  function closePanel() { $('panel').hidden = true; state.selected = null; redrawCurrent(); }
+  function closePanel() { panelSeq++; $('panel').hidden = true; state.selected = null; redrawCurrent(); }
 
   function selectNode(id) {
     state.selected = id;
@@ -2278,12 +2279,13 @@ const Akyuu = (function () {
   }
 
   async function showMemory(id) {
+    const seq = ++panelSeq;
     const p = panel();
     panelHeader(p, 'Memory ' + shortId(id), id, sealSeed(id, []));
     p.appendChild(el('p', { class: 'muted', text: 'loading' }));
     let m;
     try { m = await state.src.memory(id); } catch (e) {
-      if (state.selected !== id) return;
+      if (seq !== panelSeq || state.selected !== id) return;
       const q = panel();
       panelHeader(q, 'Not a stored memory', id, sealSeed(id, []));
       const n = nodeInfo(id);
@@ -2293,7 +2295,7 @@ const Akyuu = (function () {
       q.appendChild(actions(id));
       return;
     }
-    if (state.selected !== id) return;
+    if (seq !== panelSeq || state.selected !== id) return;
     const q = panel();
     panelHeader(q, m.kind + ' by ' + m.agent, m.id, sealSeed(m.id, m.refs));
     const pill = el('span', { class: 'pill' + (m.status === 'head' ? ' good' : ''), text: m.status === 'head' ? 'current' : 'superseded' });
@@ -2337,20 +2339,23 @@ const Akyuu = (function () {
 
   function actions(id) {
     return el('p', {}, [
-      el('button', { text: 'Focus the graph here', onclick: () => { state.window.focus = id; state.window.all = false; $('w-all').checked = false; switchTab('graph'); loadGraph(); } }),
+      el('button', { text: 'Focus the graph here', onclick: () => { state.view = 'history'; $('f-view').value = 'history'; state.window.focus = id; state.window.all = false; $('w-all').checked = false; switchTab('graph'); loadGraph(); } }),
       ' ',
       el('button', { text: 'Why is this alive?', onclick: () => showExplain(id) }),
     ]);
   }
 
   async function showExplain(id) {
+    const seq = ++panelSeq;
     const p = panel();
     panelHeader(p, 'GC: ' + shortId(id), id, sealSeed(id, []));
     let w;
     try { w = await state.src.explain(id); } catch (e) {
+      if (seq !== panelSeq) return;
       p.appendChild(el('p', { text: e.message }));
       return;
     }
+    if (seq !== panelSeq) return;
     const verdict = !w.isNode ? 'This is not a memory in the graph.' : w.live ? 'GC keeps it.' : 'Nothing keeps it: the next GC run moves it to trash.';
     p.appendChild(el('p', {}, [el('span', { class: 'pill ' + (w.live ? 'good' : 'bad'), text: w.live ? 'live' : 'garbage' }), ' ' + verdict]));
     if (w.storedAt) p.appendChild(el('p', { class: 'muted', text: 'In the store since ' + fmtTime(w.storedAt) }));
@@ -2584,12 +2589,12 @@ const Akyuu = (function () {
     const kinds = Array.from(new Set(c.findings.map(f => f.kind))).sort();
     fillSelect($('c-kind'), kinds, state.checkFilter.kind);
     fillSelect($('c-level'), LEVELS, state.checkFilter.level);
-    const count = (sev) => c.findings.filter(f => f.severity === sev).length;
+    const bySev = (sev) => c.findings.filter(f => f.severity === sev).length;
     if (!c.findings.length) {
       summary.appendChild(el('span', { class: 'pill good', text: 'all clear' }));
       summary.appendChild(document.createTextNode(' Nothing needs attention. The check looks for stale links, forks, duplicates and memories that nothing keeps.'));
     } else {
-      summary.textContent = count('problem') + ' problems, ' + count('suggestion') + ' suggestions, ' + count('info') + ' notes.';
+      summary.textContent = count(bySev('problem'), 'problem', 'problems') + ', ' + count(bySev('suggestion'), 'suggestion', 'suggestions') + ', ' + count(bySev('info'), 'note', 'notes') + '.';
     }
     $('c-note').textContent = state.src.live ? ' The check reads the store and changes nothing.' : ' From the export.';
     const shown = c.findings.filter(f => (!state.checkFilter.kind || f.kind === state.checkFilter.kind) &&
@@ -2620,17 +2625,20 @@ const Akyuu = (function () {
   // sentences that only one of them has. A memory that has a sentence the other
   // lacks cannot be dropped in favour of the other.
   async function showCompare(a, b) {
+    const seq = ++panelSeq;
     const p = panel();
     panelHeader(p, 'Compare ' + shortId(a) + ' and ' + shortId(b));
     p.appendChild(el('p', { class: 'muted', text: 'loading' }));
     let ma, mb;
     try { [ma, mb] = await Promise.all([state.src.memory(a), state.src.memory(b)]); }
     catch (e) {
+      if (seq !== panelSeq) return;
       const q = panel();
       panelHeader(q, 'Cannot compare');
       q.appendChild(el('p', { text: e.message }));
       return;
     }
+    if (seq !== panelSeq) return;
     const c = compareText(ma.body, mb.body);
     const q = panel();
     panelHeader(q, 'Compare ' + shortId(a) + ' and ' + shortId(b));
@@ -2654,8 +2662,6 @@ const Akyuu = (function () {
     q.appendChild(drop('A', 'B', c.canDropA));
     q.appendChild(drop('B', 'A', c.canDropB));
   }
-
-  // ---- tabs, polling, start ------------------------------------------------------------
 
   // ---- wiki ---------------------------------------------------------------
   // The refs as pages. The body is Markdown, built as DOM nodes from the data
@@ -2804,21 +2810,24 @@ const Akyuu = (function () {
       side.appendChild(el('h2', { text: 'Episodes' }));
       const ol = el('ol', { class: 'timeline episodes' });
       side.appendChild(ol);
-      await showEpisodes(ol, name, p.id, 15);
+      await showEpisodes(ol, name, p.id, 15, m);
     }
   }
 
   // Walk a log from an episode to the one before it, n at a time: its follows
   // edge, or in an older log its one derived-from edge (Akyuu.Episode.previous).
-  async function showEpisodes(ol, name, start, n) {
+  async function showEpisodes(ol, name, start, n, firstMem) {
     let id = start;
+    const names = pageNames();
     for (let k = 0; id && k < n; k++) {
-      let m;
-      try { m = await state.src.memory(id); } catch (e) { ol.appendChild(el('li', { class: 'notkept' }, [el('span', { class: 'muted', text: 'older episodes are gone (GC) or cannot be read' })])); return; }
+      let m = k === 0 && firstMem && firstMem.id === id ? firstMem : null;
+      if (!m) {
+        try { m = await state.src.memory(id); } catch (e) { ol.appendChild(el('li', { class: 'notkept' }, [el('span', { class: 'muted', text: 'older episodes are gone (GC) or cannot be read' })])); return; }
+      }
       if (state.wikiPage !== name) return;
       ol.appendChild(el('li', {}, [
         el('div', { class: 'muted' }, [fmtTime(m.created) + ' · ' + m.kind + ' · ' + m.agent + ' · ', idLink(m.id)]),
-        el('div', { class: 'md' }, blockNodes(mdBlocks(m.body, pageNames())))
+        el('div', { class: 'md' }, blockNodes(mdBlocks(m.body, names)))
       ]));
       id = previousEpisode(m.edges);
     }
@@ -2828,16 +2837,22 @@ const Akyuu = (function () {
     }
   }
 
+  function safeDecodeHash(s) {
+    try { return decodeURIComponent(s); } catch (e) { return s; }
+  }
+
   function openWikiFromHash() {
     const h = location.hash || '';
     if (h.indexOf('#wiki/') === 0) {
-      state.wikiPage = decodeURIComponent(h.slice(6));
+      state.wikiPage = safeDecodeHash(h.slice(6));
       if (state.tab !== 'wiki') switchTab('wiki');
       else { renderWikiNav(); renderWikiPage(); }
       $('view-wiki').scrollTop = 0;
       $('wiki-page').scrollTop = 0;
     }
   }
+
+  // ---- tabs, polling, start ------------------------------------------------------------
 
   const TABS = ['wiki', 'graph', 'refs', 'search', 'gc', 'check', 'health'];
 
@@ -2882,7 +2897,10 @@ const Akyuu = (function () {
     }
   }
 
+  let polling = false;
   async function poll() {
+    if (polling) return;
+    polling = true;
     try {
       const s = await state.src.stats();
       firstWindow(s);
@@ -2892,6 +2910,8 @@ const Akyuu = (function () {
       if (changed) await refreshAll();
     } catch (e) {
       setStatus('the server is not reachable: ' + e.message, true);
+    } finally {
+      polling = false;
     }
   }
 
@@ -2920,6 +2940,8 @@ const Akyuu = (function () {
     $('search-form').addEventListener('submit', runSearch);
     $('s-show').addEventListener('click', () => {
       const first = state.lastSearch && state.lastSearch.matches[0];
+      state.view = 'history';
+      $('f-view').value = 'history';
       switchTab('graph');
       if (first && !(state.graph && state.graph.nodes.some(n => n.id === first.id))) { state.window.focus = first.id; loadGraph(); }
       else if (first) renderGraph(first.id);
@@ -2936,7 +2958,7 @@ const Akyuu = (function () {
     $('wiki-filter').addEventListener('input', renderWikiNav);
     window.addEventListener('hashchange', openWikiFromHash);
     const start = (location.hash || '#wiki').slice(1);
-    if (start.indexOf('wiki/') === 0) state.wikiPage = decodeURIComponent(start.slice(5));
+    if (start.indexOf('wiki/') === 0) state.wikiPage = safeDecodeHash(start.slice(5));
     const first = start.indexOf('wiki/') === 0 ? 'wiki' : TABS.indexOf(start) >= 0 ? start : 'wiki';
     if (state.src.live) {
       poll().then(() => switchTab(first));

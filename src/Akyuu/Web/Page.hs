@@ -80,8 +80,15 @@ dataPage page v = splice dataMarker element page
 -- strings, JSON has none of these characters, so the result is still the
 -- same JSON value.
 scriptSafeJSON :: Value -> BL.ByteString
-scriptSafeJSON = B.toLazyByteString . BL.foldr (\w acc -> esc w <> acc) mempty . A.encode
+scriptSafeJSON = B.toLazyByteString . foldMap escapeChunk . BL.toChunks . A.encode
   where
+    escapeChunk bs
+      | BS.null bs = mempty
+      | otherwise =
+          let (safe, rest) = BS.break (\w -> w == 0x3c || w == 0x3e || w == 0x26) bs
+           in B.byteString safe <> case BS.uncons rest of
+                Nothing -> mempty
+                Just (w, tailBs) -> esc w <> escapeChunk tailBs
     esc 0x3c = B.string7 "\\u003c"
     esc 0x3e = B.string7 "\\u003e"
     esc 0x26 = B.string7 "\\u0026"

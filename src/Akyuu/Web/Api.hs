@@ -13,16 +13,18 @@
 -- Every endpoint is a @GET@ and only reads (see "Akyuu.Web.Read"). Any
 -- other method gets @405@. The endpoints:
 --
--- > /                       the page
+-- > /                       the page (also /index.html)
 -- > /api/stats              counts and the newest file time, to poll
 -- > /api/graph              ?focus=ID &hops=N &limit=N &all=1
 -- > /api/memory/ID          ID can be the start of an id
 -- > /api/refs
+-- > /api/pages              the wiki pages (current refs and their bodies)
 -- > /api/search             ?q=WORDS &limit=N &hops=N
 -- > /api/gc/plan
 -- > /api/gc/explain/ID
 -- > /api/trash              the trash, the tombstones and the pins
 -- > /api/verify             the verify report and the cache drift
+-- > /api/check              health findings from Akyuu.Check
 module Akyuu.Web.Api
   ( -- * Requests and responses
     WebRequest (..),
@@ -226,7 +228,8 @@ errorJSON s t = json s (object ["error" .= t])
 route :: (Monad m) => (Endpoint -> m (Either AkyuuError Value)) -> WebRequest -> m WebResponse
 route run req = case parseEndpoint req of
   Left WrongMethod ->
-    pure (errorJSON 405 "Only GET is allowed. This server only reads.") {resHeaders = ("Allow", "GET") : resHeaders (errorJSON 405 "")}
+    let r = errorJSON 405 "Only GET is allowed. This server only reads."
+     in pure r {resHeaders = ("Allow", "GET") : resHeaders r}
   Left NoRoute -> pure (errorJSON 404 "There is nothing at this path.")
   Left (BadParam t) -> pure (errorJSON 400 t)
   Right PageEndpoint ->

@@ -222,7 +222,8 @@ graphView w d =
     old = Graph.superseded g
     (shown, seeds) = selectWindow w (fmap sumCreated . (`Map.lookup` gdSummaries d)) g
     outOf i = [GraphEdge i k t | (Out, k, t) <- Set.toAscList (Graph.neighbours i g)]
-    totalEdges = sum (map (length . outOf) (Set.toList ns))
+    outCount i = length [() | (Out, _, _) <- Set.toList (Graph.neighbours i g)]
+    totalEdges = sum (map outCount (Set.toList ns))
     shownEdges =
       [ e
       | i <- Set.toAscList (shown `Set.intersection` ns),

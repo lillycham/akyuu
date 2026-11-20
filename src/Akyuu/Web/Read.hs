@@ -196,8 +196,9 @@ readStats env = runExceptT $ do
         statNewest = if null times then Nothing else Just (maximum times)
       }
   where
-    isIdName n = either (const False) (const True) (Id.parse (T.pack n))
-    isObjectName n = maybe False (isIdName . T.unpack) (T.stripSuffix ".md" (T.pack n))
+    isIdText t = either (const False) (const True) (Id.parse t)
+    isIdName = isIdText . T.pack
+    isObjectName n = maybe False isIdText (T.stripSuffix ".md" (T.pack n))
     -- Every directory and file under @refs@, and @refs@ itself.
     walk :: FilePath -> IO [FilePath]
     walk dir = orMissing [] $ do
@@ -221,12 +222,12 @@ readMemory env spec = runExceptT $ do
   m <- ExceptT (getMemory env i)
   cached <- cache (Cache.loadGraph (envCache env))
   g <- gc (GC.extendGraph (envStore env) cached)
-  es <- liftIO (readRefEntries env)
-  holds <- either throwE (pure . (`refHolds` i)) es
+  es <- ExceptT (readRefEntries env)
+  let holds = refHolds es i
+      values = refValues es
   stored <- io (orMissing Nothing (Just <$> getModificationTime (Store.objectPath (envStore env) i)))
   links <- liftIO (linksIn env g)
   let st = if Set.null (Graph.predecessors Supersedes i g) then HeadNode else SupersededNode
-      values = either (const Map.empty) refValues es
   pure (memoryJSON i m (Query.neighbourList i g) (Query.refLinkList i links values) holds st stored)
 
 -- | The about-ref links of every memory of a graph: from the cache, and from

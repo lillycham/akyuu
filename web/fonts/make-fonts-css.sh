@@ -22,7 +22,7 @@ latin() {
     /unicode-range/ { if (ok && index($0, "U+0000-00FF")) { print u; exit } }' <<<"$CSS"
 }
 
-face() { # family weight file
+face() { # family weight file css-weight
   local url; url=$(latin "$1" "$2")
   [ -n "$url" ] || { echo "no Latin subset for $1 $2" >&2; exit 1; }
   curl -fsS -m 20 -o "$3" "$url"
