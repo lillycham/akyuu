@@ -66,7 +66,7 @@ amend-drops-edges)
   if [ "\${1:-}" = amend ]; then
     "\$real" "\$@" >/dev/null || exit \$?
     r=\$2
-    body=\$("\$real" get --ref "\$r" | tail -n +5)
+    body=\$("\$real" get --ref "\$r" | awk 'f; /^$/ { f = 1 }')
     printf '%s' "\$body" | "\$real" supersede "\$r" --kind fact --agent amended
     exit \$?
   fi ;;

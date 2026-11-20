@@ -1,6 +1,6 @@
 # `akyuu check`: the detection pass
 
-Status: built on 2026-10-11 (detectors 1 to 5 and 7, the CLI, the MCP tool and the web view).
+Status: built (detectors 1 to 5 and 7 to 9, the CLI, the MCP tool and the web view).
 Detector 6 (`SameProject`) is not built. The seed has no extra cases: the tests build their own stores.
 On a real store of about 80 memories, the first run found two orphans of an import, a stale link, and an
 unreferenced copy of a project memory that nobody knew about. The threshold of 0.8 gave no false positive there.
@@ -72,7 +72,7 @@ sorted by severity, then kind, then ids.
 | 4 | `NearDuplicate` | Suggestion | Two heads whose bodies share most of their word shingles (see below), and that are not in one `supersedes` chain. |
 | 5 | `Unreferenced` | Suggestion | A head that no ref holds and no pin holds, and that no live memory points at with a retaining edge. GC collects it after the grace period (`explain` says "not live"). The finding shows it before GC does. |
 | 6 | `SameProject` | Suggestion | Two heads under different refs whose first line names the same path (`~/devel/akyuu`). Weak: a heuristic on the text. |
-| 7 | `Hub` | Info | A memory with more than N (default 5) incoming retaining edges. It is a sign that links should be a tier (see "Weighted connections" in the TODO). |
+| 7 | `Hub` | Info | A memory with more than N (default 5) incoming retaining edges. It is a sign that links should be a tier. |
 | 8 | `LongLog` | Info | A log (the value of a ref that no episode follows) with more than N (default 30) episodes that no summary covers in its chain of `follows` edges (or, in an older log, of one `derived_from` edge each). See `log --todo`. |
 | 9 | `MissingRef` | Problem | A live memory has an `about-ref` link to a ref that does not exist. The link resolves to nothing. |
 
@@ -111,8 +111,8 @@ CLI:
 
 ```
 akyuu check [--kind KIND]... [--severity problem|suggestion|info]
-            [--near-threshold 0.8] [--hub-degree 5] [--same-project]
-            [--json]
+            [--near-threshold 0.8] [--min-words 5] [--hub-degree 5]
+            [--long-log 30] [--strict] [--json]
 ```
 
 - Text output, one finding per block: severity, kind, ids (whole, so an agent can

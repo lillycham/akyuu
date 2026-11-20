@@ -1,6 +1,6 @@
 # Safer MCP writes and tool sets
 
-Status: implemented on the feature branch as of 2026-10-22. Not merged or installed.
+Status: implemented and released in 0.4.0.0.
 
 ## Goal
 

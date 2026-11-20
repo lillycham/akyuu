@@ -108,6 +108,8 @@ data TierError
     NoColon Int Text
   | -- | The tier name before the colon is empty, or has white space.
     BadTierName Int Text
+  | -- | A @log@ line does not name exactly one ref.
+    BadLogRefs Int Text
   | -- | A ref name is not valid.
     BadTierRef Int Text NameError
   deriving (Eq, Show)
@@ -135,7 +137,7 @@ parseManifest t = build . concat <$> traverse line (zip [1 ..] (T.lines t))
                 refs <- traverse (\r -> first (BadTierRef n r) (mkName r)) (words' (T.drop 1 rest))
                 case refs of
                   [r] -> Right [Log d r]
-                  _ -> Left (BadTierName n name)
+                  _ -> Left (BadLogRefs n name)
             | T.any isSpace (T.strip name) -> Left (BadTierName n name)
             | otherwise -> do
                 refs <- traverse (\r -> first (BadTierRef n r) (mkName r)) (words' (T.drop 1 rest))

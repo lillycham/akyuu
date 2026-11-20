@@ -14,7 +14,6 @@ module Akyuu.Render
     pinLines,
     unpinLines,
     pinListLines,
-    searchLines,
     searchLinesWith,
     embedLines,
     statusLines,
@@ -34,7 +33,6 @@ module Akyuu.Render
     compareLines,
     compareJSON,
     reviewLines,
-    tierLines,
     tierLinesWithin,
     tierPage,
     logLines,
@@ -110,16 +108,9 @@ refLines withHistory r =
   render (current r) : (if withHistory then map render (history r) else [])
 
 -- | A search result. One line for each hit: the 'Id', two spaces, and the
--- snippet on one line. A hit that a newer memory replaces gets one more line,
--- @  superseded by ID@, for each newer memory. Then the context, if there is
--- one: a line @context:@ and one 'Id' on each line.
---
--- An empty result gives no lines.
-searchLines :: SearchResult -> [Text]
-searchLines = searchLinesWith Map.empty
-
--- | Like 'searchLines', and a hit that a ref holds gets one more line,
--- @  held by NAME, NAME@. See 'heldBy'.
+-- snippet on one line. A hit that a ref holds gets @  held by NAME, NAME@
+-- (see 'heldBy'), and a hit that a newer memory replaces gets
+-- @  superseded by ID@. Then the context, if there is one.
 searchLinesWith :: Map Id [Name] -> SearchResult -> [Text]
 searchLinesWith held r = concatMap matchLines (matches r) <> contextLines <> map correctionLine (corrections r)
   where
@@ -358,7 +349,7 @@ sourceHeader (pid, p) =
     <> " session "
     <> Source.pointerSession p
     <> ", around "
-    <> T.pack (show (Source.pointerAt p))
+    <> stamp (Source.pointerAt p)
 
 -- | Where a file is, for a person.
 locatedText :: Source.Located -> Text
@@ -515,15 +506,9 @@ reviewLines = concatMap one
 
 -- Context --------------------------------------------------------------
 
--- | The text of @context@. Each memory has a line @== REF (ID)@, then its
--- body, then a blank line. A ref that the manifest names and the store lacks
--- has one line. The last line lists the other refs.
-tierLines :: ContextReport -> [Text]
-tierLines = tierLines'
-
--- | 'tierLines' that fits in a number of characters, for a client that cuts
--- a long text: a hook of Claude Code keeps only about 10,000 characters. It
--- is page 1 of 'tierPage'.
+-- | The text of @context@ that fits in a number of characters, for a client
+-- that cuts a long text: a hook of Claude Code keeps only about 10,000
+-- characters. It is page 1 of 'tierPage'.
 tierLinesWithin :: Maybe Int -> ContextReport -> [Text]
 tierLinesWithin Nothing r = tierLines' r
 tierLinesWithin (Just b) r = tierPage b 1 r

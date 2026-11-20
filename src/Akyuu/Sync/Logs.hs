@@ -218,7 +218,12 @@ logAtWithin :: Snapshot -> Name -> Int -> Int -> IO (Either TopicError (LogRead,
 logAtWithin snapshot name limit budget = runExceptT $ do
   when (limit < 0) (throwE (InvalidInput "The log limit must be zero or more."))
   view <- ExceptT (topicViewAt snapshot name)
-  when (viewStatus view == Missing) (throwE (MissingTopic name))
+  ExceptT (logAtView snapshot view limit budget)
+
+logAtView :: Snapshot -> TopicView -> Int -> Int -> IO (Either TopicError (LogRead, Int))
+logAtView snapshot view limit budget = runExceptT $ do
+  when (limit < 0) (throwE (InvalidInput "The log limit must be zero or more."))
+  when (viewStatus view == Missing) (throwE (MissingTopic (viewName view)))
   unless (viewStatus view == LogTopic) (throwE (NeedsResolution view))
   let heads = Set.fromList (map headMemoryId (viewHeads view))
   (memories, failures) <- ExceptT (collect Map.empty [] Set.empty heads)
@@ -273,7 +278,7 @@ levelsWithin snapshot name budget maxLevels = runExceptT $ do
         then pure ([], [check])
         else do
           when (k >= maxLevels) (throwE (InvalidInput "The log summary level budget was exceeded."))
-          (result, used) <- ExceptT (logAtWithin snapshot ref maxBound available)
+          (result, used) <- ExceptT (logAtView snapshot view maxBound available)
           unless
             ( Set.null (logFrontier result)
                 && null (logFailures result)
@@ -382,17 +387,20 @@ itemJSON item =
     ]
 
 logJSON :: LogRead -> Value
-logJSON report =
+logJSON = logJSONAt 0
+
+logJSONAt :: Int -> LogRead -> Value
+logJSONAt level report =
   object
     [ "topic" .= viewJSON (logTopic report),
-      "entries" .= [itemJSON (LogItem i m 0 (Set.singleton i)) | (i, m) <- logEntries report],
+      "entries" .= [itemJSON (LogItem i m level (Set.singleton i)) | (i, m) <- logEntries report],
       "complete" .= (Set.null (logFrontier report) && null (logFailures report)),
       "frontier" .= map Id.render (Set.toAscList (logFrontier report)),
       "failures" .= [object ["memory" .= Id.render i, "message" .= describeError (StorageError err)] | (i, err) <- logFailures report]
     ]
 
 levelsJSON :: LogLevels -> Value
-levelsJSON levels = object ["ref" .= nameText (levelsBase levels), "version" .= Id.render (levelsToken levels), "levels" .= map logJSON (levelsReads levels)]
+levelsJSON levels = object ["ref" .= nameText (levelsBase levels), "version" .= Id.render (levelsToken levels), "levels" .= zipWith logJSONAt [0 ..] (levelsReads levels)]
 
 renderLog :: LogRead -> Text
 renderLog report =

@@ -66,8 +66,9 @@ The history of the decisions is in [docs/development-log.md](docs/development-lo
 - **Search.**
   - Try EmbeddingGemma 2 when nixpkgs has llama.cpp b11452 or later
     (see `docs/embeddings.md`).
-- **Shorter MCP tool descriptions.** The answer of `tools/list` is about 16 KB,
-  and a client that loads every tool pays for it in each session.
+- **Shorter MCP tool descriptions.** The answer of `tools/list` is about 13 KB
+  for the default `ordinary` set (about 8 KB for `topic`), and a client that
+  loads every tool pays for it in each session.
 - **The wiki view:** Markdown tables and images.
 - **A shared helper** for `Store.orNotFound` and `Refs.orNoSuchRef` (an API
   decision, see docs/development-log.md).

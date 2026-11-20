@@ -79,7 +79,7 @@ appendWith held st rs n m = do
 -- @follows@ edge.
 previous :: [Edge] -> Maybe Id
 previous es = case [target e | e <- es, kind e == Follows] of
-  (p : _) -> Just p
+  ps@(_ : _) -> Just (minimum ps)
   [] -> case [target e | e <- es, kind e == DerivedFrom] of
     [p] -> Just p
     _ -> Nothing

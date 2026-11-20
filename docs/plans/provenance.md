@@ -1,7 +1,7 @@
 # Provenance: where a memory came from
 
-Status as of 2026-11-07: a proposal. Nothing is built. The open questions at the
-end need a decision before any code.
+Status: implemented and released in 0.5.0.0 (see [docs/provenance.md](../provenance.md)).
+Kept as design history.
 
 ## Goal
 

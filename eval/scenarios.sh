@@ -106,7 +106,7 @@ a() { "$bin" "$@" >/dev/null 2>&1 || {
 }; }
 aid() { "$bin" "$@" 2>/dev/null; }
 # The current text of a ref.
-current() { "$bin" get --ref "$1" 2>/dev/null | tail -n +5; }
+current() { "$bin" get --ref "$1" 2>/dev/null | awk 'f; /^$/ { f = 1 }'; }
 # True if some ref names a memory whose text has the string: holder TEXT.
 holder() {
   local r

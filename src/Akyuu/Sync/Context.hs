@@ -5,7 +5,6 @@ module Akyuu.Sync.Context
     ContextReport (..),
     configuredContext,
     configuredAt,
-    configuredUnchecked,
     configuredWith,
     resolutionGuard,
     reportJSON,
@@ -69,23 +68,17 @@ configuredContext local options = runExceptT $ do
 configuredAt :: Snapshot -> ContextOptions -> IO (Either TopicError ContextReport)
 configuredAt snapshot options = runExceptT $ do
   ExceptT (pure (validatePageOptions (logOptions options)))
-  report <- ExceptT (configuredUnchecked snapshot options)
+  report <- ExceptT (configuredWith (topicViewAt snapshot) (\name -> pageUnchecked snapshot name (logOptions options)) snapshot options)
   when (maybe False (/= contextLogVersion report) (pageToken (logOptions options))) (throwE LogChanged)
   pure report
 
--- | 'configuredAt' without the log version rule. A caller that binds the
--- whole read to one checkpoint, such as the browser, uses this.
-configuredUnchecked :: Snapshot -> ContextOptions -> IO (Either TopicError ContextReport)
-configuredUnchecked snapshot options = configuredWith (\name -> pageUnchecked snapshot name (logOptions options)) snapshot options
-
--- | 'configuredUnchecked' with the pages from the given function. A caller
--- that has already paged the logs of this snapshot, with these log options,
--- passes them and saves a second traversal of each log.
-configuredWith :: (Name -> IO (Either TopicError LogPage)) -> Snapshot -> ContextOptions -> IO (Either TopicError ContextReport)
-configuredWith pageOf snapshot options = runExceptT $ do
+-- | Configured context without the log version rule, using caller-provided
+-- topic and log-page lookups to avoid duplicate reads from the same snapshot.
+configuredWith :: (Name -> IO (Either TopicError TopicView)) -> (Name -> IO (Either TopicError LogPage)) -> Snapshot -> ContextOptions -> IO (Either TopicError ContextReport)
+configuredWith viewOf pageOf snapshot options = runExceptT $ do
   ExceptT (pure (validatePageRange (logOptions options)))
-  policy <- ExceptT (topicViewAt snapshot (policyRef options))
-  manifest <- ExceptT (topicViewAt snapshot (manifestRef options))
+  policy <- ExceptT (viewOf (policyRef options))
+  manifest <- ExceptT (viewOf (manifestRef options))
   let controlIssues = issues "Policy" policy <> issues "Tier manifest" manifest
       parsed = resolvedBody manifest >>= either (const Nothing) Just . parseManifest
       parseIssues = case (resolvedBody manifest, parsed) of
@@ -103,7 +96,7 @@ configuredWith pageOf snapshot options = runExceptT $ do
       cachedView name
         | name == policyRef options = pure policy
         | name == manifestRef options = pure manifest
-        | otherwise = ExceptT (topicViewAt snapshot name)
+        | otherwise = ExceptT (viewOf name)
   entries <- traverse cachedView wanted
   logs <- liftIO (traverse (\view -> do result <- pageOf (viewName view); pure (viewName view, result)) (filter ((== LogTopic) . viewStatus) entries))
   let entryIssues = concatMap (\view -> if viewStatus view == LogTopic then [] else issues "Context" view) (filter (\view -> viewName view `notElem` [policyRef options, manifestRef options]) entries)

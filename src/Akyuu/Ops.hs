@@ -136,7 +136,7 @@ import Akyuu.Source (Pointer, parsePointer, sourceKind)
 import Akyuu.Store (Store, StoreError (BadMemory, Corrupt, NotFound, StoreIO), openStore)
 import Akyuu.Store qualified as Store
 import Akyuu.Supersede (ReviseError (ReviseFailed, ReviseRefused), SupersedeError (SupersedeRef), supersede, supersedeBy, supersedeFrom)
-import Akyuu.Tier (Place, TierError (BadTierName, BadTierRef, NoColon), logRefs, parseManifest, placeLines, placeLog, placeRefs, tierNames, tierRefs)
+import Akyuu.Tier (Place, TierError (BadLogRefs, BadTierName, BadTierRef, NoColon), logRefs, parseManifest, placeLines, placeLog, placeRefs, tierNames, tierRefs)
 import Akyuu.Topic (Entry (Entry))
 import Akyuu.Topic qualified as Topic
 import Control.Concurrent (threadDelay)
@@ -1110,6 +1110,7 @@ describeTierError :: TierError -> Text
 describeTierError e = case e of
   NoColon n l -> "The manifest has no ':' on line " <> T.pack (show n) <> ": '" <> l <> "'."
   BadTierName n l -> "The manifest has a bad tier name on line " <> T.pack (show n) <> ": '" <> l <> "'."
+  BadLogRefs n l -> "The manifest log line " <> T.pack (show n) <> " must name exactly one ref: '" <> l <> "'."
   BadTierRef n r _ -> "The manifest has a bad ref name on line " <> T.pack (show n) <> ": '" <> r <> "'."
 
 nubOrd :: (Ord a) => [a] -> [a]

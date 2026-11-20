@@ -23,7 +23,6 @@ where
 
 import Akyuu.Check (jaccard, normalise, shingles)
 import Data.Char (isSpace)
-import Data.List (nub)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -52,9 +51,12 @@ compareText a b =
     sa = sentences a
     sb = sentences b
     -- The sentences of the second list, that the first list lacks.
-    missingFrom have xs =
-      let known = Set.fromList (map normalise have)
-       in nub [x | x <- xs, normalise x `Set.notMember` known]
+    missingFrom have = go (Set.fromList (map normalise have))
+      where
+        go _ [] = []
+        go seen (x : xs) =
+          let n = normalise x
+           in if n `Set.member` seen then go seen xs else x : go (Set.insert n seen) xs
 
 -- | Can the first memory be dropped in favour of the second? Only if it has
 -- no sentence that the second one lacks.

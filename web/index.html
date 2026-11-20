@@ -1357,13 +1357,13 @@ const Akyuu = (function () {
   }
 
   // Inline tokens of one line of text: {t:'text'|'code'|'strong'|'em'|'link'|'url'|'ref'|'id', ...}.
-  function mdInline(text, names) {
+  function mdInline(text, namesOrMatcher) {
     const out = [];
     const push = (tok) => {
       if (tok.t === 'text' && out.length && out[out.length - 1].t === 'text') out[out.length - 1].v += tok.v;
       else if (tok.t !== 'text' || tok.v) out.push(tok);
     };
-    const matcher = refMatcher(names);
+    const matcher = namesOrMatcher instanceof RegExp ? namesOrMatcher : refMatcher(namesOrMatcher);
     // Plain text: find ids, URLs and ref names in it.
     function plain(s) {
       const re = /(sha256-[0-9a-f]{12,64})|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g;
@@ -1399,11 +1399,11 @@ const Akyuu = (function () {
       }
       if (c === '*' && text[i + 1] === '*') {
         const j = text.indexOf('**', i + 2);
-        if (j > i + 2) { flush(); out.push({ t: 'strong', c: mdInline(text.slice(i + 2, j), names) }); i = j + 2; continue; }
+        if (j > i + 2) { flush(); out.push({ t: 'strong', c: mdInline(text.slice(i + 2, j), matcher) }); i = j + 2; continue; }
       }
       if (c === '*' && text[i + 1] !== ' ' && text[i + 1] !== '*') {
         const j = text.indexOf('*', i + 1);
-        if (j > i + 1 && text[j - 1] !== ' ') { flush(); out.push({ t: 'em', c: mdInline(text.slice(i + 1, j), names) }); i = j + 1; continue; }
+        if (j > i + 1 && text[j - 1] !== ' ') { flush(); out.push({ t: 'em', c: mdInline(text.slice(i + 1, j), matcher) }); i = j + 1; continue; }
       }
       if (c === '[') {
         const m = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/.exec(text.slice(i));
@@ -1418,10 +1418,11 @@ const Akyuu = (function () {
   // Blocks of a body: {t:'h', level, c}, {t:'p', c}, {t:'list', ordered, items:[{c, sub:[...]}]},
   // {t:'code', v}, {t:'quote', c}, {t:'hr'}. c is a list of inline tokens.
   function mdBlocks(body, names) {
+    const matcher = refMatcher(names);
     const lines = String(body || '').replace(/\r/g, '').split('\n');
     const blocks = [];
     let para = [];
-    const endPara = () => { if (para.length) { blocks.push({ t: 'p', c: mdInline(para.join(' '), names) }); para = []; } };
+    const endPara = () => { if (para.length) { blocks.push({ t: 'p', c: mdInline(para.join(' '), matcher) }); para = []; } };
     const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
     let i = 0;
     while (i < lines.length) {
@@ -1438,13 +1439,13 @@ const Akyuu = (function () {
       }
       if (!t) { endPara(); i++; continue; }
       let m = /^(#{1,4})\s+(.*)$/.exec(t);
-      if (m) { endPara(); blocks.push({ t: 'h', level: m[1].length, c: mdInline(m[2], names) }); i++; continue; }
+      if (m) { endPara(); blocks.push({ t: 'h', level: m[1].length, c: mdInline(m[2], matcher) }); i++; continue; }
       if (/^([-*_])(\s*\1){2,}$/.test(t)) { endPara(); blocks.push({ t: 'hr' }); i++; continue; }
       if (/^>\s?/.test(t)) {
         endPara();
         const q = [];
         while (i < lines.length && /^>\s?/.test(lines[i].trim())) q.push(lines[i++].trim().replace(/^>\s?/, ''));
-        blocks.push({ t: 'quote', c: mdInline(q.join(' '), names) });
+        blocks.push({ t: 'quote', c: mdInline(q.join(' '), matcher) });
         continue;
       }
       m = item.exec(line);
@@ -1456,16 +1457,16 @@ const Akyuu = (function () {
         while (i < lines.length) {
           const mm = item.exec(lines[i]);
           if (mm && mm[1].length <= base) {
-            items.push({ c: mdInline(mm[3], names), sub: [] });
+            items.push({ c: mdInline(mm[3], matcher), sub: [] });
             i++;
           } else if (mm && mm[1].length > base && items.length) {
-            items[items.length - 1].sub.push(mdInline(mm[3], names));
+            items[items.length - 1].sub.push(mdInline(mm[3], matcher));
             i++;
           } else if (lines[i].trim() && /^\s+\S/.test(lines[i]) && items.length) {
             // A continuation line of the item before.
             const last = items[items.length - 1];
-            if (last.sub.length) last.sub[last.sub.length - 1] = last.sub[last.sub.length - 1].concat([{ t: 'text', v: ' ' }], mdInline(lines[i].trim(), names));
-            else last.c = last.c.concat([{ t: 'text', v: ' ' }], mdInline(lines[i].trim(), names));
+            if (last.sub.length) last.sub[last.sub.length - 1] = last.sub[last.sub.length - 1].concat([{ t: 'text', v: ' ' }], mdInline(lines[i].trim(), matcher));
+            else last.c = last.c.concat([{ t: 'text', v: ' ' }], mdInline(lines[i].trim(), matcher));
             i++;
           } else break;
         }
@@ -1584,10 +1585,12 @@ const Akyuu = (function () {
   }
   // The text of an SVG label that fits in max pixels: the longest start of
   // the text that fits with an ellipsis, as tspans. The ellipsis is in mono.
-  function fitLabel(text, weight, size, family, max) {
-    const font = weight + ' ' + size + 'px ' + fontVar(family, 'monospace');
+  function fitLabel(text, weight, size, family, max, fontCache) {
+    const fam = (fontCache && fontCache[family]) || fontVar(family, 'monospace');
+    const monoFam = (fontCache && fontCache['--font-mono']) || fontVar('--font-mono', 'monospace');
+    const font = weight + ' ' + size + 'px ' + fam;
     if (textWidth(text, font, size) <= max) return [svg('tspan', { text: text })];
-    const room = max - textWidth('…', '400 ' + size + 'px ' + fontVar('--font-mono', 'monospace'), size);
+    const room = max - textWidth('…', '400 ' + size + 'px ' + monoFam, size);
     let lo = 0, hi = text.length;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
@@ -1720,13 +1723,19 @@ const Akyuu = (function () {
     return marks;
   }
 
+  let nodeIndex = null;
+  let nodeIndexGraphs = [null, null, null];
   function nodeInfo(id) {
-    for (const g of [state.graph, state.mapGraph, state.gcGraph]) {
-      if (!g) continue;
-      const n = g.nodes.find(x => x.id === id);
-      if (n) return n;
+    const gs = [state.graph, state.mapGraph, state.gcGraph];
+    if (!nodeIndex || gs[0] !== nodeIndexGraphs[0] || gs[1] !== nodeIndexGraphs[1] || gs[2] !== nodeIndexGraphs[2]) {
+      nodeIndex = new Map();
+      for (let k = gs.length - 1; k >= 0; k--) {
+        if (!gs[k]) continue;
+        for (const n of gs[k].nodes) nodeIndex.set(n.id, n);
+      }
+      nodeIndexGraphs = gs;
     }
-    return null;
+    return nodeIndex.get(id) || null;
   }
 
   // ---- the graph drawing ---------------------------------------------------
@@ -1823,6 +1832,10 @@ const Akyuu = (function () {
     }
 
     const seeds = new Set(opts.seeds || []);
+    const fontCache = {
+      '--font-mono': fontVar('--font-mono', 'monospace'),
+      '--font-display': fontVar('--font-display', 'Georgia, serif'),
+    };
     for (const id of lay.order) {
       const n = byId.get(id);
       const { x, y } = xy(id);
@@ -1845,8 +1858,8 @@ const Akyuu = (function () {
       else if (n.status === 'pruned') { top = 'pruned ' + fmtTime(n.prunedAt).slice(0, 10); bottom = shortId(id); }
       else { top = (n.kind || '?') + ' · ' + (n.agent || '?') + ' · ' + shortId(id).slice(0, 8); bottom = n.line || '(empty first line)'; }
       // The top line stays clear of the folded corner.
-      g.appendChild(svg('text', { class: 'top', x: 10, y: 14 }, fitLabel(top, 400, 9.5, '--font-mono', NODE_W - 24)));
-      g.appendChild(svg('text', { class: 'line', x: 10, y: 30 }, fitLabel(bottom, 700, 13, '--font-display', NODE_W - 18)));
+      g.appendChild(svg('text', { class: 'top', x: 10, y: 14 }, fitLabel(top, 400, 9.5, '--font-mono', NODE_W - 24, fontCache)));
+      g.appendChild(svg('text', { class: 'line', x: 10, y: 30 }, fitLabel(bottom, 700, 13, '--font-display', NODE_W - 18, fontCache)));
       g.appendChild(svg('title', { text: id + '\n' + (n.line || n.status) }));
       if (opts.doomed && opts.doomed.has(id)) g.appendChild(svg('rect', { class: 'doomed', x: -3, y: -3, width: NODE_W + 6, height: NODE_H + 6, rx: 0 }));
       // Ref names: the current values solid in the first row, the older
@@ -2192,13 +2205,16 @@ const Akyuu = (function () {
     host.appendChild(layer);
     host.appendChild(groups);
 
+    let cachedBoxes = null;
     function boxes() {
+      if (cachedBoxes) return cachedBoxes;
       const origin = host.getBoundingClientRect();
       const m = new Map();
       for (const [name, c] of cards) {
         const r = c.getBoundingClientRect();
         m.set(name, { x: r.left - origin.left + host.scrollLeft + r.width / 2, y: r.top - origin.top + host.scrollTop + r.height / 2, w: r.width, h: r.height });
       }
+      cachedBoxes = m;
       return m;
     }
     // The topic in focus is the one under the pointer, or else the selected one.
@@ -2725,7 +2741,7 @@ const Akyuu = (function () {
     nav.replaceChildren();
     if (state.pagesError) { nav.appendChild(el('p', { class: 'notice warn', text: state.pagesError })); return; }
     const f = ($('wiki-filter').value || '').trim().toLowerCase();
-    const names = pageNames().filter(n => !f || n.toLowerCase().indexOf(f) >= 0);
+    const names = (state.pages || []).map(p => p.name).filter(n => !f || n.toLowerCase().indexOf(f) >= 0);
     if (!names.length) { nav.appendChild(el('p', { class: 'muted', text: f ? 'No ref matches.' : 'The store has no refs yet.' })); return; }
     function tree(node) {
       const ul = el('ul', { class: 'wtree' });

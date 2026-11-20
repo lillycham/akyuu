@@ -11,19 +11,18 @@ module Akyuu.Id
   )
 where
 
-import Control.Exception (evaluate)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Bifunctor (first)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
-import Data.ByteString.Lazy qualified as BL
 import Data.ByteString.Short (ShortByteString)
 import Data.ByteString.Short qualified as SBS
-import Data.Maybe (fromJust)
+import Data.Char (isDigit)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import System.IO (IOMode (ReadMode), withBinaryFile)
 
 -- | The identity of a stored object. An 'Id' is the SHA-256 digest of the
 -- content of the object.
@@ -73,9 +72,13 @@ hashBytes = Id . SBS.toShort . SHA256.hash
 -- The function reads the file in chunks, so memory use stays the same for
 -- all file sizes. It throws an 'IOException' if it cannot open or read the file.
 hashFile :: FilePath -> IO Id
-hashFile p = do
-  i <- SHA256.hashlazy <$> BL.readFile p
-  evaluate $ fromJust $ fromDigest i
+hashFile p = withBinaryFile p ReadMode (go SHA256.init)
+  where
+    go !ctx h = do
+      chunk <- BS.hGet h 65536
+      if BS.null chunk
+        then pure (Id (SBS.toShort (SHA256.finalize ctx)))
+        else go (SHA256.update ctx chunk) h
 
 -- | Check that some content matches an 'Id'.
 --
@@ -102,5 +105,10 @@ render = ("sha256-" <>) . TE.decodeUtf8 . B16.encode . toBytes
 parse :: Text -> Either IdParseError Id
 parse t = do
   hex <- maybe (Left (BadPrefix t)) Right (T.stripPrefix "sha256-" t)
-  raw <- first (const (BadHex hex)) (B16.decode (TE.encodeUtf8 hex))
-  maybe (Left (BadLength (BS.length raw))) Right (fromDigest raw)
+  if T.all isLowerHex hex
+    then do
+      raw <- first (const (BadHex hex)) (B16.decode (TE.encodeUtf8 hex))
+      maybe (Left (BadLength (BS.length raw))) Right (fromDigest raw)
+    else Left (BadHex hex)
+  where
+    isLowerHex c = isDigit c || (c >= 'a' && c <= 'f')

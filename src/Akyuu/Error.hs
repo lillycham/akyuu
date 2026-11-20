@@ -196,7 +196,10 @@ describeParse p = case p of
   BadRefName h e ->
     "the " <> h <> " header: " <> case e of
       EmptyName -> "a ref name cannot be empty."
-      BadSegment s -> describeName s e
+      BadSegment s ->
+        "the part "
+          <> quote s
+          <> " is not a valid ref name segment. Use lower case letters, digits, '.', '_' and '-', starting with a letter or digit."
   NotCanonical -> "it is not in the canonical form: the headers must be kind, created, agent, then each edge on its own line, then each about-ref, sorted, with no repeated line."
 
 refName :: Name -> Text

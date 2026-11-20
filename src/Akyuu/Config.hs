@@ -59,7 +59,6 @@ module Akyuu.Config
     parseLegacy,
     resolve,
     expandHome,
-    environmentProfile,
   )
 where
 

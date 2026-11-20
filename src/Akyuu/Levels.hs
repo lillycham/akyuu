@@ -49,7 +49,7 @@ import Akyuu.Graph (Edge (kind, target), EdgeType (DerivedFrom))
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memCreated, memEdges))
-import Akyuu.Refs (Name, NameError, mkName, nameText)
+import Akyuu.Refs (Name, NameError (BadSegment), mkName, nameText)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -66,8 +66,10 @@ import Data.Time (UTCTime)
 -- the log itself. The level is a suffix of the last part, because a part of a
 -- name is a directory, and @me/log@ is a file.
 levelRef :: Name -> Int -> Either NameError Name
-levelRef n 0 = Right n
-levelRef n k = mkName (nameText n <> ".l" <> T.pack (show k))
+levelRef n k
+  | k < 0 = Left (BadSegment (T.pack (show k)))
+  | k == 0 = Right n
+  | otherwise = mkName (nameText n <> ".l" <> T.pack (show k))
 
 -- Chains ---------------------------------------------------------------
 

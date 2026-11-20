@@ -43,6 +43,12 @@ done
 [ -n "$root" ] || { echo "akyuu-backup: no store root. Use --root DIR or set AKYUU_ROOT." >&2; exit 2; }
 [ -n "$dest" ] || { echo "akyuu-backup: no destination. Use --dest DIR." >&2; exit 2; }
 [ -d "$root/store" ] || { echo "akyuu-backup: $root has no store directory." >&2; exit 1; }
+for marker in IDENTITY CURRENT REPLICA; do
+  if [ -e "$root/$marker" ]; then
+    echo "akyuu-backup: $root looks like a checkpoint replica root (has $marker); refusing legacy backup." >&2
+    exit 1
+  fi
+done
 case $keep in '' | *[!0-9]*) echo "akyuu-backup: --keep needs a number." >&2; exit 2 ;; esac
 [ "$keep" -ge 1 ] || { echo "akyuu-backup: --keep must be at least 1." >&2; exit 2; }
 

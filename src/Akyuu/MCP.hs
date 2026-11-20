@@ -51,7 +51,7 @@ module Akyuu.MCP
 where
 
 import Akyuu.Amend qualified as Amend
-import Akyuu.Check (CheckOptions (hubDegree, longLog, nearThreshold), FindingKind, Severity, defaultCheckOptions, filterFindings, kindName, severityName)
+import Akyuu.Check (CheckOptions (hubDegree, longLog, minWords, nearThreshold), FindingKind, Severity, defaultCheckOptions, filterFindings, kindName, severityName)
 import Akyuu.Disabled qualified as Disabled
 import Akyuu.Episode (Walk (walkEnd), WalkEnd (Interrupted))
 import Akyuu.Error (AkyuuError (BadId, BadInput, BadName), describe)
@@ -275,7 +275,7 @@ toolList =
       "supersede"
       "Replace the complete memory of a ref, including its metadata and links. Return the new id. The server adds a supersedes edge. Require expected: the id from get. If the ref changed, read it again before you revise the text."
       ( objectSchema
-          (("ref", refSchema) : ("expected", idSchema "The id that the ref must point to now.") : memoryProps)
+          (("ref", refSchema) : ("expected", idSchema "The id that the ref must point to now.") : memoryProps <> [("supersedes", idsSchema "Additional memories that this memory replaces, for example when merging two memories.")])
           ["ref", "expected", "kind", "agent", "body"]
       ),
     tool
@@ -428,6 +428,7 @@ toolList =
           [ ("kinds", object ["type" .= ("array" :: Text), "items" .= object ["type" .= ("string" :: Text), "enum" .= map kindName [minBound .. maxBound :: FindingKind]], "description" .= ("Show only these kinds. The default is all kinds." :: Text)]),
             ("severity", object ["type" .= ("string" :: Text), "enum" .= map severityName [minBound .. maxBound :: Severity], "description" .= ("Show this level or a more serious one. The default is all levels." :: Text)]),
             ("near_threshold", object ["type" .= ("number" :: Text), "minimum" .= (0 :: Int), "maximum" .= (1 :: Int), "default" .= nearThreshold defaultCheckOptions, "description" .= ("The share of text that two memories must have in common to be near duplicates." :: Text)]),
+            ("min_words", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "default" .= minWords defaultCheckOptions, "description" .= ("Minimum word count for near-duplicate checks." :: Text)]),
             ("long_log", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "default" .= longLog defaultCheckOptions, "description" .= ("A log with more episodes than this is long." :: Text)]),
             ("hub_degree", object ["type" .= ("integer" :: Text), "minimum" .= (0 :: Int), "default" .= hubDegree defaultCheckOptions, "description" .= ("A memory with more links than this is a hub." :: Text)])
           ]
@@ -856,7 +857,7 @@ parseArgs n args = case n of
       (Just x, Nothing) -> pure (CallGet (Right x))
       (Nothing, Just x) -> pure (CallGet (Left x))
       _ -> Left (BadArguments "Give exactly one of the arguments 'id' and 'ref'.")
-  "supersede" -> CallSupersede <$> refArg args <*> idArg args "expected" <*> memoryArg args plainEdges
+  "supersede" -> CallSupersede <$> refArg args <*> idArg args "expected" <*> memoryArg args (plainEdges <> [("supersedes", Supersedes)])
   "search" -> do
     q <- required args "query" asText "a string"
     l <- optional' args "limit" asInt "a whole number"
@@ -957,9 +958,11 @@ parseArgs n args = case n of
     sev <- traverse severityOf s
     thr <- maybe (pure (nearThreshold defaultCheckOptions)) (\x -> if x >= 0 && x <= 1 then Right x else argError "near_threshold" "must be from 0 to 1.") t
     hub <- atLeast "hub_degree" 0 (maybe (hubDegree defaultCheckOptions) id h)
+    mw <- optional' args "min_words" asInt "a whole number"
+    minW <- atLeast "min_words" 1 (maybe (minWords defaultCheckOptions) id mw)
     ll <- optional' args "long_log" asInt "a whole number"
     longN <- atLeast "long_log" 1 (maybe (longLog defaultCheckOptions) id ll)
-    pure (CallCheck defaultCheckOptions {nearThreshold = thr, hubDegree = hub, longLog = longN} kinds sev)
+    pure (CallCheck defaultCheckOptions {nearThreshold = thr, hubDegree = hub, minWords = minW, longLog = longN} kinds sev)
   _ -> Left (UnknownTool n)
   where
     countArg key fallback lower = optional' args key asInt "a whole number" >>= atLeast key lower . fromMaybe fallback

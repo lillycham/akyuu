@@ -29,7 +29,6 @@ module Akyuu.Web.Api
   ( -- * Requests and responses
     WebRequest (..),
     WebResponse (..),
-    getRequest,
 
     -- * Endpoints
     Endpoint (..),
@@ -75,10 +74,6 @@ data WebRequest = WebRequest
     reqQuery :: [(Text, Maybe Text)]
   }
   deriving (Eq, Show)
-
--- | A @GET@ request for a path with no query.
-getRequest :: [Text] -> WebRequest
-getRequest p = WebRequest "GET" p []
 
 -- | An answer.
 data WebResponse = WebResponse

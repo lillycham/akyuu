@@ -19,8 +19,9 @@ passes, skip the step, so that a second run of the guide changes nothing.
 - Before step 2, ask the person where the store goes. The usual place is
   `~/.local/share/akyuu`. Below, `ROOT` is that place as a full path, for
   example `/Users/NAME/.local/share/akyuu` or `/home/NAME/.local/share/akyuu`.
-  Config files (Nix, JSON, TOML) do not expand `~`, so always write `ROOT` in
-  full.
+  Client config files (Nix, JSON, and client TOML such as Codex `args`) do not
+  expand `~` (even though akyuu's own `config.toml` does), so always write
+  `ROOT` in full.
 - `AKYUU` is the full path of the binary, for config files: apps do not get the
   `PATH` of a shell. Use a path that stays the same after an upgrade, never a
   path in `/nix/store`:

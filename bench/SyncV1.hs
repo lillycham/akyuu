@@ -95,12 +95,12 @@ seed root count profile = do
           Set.empty
           SetTopic
           (add 2 (name "policy/tiers") "config" "always: bench/topic-0 bench/log" Set.empty SetTopic initial)
-      topics = foldl (\acc k -> add (k + 10) (name ("bench/topic-" <> T.pack (show (k `mod` 32)))) "fact" (body k) Set.empty SetTopic acc) controls [0 .. topicCount - 1]
+      topics = foldl' (\acc k -> add (k + 10) (name ("bench/topic-" <> T.pack (show (k `mod` 32)))) "fact" (body k) Set.empty SetTopic acc) controls [0 .. topicCount - 1]
       append acc k =
         let Build _ _ _ memories = acc
             edges = maybe Set.empty (Set.singleton . Edge Follows) (Map.lookup (name "bench/log") memories)
          in add (k + count + 10) (name "bench/log") "note" (body (k + count)) edges AppendLog acc
-      logged@(Build _ logPayloads _ _) = foldl append topics [0 .. count - topicCount - 1]
+      logged@(Build _ logPayloads _ _) = foldl' append topics [0 .. count - topicCount - 1]
       -- Take only episode IDs, in chronological order, before controls/topics.
       episodeIds = reverse (map fst (take (count - topicCount) logPayloads))
       batches xs
@@ -111,7 +111,7 @@ seed root count profile = do
             ref = name "bench/log.l1"
             edges = Set.fromList (map (Edge DerivedFrom) sources) <> maybe Set.empty (Set.singleton . Edge Follows) (Map.lookup ref memories)
          in add (3 * count + k + 10) ref "summary" ("Summary batch " <> T.pack (show k)) edges AppendLog acc
-      Build events payloads _ _ = foldl summarise logged (zip [0 ..] (batches episodeIds))
+      Build events payloads _ _ = foldl' summarise logged (zip [0 ..] (batches episodeIds))
       state = either (error . show) id (State.fromEvents store events)
   repo <- Repo.initialise root store >>= checked
   snapshot <- Repo.importState repo state payloads >>= checked

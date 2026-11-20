@@ -10,7 +10,7 @@ import Akyuu.Refs (nameText)
 import Akyuu.Sync.Checkpoint (CheckpointId (CheckpointId))
 import Akyuu.Sync.Context (ContextOptions (logOptions), configuredWith, reportJSON)
 import Akyuu.Sync.Logs (LogPageOptions (LogPageOptions, pageNumber, pageSize, recentWhole), pageJSON, pageUnchecked)
-import Akyuu.Sync.Repository (readMemory, snapshotId)
+import Akyuu.Sync.Repository (RepositoryError (UnacceptedObject), readMemory, snapshotId)
 import Akyuu.Sync.Search (searchJSON, searchViews)
 import Akyuu.Sync.Topics (LocalReplica, TopicError (ConfigurationChanged, InvalidInput, StorageError), TopicStatus (LogTopic), TopicView (viewName, viewStatus), captureSnapshot, errorJSON, topicNames, topicViewAt, viewJSON)
 import Akyuu.Web.Api (securityHeaders)
@@ -54,8 +54,10 @@ readViewChecked local options expected query limit = runExceptT $ do
   paged <- liftIO (traverse (\topic -> (viewName topic,) <$> pageUnchecked snapshot (viewName topic) (logOptions options)) (filter ((== LogTopic) . viewStatus) topics))
   let logs = [either (\err -> object ["ref" .= nameText name, "error" .= errorJSON err]) pageJSON result | (name, result) <- paged]
       pages = Map.fromList paged
+      topicMap = Map.fromList [(viewName topic, topic) | topic <- topics]
+      viewOf name = maybe (topicViewAt snapshot name) (pure . Right) (Map.lookup name topicMap)
       pageOf name = maybe (pageUnchecked snapshot name (logOptions options)) pure (Map.lookup name pages)
-  context <- ExceptT (configuredWith pageOf snapshot options)
+  context <- ExceptT (configuredWith viewOf pageOf snapshot options)
   search <- traverse (\text -> ExceptT (searchViews (snapshotId snapshot) topics [] text limit)) query
   pure (object ["checkpoint" .= Id.render checkpoint, "topics" .= map viewJSON topics, "logs" .= logs, "context" .= reportJSON context, "search" .= fmap searchJSON search])
 
@@ -82,7 +84,8 @@ application port local options request respond
         case result of
           Right value -> send 200 "application/json; charset=utf-8" (A.encode value)
           Left err@ConfigurationChanged -> send 409 "application/json; charset=utf-8" (A.encode (errorJSON err))
-          Left err -> send 400 "application/json; charset=utf-8" (A.encode (errorJSON err))
+          Left err@(StorageError (UnacceptedObject _)) -> send 400 "application/json; charset=utf-8" (A.encode (errorJSON err))
+          Left err -> send 500 "application/json; charset=utf-8" (A.encode (errorJSON err))
   | pathInfo request /= ["api", "view"] = sendError 404 "No such endpoint."
   | otherwise = case parameters of
       Left message -> sendError 400 message

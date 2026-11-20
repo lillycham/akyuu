@@ -103,7 +103,6 @@ module Akyuu.GC
     collect,
     dryRun,
     withGCLock,
-    gcLockPath,
 
     -- * Tombstones
     Tombstone (..),
@@ -126,7 +125,7 @@ import Akyuu.Graph (EdgeType (About, DerivedFrom, Follows, Refines, Supersedes),
 import Akyuu.Id (Id)
 import Akyuu.Id qualified as Id
 import Akyuu.Memory (Memory (memEdges), timeFormat)
-import Akyuu.Mutation (Mutation, checkMutation, mutationLockPath, withMutation)
+import Akyuu.Mutation (Mutation, checkMutation, withMutation)
 import Akyuu.Refs (RefError (NoSuchRef), Refs, getRef, listRefs, openRefs, retained)
 import Akyuu.Store (Store, StoreError (NotFound), objectPath, storeRoot, trashPath)
 import Akyuu.Store qualified as Store
@@ -752,10 +751,6 @@ data RunReport = RunReport
     synced :: SyncReport
   }
   deriving (Eq, Show)
-
--- | The shared mutation lock used by GC and writers.
-gcLockPath :: Store -> FilePath
-gcLockPath = mutationLockPath . storeRoot
 
 -- | Hold the mutation lock for a whole collection. The token lets internal
 -- mutation helpers participate without recursively acquiring the lock.

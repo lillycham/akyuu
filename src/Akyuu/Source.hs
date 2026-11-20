@@ -369,7 +369,7 @@ codexRecord l = do
   pure (Record time role (cut text) (ordinal o))
   where
     ordinal o = case KM.lookup "ordinal" o of
-      Just (Number n) -> Just (T.pack (show (truncate n :: Int)))
+      Just (Number n) | n >= 0 && n <= fromIntegral (maxBound :: Int) -> Just (T.pack (show (truncate n :: Int)))
       _ -> Nothing
 
 -- | The speaker and the text of the payload of a Codex response item.
@@ -435,6 +435,7 @@ claudeRecord l = do
       uuid = case KM.lookup "uuid" o of
         Just (String u) -> Just u
         _ -> Nothing
+  guard (not (T.null (T.strip text)))
   pure (Record time role (cut text) uuid)
   where
     isResult b = typeOf b == Just "tool_result"
@@ -630,7 +631,7 @@ lineId format l = do
   Object o <- decodeStrict l
   case format of
     "codex" -> case KM.lookup "ordinal" o of
-      Just (Number n) -> Just (T.pack (show (truncate n :: Int)))
+      Just (Number n) | n >= 0 && n <= fromIntegral (maxBound :: Int) -> Just (T.pack (show (truncate n :: Int)))
       _ -> Nothing
     "omp" -> textField "id" o
     _ -> textField "uuid" o

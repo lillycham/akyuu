@@ -114,36 +114,38 @@ readGraphData env = runExceptT $ do
   let s = envStore env
       c = envCache env
   (g, ages) <- gc (GC.snapshot c s)
-  stored <- Set.fromList <$> store (Store.list s)
+  let stored = Map.keysSet ages
   cached <- cache (Cache.cachedIds c)
   sums <- cache (Cache.summaries c)
+  cachedLinks <- either (const Map.empty) id <$> liftIO (Cache.loadAboutRefs c)
   let fromCache = Map.fromList [(sumId x, x) | x <- sums]
-      needed = filter (`Map.notMember` fromCache) (Set.toList (stored `Set.intersection` Graph.nodes g))
-  extra <- catMaybes <$> traverse (summaryFromStore env) needed
+      uncached = Set.toAscList ((stored `Set.intersection` Graph.nodes g) `Set.difference` cached)
+  extraMems <- catMaybes <$> traverse (memoryFromStore env) uncached
+  let extraSums = Map.fromList [(i, Summary i (memKind m) (memAgent m) (memCreated m) (Cache.firstLine (memBody m))) | (i, m) <- extraMems]
+      extraLinks = Map.fromList [(i, memAboutRefs m) | (i, m) <- extraMems, not (Set.null (memAboutRefs m))]
   tombs <- gc (GC.listTombstones s)
-  links <- liftIO (linksIn env g)
   let dead = Graph.dangling g
   pure
     ( GraphData
         { gdGraph = g,
-          gdSummaries = fromCache <> Map.fromList [(sumId x, x) | x <- extra],
+          gdSummaries = fromCache <> extraSums,
           gdStore = stored,
           gdCached = cached,
           gdTombstones = Map.fromList [(i, GC.prunedAt t) | (i, t) <- tombs, i `Set.member` dead],
-          gdAboutRefs = links
+          gdAboutRefs = cachedLinks <> extraLinks
         },
       ages
     )
 
--- | The summary of a memory, read from the store. An object that GC moved
--- away in the meantime gives 'Nothing'.
-summaryFromStore :: Env -> Id -> ExceptT AkyuuError IO (Maybe Summary)
-summaryFromStore env i = do
+-- | A memory read from the store. An object that GC moved away in the meantime
+-- gives 'Nothing'.
+memoryFromStore :: Env -> Id -> ExceptT AkyuuError IO (Maybe (Id, Memory))
+memoryFromStore env i = do
   r <- liftIO (Store.get (envStore env) i)
   case r of
     Left (NotFound _) -> pure Nothing
     Left e -> throwE (StoreFailed e)
-    Right m -> pure (Just (Summary i (memKind m) (memAgent m) (memCreated m) (Cache.firstLine (memBody m))))
+    Right m -> pure (Just (i, m))
 
 -- | The graph view of a window ('graphView').
 --
@@ -384,14 +386,24 @@ readBundle :: Env -> IO Value
 readBundle env = do
   t <- getCurrentTime
   stats <- part (fmap statsJSON <$> readStats env)
-  graph <- part (readGraph env defaultWindow {winAll = True})
-  refsV <- part (readRefs env)
-  plan <- part (readPlan env)
+  gdE <- readGraphData env
+  esE <- readRefEntries env
+  let graph = either errorValue (\(d, _) -> graphViewJSON (graphView defaultWindow {winAll = True} d)) gdE
+      refsV = either errorValue (refsJSON (GC.keepGenerations webPolicy)) esE
+  rootsE <- runExceptT (gc (GC.readRoots webPolicy (envRefs env) (envStore env)))
+  let plan = case (gdE, rootsE) of
+        (Right (d, ages), Right r) ->
+          let g = gdGraph d
+              o = Observed t ages
+              ns = Graph.nodes g
+           in planJSON webPolicy o r ns (Set.filter (GC.young webPolicy o) ns) (GC.plan webPolicy o r g)
+        (Left e, _) -> errorValue e
+        (_, Left e) -> errorValue e
   trash <- part (readTrash env)
   verify <- part (readVerify env)
   checkV <- part (readCheck env)
   pagesV <- part (readPages env)
-  mems <- either (\e -> (errorValue e, errorValue e)) id <$> memories t
+  mems <- either (\e -> (errorValue e, errorValue e)) id <$> memories t gdE esE rootsE
   pure $
     object
       [ "generatedAt" .= timeJSON t,
@@ -410,22 +422,32 @@ readBundle env = do
     part :: IO (Either AkyuuError Value) -> IO Value
     part act = either errorValue id <$> act
     errorValue e = object ["error" .= describe e]
-    memories t = runExceptT $ do
-      (d, ages) <- ExceptT (readGraphData env)
-      es <- ExceptT (readRefEntries env)
-      r <- gc (GC.readRoots webPolicy (envRefs env) (envStore env))
+    holdsMap es =
+      Map.fromListWith
+        (flip (<>))
+        [ (i, [(reName e, k)])
+        | e <- es,
+          Right r <- [reValue e],
+          (k, i) <- zip [0 ..] (Refs.current r : Refs.history r)
+        ]
+    memories t gdE esE rootsE = runExceptT $ do
+      (d, ages) <- ExceptT (pure gdE)
+      es <- ExceptT (pure esE)
+      r <- ExceptT (pure rootsE)
       let g = gdGraph d
           o = Observed t ages
           whys = GC.explainAll webPolicy o r g
+          holdsOf = holdsMap es
+          holds i = Map.findWithDefault [] i holdsOf
       read' <- forM (Set.toAscList (gdStore d)) $ \i -> (,) i <$> liftIO (getMemory env i)
       let links = Map.fromList [(i, memAboutRefs x) | (i, Right x) <- read', not (Set.null (memAboutRefs x))]
           values = refValues es
           ms =
-            [ K.fromText (Id.render i) .= memoryJSON i x (Query.neighbourList i g) (Query.refLinkList i links values) (refHolds es i) st (Map.lookup i ages)
+            [ K.fromText (Id.render i) .= memoryJSON i x (Query.neighbourList i g) (Query.refLinkList i links values) (holds i) st (Map.lookup i ages)
             | (i, Right x) <- read',
               let st = if Set.null (Graph.predecessors Supersedes i g) then HeadNode else SupersededNode
             ]
       pure
         ( object ms,
-          object [K.fromText (Id.render i) .= whyJSON webPolicy o i w (refHolds es i) | (i, w) <- Map.toAscList whys]
+          object [K.fromText (Id.render i) .= whyJSON webPolicy o i w (holds i) | (i, w) <- Map.toAscList whys]
         )
