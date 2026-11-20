@@ -15,6 +15,8 @@ bin=${1:-$(cabal list-bin exe:akyuu)}
 root=$(mktemp -d "${TMPDIR:-/tmp}/akyuu-mcp-smoke.XXXXXX")
 trap 'rm -rf "$root"' EXIT
 mkdir "$root/store-root"
+export AKYUU_CONFIG=$root/no-config.toml
+unset AKYUU_DISABLED AKYUU_EMBED_COMMAND AKYUU_EMBED_MODEL AKYUU_EMBED_PROFILE
 
 coproc SRV { "$bin" --root "$root/store-root" mcp --tool-set maintenance 2>"$root/stderr.log"; }
 srv_pid=$SRV_PID

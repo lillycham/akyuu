@@ -2,7 +2,32 @@ import type { EngineInterface, Register } from 'claude-code'
 
 // The tools of the MCP server that only read. Every other tool of the
 // server writes, and a write counts toward the status line.
-const READS = new Set(['recall', 'context', 'log', 'unfold', 'get', 'search', 'status', 'check', 'neighbours', 'compare'])
+const READS = new Set([
+  'recall',
+  'context',
+  'log',
+  'unfold',
+  'get',
+  'search',
+  'check',
+  'neighbours',
+  'compare',
+  'source_show',
+  'ref_get',
+  'ref_list',
+  'topic_read',
+  'topic_conflicts',
+  'topic_context',
+  'configured_context',
+  'topic_search',
+  'log_read',
+  'log_levels',
+  'log_resolution',
+  'log_todo',
+  'log_unfold',
+  'pin_state',
+  'review_state',
+])
 
 // The name of a tool of the akyuu server, without its prefix, or undefined
 // for a tool of another server. A server from this plugin and one from the
@@ -31,6 +56,7 @@ const refresh = async ($: EngineInterface) => {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    writes = 0
     await $.command.register({
       name: 'akyuu-note',
       description: 'Write a note in the akyuu log of this directory',
@@ -44,7 +70,7 @@ export const register: Register = on => {
   on('command.run', { command: 'akyuu-note' }, async ($, e) => {
     const text = e.args.trim()
     if (text === '') return { text: 'Usage: /akyuu-note <text>' }
-    const { exitCode, stdout, stderr } = await $.process.run(['akyuu', 'note', text], { timeoutMs: 10000 })
+    const { exitCode, stdout, stderr } = await $.process.run(['akyuu', 'note', '--', text], { timeoutMs: 10000 })
     if (exitCode !== 0) return { text: `akyuu note failed: ${stderr.trim() || stdout.trim()}` }
     writes += 1
     await refresh($)

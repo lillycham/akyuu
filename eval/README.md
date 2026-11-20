@@ -126,7 +126,7 @@ akyuu --root "$AKYUU_ROOT" mcp          # speaks JSON-RPC on stdin and stdout
 
 For a client such as Claude Code, add it under its own name, for example
 `claude mcp add akyuu-eval -- akyuu --root "$AKYUU_ROOT" mcp`, and remove it
-afterwards. Then check with `ref_list` that it shows the scenario store.
+afterwards. Then check with `context` (or `ref_list` with `--tool-set maintenance`) that it shows the scenario store.
 
 ## Part 3: exploratory charters
 

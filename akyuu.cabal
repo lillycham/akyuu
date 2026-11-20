@@ -126,6 +126,7 @@ test-suite akyuu-test
     other-modules:    CacheTests
                     , CheckpointTests
                     , ConfigTests
+                    , DisabledTests
                     , FsTests
                     , GCTests
                     , GraphTests

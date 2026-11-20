@@ -79,8 +79,12 @@ abs() { # abs NAME: the full path of an executable, or nothing
 
 command -v jq >/dev/null 2>&1 || die "jq is needed"
 bin=$(abs "$bin") || die "cannot find the akyuu executable (use --bin PATH)"
-claude_path=$(abs "$claude") || die "cannot find claude (use --claude PATH)"
+claude_path=$(abs "$claude" 2>/dev/null) || claude_path=""
 case $out in /*) ;; *) out="$(pwd)/$out" ;; esac
+
+need_claude() {
+  [ -n "$claude_path" ] || die "cannot find claude (use --claude PATH)"
+}
 
 # The prompts of the stages of a scenario. A second stage is a fresh agent that
 # answers from the store.
@@ -203,14 +207,16 @@ total_cost() { awk -F'\t' 'NR > 1 { s += $9 } END { printf "%.4f", s + 0 }' "$ou
 # --- commands --------------------------------------------------------------
 
 do_list() {
-  local set sn n=0 sessions=0
+  local set sn n=0 sessions=0 tmp
   echo "akyuu:     $bin ($("$bin" --version 2>&1 | head -1))"
-  echo "claude:    $claude_path, model $model"
+  echo "claude:    ${claude_path:-not found}, model $model"
   echo "sets:      $sets"
   echo "scenarios: $scenarios"
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/akyuu-list.XXXXXX")
   for set in $sets; do
-    printf '%s tools/list: %s bytes\n' "$set" "$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | "$bin" mcp --tool-set "$set" 2>/dev/null | wc -c | tr -d ' ')"
+    printf '%s tools/list: %s bytes\n' "$set" "$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | AKYUU_ROOT="$tmp" AKYUU_CONFIG="$tmp/none.toml" AKYUU_DISABLED= "$bin" mcp --tool-set "$set" 2>/dev/null | wc -c | tr -d ' ')"
   done
+  rm -rf "$tmp"
   for sn in $scenarios; do
     n=$(echo $(stages "$sn") | wc -w | tr -d ' ')
     sessions=$((sessions + n))
@@ -225,6 +231,7 @@ do_list() {
 }
 
 do_probe() {
+  need_claude
   local dir="$out/probe" cfg t init final tools
   rm -rf "$dir"
   mkdir -p "$dir"
@@ -250,6 +257,7 @@ do_probe() {
 }
 
 do_run() {
+  need_claude
   local k sn set
   [ "$skip_probe" = yes ] || [ -e "$out/.probed" ] || die "no probe in $out: run the probe first"
   mkdir -p "$out"

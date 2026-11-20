@@ -103,15 +103,20 @@ let
       timeout = mkOption { type = types.nullOr types.ints.positive; default = null; description = "Seconds for one call (default 10)."; };
       maxChars = mkOption { type = types.nullOr types.ints.positive; default = null; description = "The most characters of a text in one call (default 4000)."; };
       args = mkOption {
-        type = types.attrsOf (types.oneOf [ types.str types.int types.bool ]);
+        type = types.attrsOf (types.oneOf [ types.str types.int types.float types.bool ]);
         default = { };
         description = "Arguments for the command. `gguf` arrives as AKYUU_EMBED_GGUF; akyuu does not read them.";
       };
     };
   };
 
+  resolveCommand = c:
+    if c == "akyuu-embed-llama" then "${embedLlamaPackage}/bin/akyuu-embed-llama"
+    else if c == "akyuu-embed-openai" then "${embedPackage}/bin/akyuu-embed-openai"
+    else c;
+
   profileToml = p:
-    { inherit (p) command key; }
+    { command = resolveCommand p.command; inherit (p) key; }
     // lib.optionalAttrs (p.queryPrefix != "") { query-prefix = p.queryPrefix; }
     // lib.optionalAttrs (p.documentPrefix != "") { document-prefix = p.documentPrefix; }
     // lib.optionalAttrs (p.min != null) { inherit (p) min; }

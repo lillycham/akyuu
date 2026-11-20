@@ -463,7 +463,7 @@ print_env() {
   echo "# Scenario $1 is ready. Run these lines in your shell:"
   echo "export AKYUU_ROOT='$d/root'"
   echo "export AKYUU_CONFIG='$d/none.toml'"
-  echo "unset AKYUU_POLICY_REF AKYUU_TIERS_REF AKYUU_AGENT AKYUU_EMBED_PROFILE AKYUU_EMBED_COMMAND AKYUU_EMBED_MODEL"
+  echo "unset AKYUU_DISABLED AKYUU_POLICY_REF AKYUU_TIERS_REF AKYUU_AGENT AKYUU_TOPIC_RELATED AKYUU_TOPIC_PARALLEL AKYUU_EMBED_PROFILE AKYUU_EMBED_COMMAND AKYUU_EMBED_MODEL AKYUU_EMBED_MIN AKYUU_EMBED_TIMEOUT AKYUU_EMBED_MAX_CHARS AKYUU_EMBED_QUERY_PREFIX AKYUU_EMBED_DOCUMENT_PREFIX"
   echo "export AKYUU_EVAL_ANSWERS='$d/answers.txt'"
   echo "# The answers file is $d/answers.txt"
   [ -f "$d/events.txt" ] && echo "# The events of the task are in $d/events.txt"

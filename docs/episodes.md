@@ -146,7 +146,6 @@ itself, and each version of the adaptations is a memory that can be read.
 
 ## Not built
 
-- A `check` finding for a log that is very long, to suggest a summary.
 - A retention setting for each log (keep the last N, summarise the rest).
 - Branching logs (two agents that append to different heads of one log). They
   would be a fork of the chain: `append` does not make one, because it

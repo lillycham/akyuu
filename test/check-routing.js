@@ -45,7 +45,7 @@ function synthetic(n, seed) {
   const id = (i) => 'sha256-' + i.toString(16).padStart(64, '0');
   const nodes = [], edges = [], seen = new Set();
   const add = (s, d, kind) => {
-    const k = s + d + kind;
+    const k = `${s}:${d}:${kind}`;
     if (s === d || seen.has(k)) return;
     seen.add(k);
     edges.push({ src: id(s), dst: id(d), kind: kind });

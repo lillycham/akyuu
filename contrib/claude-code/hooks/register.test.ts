@@ -55,5 +55,5 @@ test('/akyuu-note writes the text as one argument', async ($, on) => {
   expect(empty.text).toBe('Usage: /akyuu-note <text>')
   const done = await $.command.run({ command: 'akyuu-note', args: 'a "quoted" note' } as any)
   expect(done.text).toBe('Noted: sha256-abc')
-  expect(runs).toContainEqual(['akyuu', 'note', 'a "quoted" note'])
+  expect(runs).toContainEqual(['akyuu', 'note', '--', 'a "quoted" note'])
 })

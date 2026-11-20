@@ -70,12 +70,12 @@
   a pointer to it. The Claude Code plugin has this hook, and its `memory` skill
   says when to use it.
 
-- An experimental replicated store (`replica` and `mcp --tool-set replica`,
+- An experimental replicated store (`replica` and `mcp --tool-set replicated`,
   docs/sync-architecture.md). A replica records causal events over topics,
   logs, pins and reviews, publishes immutable checkpoints through `CURRENT`,
   keeps a durable archive outbox, and syncs over a bare Git repository with
   incremental bundle trees. Concurrent heads stay visible until an explicit
-  resolution (`resolve`, `select` or `resolve-log`). `replica migrate` copies
+  resolution (`resolve`, with `--select`, `--as-log`, or a merged body). `replica migrate` copies
   a snapshot of an existing store into a new replica, `replica verify` checks
   every accepted file and link, `replica gc` evicts inactive local copies
   after archiving, and `replica serve` runs a read-only browser for the

@@ -69,7 +69,7 @@ sec_backup() {
     need_rc 0
     need_text_has "made a repository"
     need_eq "$(git -C "$AKYUU_ROOT" log --oneline | wc -l | tr -d ' ')" 1 "commits"
-    need_true git -C "$AKYUU_ROOT" log -1 --format=%s | grep -q "2 memories added, 2 refs changed" || fail "the commit message does not count the changes: $(git -C "$AKYUU_ROOT" log -1 --format=%s)"
+    git -C "$AKYUU_ROOT" log -1 --format=%s | grep -q "2 memories added, 2 refs changed" || fail "the commit message does not count the changes: $(git -C "$AKYUU_ROOT" log -1 --format=%s)"
 
     t A06 "a second run with no change makes no commit"
     ake "$version"

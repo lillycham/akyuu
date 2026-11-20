@@ -105,6 +105,10 @@ replacement can still leave a searchable, unreferenced object.
 	files above. Delete them at any time; *akyuu reindex* and *akyuu embed* make
 	them again.
 
+*disabled*
+	Presence turns memory off for *context* and MCP tool calls (*akyuu disable*,
+	*akyuu enable*).
+
 *\*.lock*, *.lock*
 	Locks. They carry no data.
 

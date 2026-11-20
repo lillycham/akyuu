@@ -55,7 +55,7 @@ To try akyuu without installing it: `nix run github:lillycham/akyuu -- --help`.
 `nix profile install github:lillycham/akyuu` works too, but it is an imperative
 install, outside your configuration.
 
-Then give an agent the store as in [Quick start](../README.md#quick-start).
+Then give an agent the store as in [Quick start](../README.md#quick-start--installation).
 
 ## Backup
 

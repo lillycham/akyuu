@@ -19,7 +19,6 @@ let
         options = {
           home.homeDirectory = lib.mkOption { type = lib.types.str; };
           home.packages = lib.mkOption { type = lib.types.listOf lib.types.package; default = [ ]; };
-          home.sessionVariables = stub;
           home.activation = stub;
           launchd.agents = stub;
           systemd.user.services = stub;

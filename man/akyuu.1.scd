@@ -126,7 +126,7 @@ all writers and GC jobs together; old processes do not use this protocol.
 	Read explicit topics from one checkpoint. Include missing and conflict
 	markers.
 
-*replica configured-context* [*--policy-ref* _name_] [*--tiers-ref* _name_] [*--tier* _tier_] [*--cwd* _dir_] [*--ref* _name_] ... [*--json*]
+*replica configured-context* [*--policy-ref* _name_] [*--tiers-ref* _name_] [*--tier* _tier_] [*--cwd* _dir_] [*--ref* _name_] ... [*--log-page* _n_] [*--log-limit* _n_] [*--log-keep* _n_] [*--log-version* _id_] [*--json*]
 	Read policy, tier, directory and extra refs from one checkpoint. The tier
 	defaults to *always*. Unresolved controls suspend manifest expansion.
 	The result includes readiness and diagnostics. Missing members retain
@@ -453,6 +453,15 @@ be *\**, and *~* is the home directory).
 	file: unknown keys, values that were left out, an older file. It needs no
 	store, so it also explains a setup that does not work.
 
+*disable*
+	Turn memory off for sessions by writing _root_/disabled. *context* prints
+	nothing and MCP tool calls are refused while the file exists. Other CLI
+	commands still work.
+
+*enable*
+	Turn memory back on by removing _root_/disabled. Removing a missing file
+	is not an error.
+
 ## Search
 
 *search* [*--mode* _mode_] [*-n* _n_ | *--limit* _n_] [*--hops* _n_] [*--follow* _kind_] _word_ ...
@@ -663,6 +672,12 @@ command, which suits a comparison of models with *search-eval*.
 	The config file. A name that ends in *.toml* is read as TOML; any other
 	name is read in the older format of *embed.env*.
 
+*AKYUU_DISABLED*
+	When set to anything other than empty, *0*, *false*, *no* or *off*, turns
+	memory off for *context* and MCP tool calls for that session. A false
+	value (such as *0*) turns memory on for that session even when
+	_root_/disabled exists.
+
 # FILES
 
 _root_/store/
@@ -673,6 +688,10 @@ _root_/refs/
 
 _root_/pins/, _root_/reviewed/, _root_/tombstones/, _root_/trash/
 	Pins, reviews, the ids that *gc* deleted, and what it moved aside.
+
+_root_/disabled
+	Presence turns memory off for *context* and MCP tool calls (*disable*,
+	*enable*).
 
 _root_/cache.sqlite, _root_/embeddings.sqlite
 	The text index and the vectors. They are made from the store, and can be

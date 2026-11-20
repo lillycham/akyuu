@@ -83,9 +83,8 @@ store as S2.
 
 Verifier: the final text has Sunday and the other agent's change, and does not
 state Saturday as the current day (a note about the old routine is fine); the
-history shows both versions; `verify` is clean. `S3.4` was a known issue (see
-`README.md`): after the lost race, `check` reported a fork. It is fixed in
-akyuu 0.3.0.0 plus PR #19, and then the check reports XPASS.
+history shows both versions; `verify` is clean. `S3.4` checks that `check`
+reports no fork after the lost race.
 
 Watch for: whether the message of the failed write told you what to do.
 

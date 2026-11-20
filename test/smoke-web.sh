@@ -21,6 +21,8 @@ cleanup() {
 trap cleanup EXIT
 mkdir "$root/store"
 export AKYUU_ROOT=$root/store
+export AKYUU_CONFIG=$root/no-config.toml
+unset AKYUU_DISABLED AKYUU_EMBED_COMMAND AKYUU_EMBED_MODEL AKYUU_EMBED_PROFILE
 
 v1=$("$bin" add --kind preference --agent claude --body "Lilly prefers Haskell.")
 "$bin" ref set claude/lang "$v1" --new >/dev/null

@@ -19,6 +19,8 @@ root=$(mktemp -d "${TMPDIR:-/tmp}/akyuu-routing-smoke.XXXXXX")
 trap 'rm -rf "$root"' EXIT
 node() { timeout 280 nix shell nixpkgs#nodejs -c node "$@"; }
 
+export AKYUU_CONFIG=$root/no-config.toml
+unset AKYUU_DISABLED AKYUU_EMBED_COMMAND AKYUU_EMBED_MODEL AKYUU_EMBED_PROFILE
 # 1. The demo store.
 "$bin" seed --demo --root "$root/demo" >/dev/null
 "$bin" --root "$root/demo" viz >"$root/demo.html"

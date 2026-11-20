@@ -183,7 +183,6 @@ sec_mcp() {
   mcp_call review "{\"a\":\"$id1\",\"b\":\"$other\",\"agent\":\"mcp-eval\",\"note\":\"checked\"}"                                      # 14
   mcp_call search '{"query":"second","limit":1,"hops":0,"mode":"text"}'                                                               # 15
   mcp_call check '{"kinds":["fork"],"severity":"problem"}'                                                                             # 16
-  mcp_call get '{"id":"5bf"}'                                                                                                      # 17
   mcp_run
   cp "$sandbox/mcp.resp" "$sandbox/mcp.phase3"
   cat "$sandbox/mcp.phase2" "$sandbox/mcp.phase3" >"$sandbox/mcp.resp"

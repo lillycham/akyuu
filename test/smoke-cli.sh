@@ -14,6 +14,8 @@ bin=${1:-$(cabal list-bin exe:akyuu)}
 root=$(mktemp -d "${TMPDIR:-/tmp}/akyuu-smoke.XXXXXX")
 trap 'rm -rf "$root"' EXIT
 export AKYUU_ROOT=$root
+export AKYUU_CONFIG=$root/no-config.toml
+unset AKYUU_DISABLED AKYUU_EMBED_COMMAND AKYUU_EMBED_MODEL AKYUU_EMBED_PROFILE
 
 # Run akyuu, show the command and its output, and check the exit code.
 expect() {

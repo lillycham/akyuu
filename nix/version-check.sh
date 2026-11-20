@@ -52,7 +52,7 @@ akyuu-version --push 2> /dev/null > /dev/null
 test "$(git -C "$PWD/remote.git" rev-parse main)" = "$(git -C "$root" rev-parse HEAD)"
 # A remote that cannot be reached is not an error, and the commit stays.
 git -C "$root" remote set-url origin "$PWD/nowhere.git"
-c=$(akyuu supersede check/main --kind fact --agent check --body "third memory")
+akyuu supersede check/main --kind fact --agent check --body "third memory" > /dev/null
 akyuu-version --push 2> /dev/null > /dev/null
 test "$(git -C "$root" rev-list --count HEAD)" = 4
 
@@ -64,4 +64,4 @@ if akyuu-version > /dev/null 2> /dev/null; then
   exit 1
 fi
 
-touch $out
+touch "$out"

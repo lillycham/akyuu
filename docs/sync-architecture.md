@@ -1,7 +1,7 @@
 # Replica sync architecture
 
 This document describes the experimental replica store (`akyuu replica` and
-`akyuu mcp --tool-set replica`). It describes the current prototype, not a
+`akyuu mcp --tool-set replicated`). It describes the current prototype, not a
 production migration or a background sync service. The protocol is still
 experimental. All replicas must use compatible repository formats.
 

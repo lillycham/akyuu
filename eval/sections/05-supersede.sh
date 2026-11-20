@@ -48,7 +48,6 @@ sec_supersede() {
   ak get --ref me/lang
   need_out_has "about: $tgt"
   need_out_has "third version"
-  third=$(cat "$outf" >/dev/null; "$bin" ref get me/lang)
 
   t U07 "supersede needs --kind and --agent (exit 2)"
   ak supersede me/lang --agent tester --body x

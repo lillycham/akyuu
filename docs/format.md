@@ -1,6 +1,7 @@
 # Store format, version 1
 
-Status: this is the format that akyuu 0.1 and 0.2 write and read. It has no
+Status: this is the format that akyuu 0.1 through 0.5 write and read (`follows`
+and `about-ref` were added in 0.3). It has no
 version marker in the files: a store without one is version 1.
 
 This note is for a person who wants to read a store without akyuu, write a
@@ -141,6 +142,8 @@ version edges can also affect resolution. The reference is written last.
   judged to be different (the lower id first).
 - `trash/sha256-<...>.md`: an object that GC moved out of `store/`. GC deletes
   it after the trash TTL (7 days by default).
+- `disabled`: when present, turns memory off for `context` and MCP tool calls
+  (`akyuu disable`, `akyuu enable`).
 
 ## Moving or copying a store
 

@@ -145,8 +145,6 @@
             python3 ${./nix/embed-llama-check.py} ${./nix/embed-llama.sh}
             touch $out
           '';
-        # The versioning script: the repository, one commit for a change, none for
-        # no change, the ignore list, and a removed memory that stays in the history.
         # The Haskell sources are formatted with ormolu (the same version as in
         # the dev shell). Fix with: ormolu -i $(git ls-files '*.hs')
         format = pkgs.runCommand "akyuu-format-check"
